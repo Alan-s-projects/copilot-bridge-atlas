@@ -110,12 +110,15 @@ export function formatOutputTokensPerSecond(
 /** Compact token counts using English K/M/B units. */
 export function formatTokensShort(
   value: number,
-  compactDecimals: 1 | 2 = 1,
+  compactDecimals?: 1 | 2,
 ): string {
   if (!Number.isFinite(value) || value <= 0) return "0";
-  const decimals = compactDecimals;
-  if (value >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
-  if (value >= 1e6) return `${(value / 1e6).toFixed(2)}M`;
-  if (value >= 1e3) return `${(value / 1e3).toFixed(decimals)}K`;
+  const scaled = (unit: number, decimals: number) => {
+    const factor = 10 ** decimals;
+    return (Math.round(value / (unit / factor)) / factor).toFixed(decimals);
+  };
+  if (value >= 1e9) return `${scaled(1e9, compactDecimals ?? 2)}B`;
+  if (value >= 1e6) return `${scaled(1e6, compactDecimals ?? 2)}M`;
+  if (value >= 1e3) return `${scaled(1e3, compactDecimals ?? 1)}K`;
   return value.toLocaleString("en-US");
 }

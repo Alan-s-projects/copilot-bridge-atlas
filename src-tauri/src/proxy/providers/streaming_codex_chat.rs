@@ -313,7 +313,10 @@ impl ChatToResponsesState {
         let is_custom_tool = self.tool_context.is_custom_tool_chat_name(&current_name);
         let mut events = Vec::new();
 
-        if !args_delta.is_empty() && !is_custom_tool {
+        if !args_delta.is_empty()
+            && !is_custom_tool
+            && !self.tool_context.has_wrapped_arguments(&current_name)
+        {
             if let Some(output_index) = output_index {
                 events.push(sse::function_call_arguments_delta(
                     output_index,
@@ -370,6 +373,7 @@ impl ChatToResponsesState {
 
             if !state.arguments.is_empty()
                 && !self.tool_context.is_custom_tool_chat_name(&state.name)
+                && !self.tool_context.has_wrapped_arguments(&state.name)
             {
                 events.push(sse::function_call_arguments_delta(
                     assigned,
@@ -603,6 +607,14 @@ impl ChatToResponsesState {
                     &input,
                 ));
             } else {
+                let arguments = self.tool_context.unwrap_arguments(&state.name, &arguments);
+                if self.tool_context.has_wrapped_arguments(&state.name) {
+                    events.push(sse::function_call_arguments_delta(
+                        output_index,
+                        &state.item_id,
+                        &arguments,
+                    ));
+                }
                 events.push(sse::function_call_arguments_done(
                     output_index,
                     &state.item_id,
@@ -1238,6 +1250,39 @@ mod tests {
         assert_eq!(items[0]["name"], "read_file");
         assert_eq!(items[0]["call_id"], "call_sparse");
         assert_eq!(items[0]["arguments"], r#"{"path":"README.md"}"#);
+    }
+
+    #[tokio::test]
+    async fn root_combinator_arguments_are_unwrapped_on_all_stream_events() {
+        let request = json!({"tools":[{"type":"function","name":"lookup",
+            "parameters":{"anyOf":[{"type":"object","properties":{"q":{"type":"string"}}}]}}]});
+        let context =
+            super::super::transform_codex_chat::build_codex_tool_context_from_request(&request);
+        let output = collect_with_context(vec![
+            "data: {\"id\":\"chatcmpl_wrapped\",\"model\":\"gemini-3.8-flash\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{\\\"arguments\\\":\"}}]}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_wrapped\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"q\\\":\\\"hello\\\"}}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ], context).await;
+        let events = parse_sse_events(&output);
+        let deltas: String = events
+            .iter()
+            .filter(|e| e["type"] == "response.function_call_arguments.delta")
+            .filter_map(|e| e["delta"].as_str())
+            .collect();
+        assert_eq!(deltas, r#"{"q":"hello"}"#);
+        let done = events
+            .iter()
+            .find(|e| e["type"] == "response.function_call_arguments.done")
+            .unwrap();
+        assert_eq!(done["arguments"], r#"{"q":"hello"}"#);
+        let completed = events
+            .iter()
+            .find(|e| e["type"] == "response.completed")
+            .unwrap();
+        assert_eq!(
+            completed["response"]["output"][0]["arguments"],
+            done["arguments"]
+        );
     }
 
     #[tokio::test]

@@ -140,6 +140,8 @@ fn merge_live_capabilities(
                 continue;
             };
             row["available"] = json!(true);
+            row["model"] = json!(model.id);
+            row["displayName"] = json!(model.name);
             row["vendor"] = json!(model.vendor);
             row["supportedReasoningLevels"] =
                 json!(model.reasoning_efforts.as_deref().unwrap_or(&[]));
@@ -159,59 +161,21 @@ fn merge_live_capabilities(
                     json!(["text"])
                 };
             }
-            if let Some(limit) = model.context_window {
-                let current = row
-                    .get("contextWindow")
-                    .and_then(|value| {
-                        value
-                            .as_u64()
-                            .or_else(|| value.as_str()?.parse::<u64>().ok())
-                    })
-                    .filter(|limit| *limit > 0);
-                row["contextWindow"] = json!(current.map_or(limit, |current| current.min(limit)));
-            }
+            row["contextWindow"] = json!(model.context_window);
             if let Some(limit) = model.max_context_window_tokens {
                 row["maxContextWindow"] = json!(limit);
             }
-            // Editable reasoning choices take precedence over upstream defaults.
-            // Normalize a usable legacy alias into the canonical key so an empty
-            // or invalid camelCase value cannot mask it in the catalog parser.
-            let levels = ["reasoningLevels", "reasoning_levels"]
-                .into_iter()
-                .find_map(|key| {
-                    row.get(key)?
-                        .as_array()
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .map(str::trim)
-                                .filter(|level| !level.is_empty())
-                                .map(str::to_owned)
-                                .collect::<Vec<_>>()
-                        })
-                        .filter(|levels| !levels.is_empty())
-                })
-                .or_else(|| {
-                    model
-                        .reasoning_efforts
-                        .clone()
-                        .filter(|levels| !levels.is_empty())
-                });
-            if let Some(levels) = levels {
-                row["reasoningLevels"] = json!(levels);
-            }
-            if let Some(default) = ["defaultReasoningLevel", "default_reasoning_level"]
-                .into_iter()
-                .find_map(|key| {
-                    row.get(key)?
-                        .as_str()
-                        .map(str::trim)
-                        .filter(|level| !level.is_empty())
-                        .map(str::to_owned)
-                })
-            {
-                row["defaultReasoningLevel"] = json!(default);
+            row["reasoningLevels"] = json!(model.reasoning_efforts.as_deref().unwrap_or(&[]));
+            if let Some(object) = row.as_object_mut() {
+                for key in [
+                    "reasoning_levels",
+                    "defaultReasoningLevel",
+                    "default_reasoning_level",
+                    "context_window",
+                    "display_name",
+                ] {
+                    object.remove(key);
+                }
             }
         }
         let known: std::collections::HashSet<_> = rows
@@ -1102,7 +1066,7 @@ notify = ["unchanged"]
     }
 
     #[test]
-    fn refresh_repairs_stale_flags_without_replacing_models_or_preferences() {
+    fn refresh_uses_live_metadata_without_replacing_enabled_choices() {
         use crate::proxy::providers::copilot_auth::CopilotModel;
         use serde_json::json;
         let mut provider = Provider::with_id(
@@ -1138,11 +1102,11 @@ notify = ["unchanged"]
         let rows = &provider.settings_config["modelCatalog"]["models"];
         assert_eq!(rows.as_array().unwrap().len(), 3);
         assert_eq!(rows[0]["supportsParallelToolCalls"], true);
-        assert_eq!(rows[0]["contextWindow"], 1048576);
+        assert_eq!(rows[0]["contextWindow"], 1050000);
         assert_eq!(rows[1]["contextWindow"], 872000);
         assert_eq!(rows[1]["inputModalities"], json!(["text", "image"]));
-        assert_eq!(rows[1]["reasoningLevels"], json!(["low", "high", "ultra"]));
-        assert_eq!(rows[1]["defaultReasoningLevel"], "ultra");
+        assert_eq!(rows[1]["reasoningLevels"], json!(["low", "medium", "max"]));
+        assert!(rows[1].get("defaultReasoningLevel").is_none());
         assert_eq!(
             rows[2],
             json!({"model": "custom-alias", "inputModalities": ["text"], "available": false})
@@ -1198,7 +1162,7 @@ notify = ["unchanged"]
     }
 
     #[test]
-    fn refresh_preserves_legacy_reasoning_and_prefers_usable_canonical_fields() {
+    fn refresh_replaces_legacy_reasoning_overrides_with_copilot_declarations() {
         use crate::proxy::providers::copilot_auth::CopilotModel;
         use serde_json::json;
         let models = [CopilotModel {
@@ -1218,16 +1182,6 @@ notify = ["unchanged"]
                 "reasoning_levels": ["low", "ultra"],
                 "default_reasoning_level": "ultra"
             });
-            let expected_levels = if canonical_levels == Some(json!(["high", "max"])) {
-                json!(["high", "max"])
-            } else {
-                json!(["low", "ultra"])
-            };
-            let expected_default = if canonical_default == Some(json!("max")) {
-                "max"
-            } else {
-                "ultra"
-            };
             if let Some(levels) = canonical_levels {
                 row["reasoningLevels"] = levels;
             }
@@ -1241,8 +1195,9 @@ notify = ["unchanged"]
             );
             merge_live_capabilities(&mut provider, &models);
             let saved = &provider.settings_config["modelCatalog"]["models"][0];
-            assert_eq!(saved["reasoningLevels"], expected_levels);
-            assert_eq!(saved["defaultReasoningLevel"], expected_default);
+            assert_eq!(saved["reasoningLevels"], json!(["low", "medium"]));
+            assert!(saved.get("defaultReasoningLevel").is_none());
+            assert!(saved.get("reasoning_levels").is_none());
             assert!(!merge_live_capabilities(&mut provider, &models));
         }
     }
@@ -1277,7 +1232,7 @@ notify = ["unchanged"]
 
     #[test]
     #[serial_test::serial]
-    fn saved_reasoning_survives_database_reopen_and_startup_refresh() {
+    fn live_reasoning_replaces_overrides_across_database_reopen_and_startup_refresh() {
         use crate::proxy::providers::copilot_auth::CopilotModel;
         use serde_json::{json, Value};
         use std::sync::Arc;
@@ -1344,8 +1299,8 @@ notify = ["unchanged"]
                 .unwrap()
                 .unwrap();
             let row = &saved.settings_config["modelCatalog"]["models"][0];
-            assert_eq!(row["reasoningLevels"], json!(["low", "high", "ultra"]));
-            assert_eq!(row["defaultReasoningLevel"], "ultra");
+            assert_eq!(row["reasoningLevels"], json!(["low", "medium", "high"]));
+            assert!(row.get("defaultReasoningLevel").is_none());
             assert_eq!(row["contextWindow"], 872000);
             assert_eq!(row["supportsParallelToolCalls"], true);
             assert_eq!(row["inputModalities"], json!(["text", "image"]));
@@ -1360,8 +1315,8 @@ notify = ["unchanged"]
                 .iter()
                 .map(|level| level["effort"].as_str().unwrap())
                 .collect::<Vec<_>>();
-            assert_eq!(levels, ["low", "high"]);
-            assert_eq!(entry["default_reasoning_level"], "high");
+            assert_eq!(levels, ["low", "medium", "high"]);
+            assert_eq!(entry["default_reasoning_level"], "medium");
         }
         for (name, contents) in files {
             assert_eq!(

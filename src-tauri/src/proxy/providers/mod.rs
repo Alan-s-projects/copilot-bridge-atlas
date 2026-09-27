@@ -8,5 +8,6 @@ pub mod copilot_model_map;
 pub mod streaming_codex_chat;
 pub(crate) mod streaming_copilot_responses;
 pub mod transform_codex_chat;
+pub(crate) mod transform_copilot_responses;
 
 pub use codex::{inject_codex_chat_prompt_cache_key, is_codex_responses_endpoint};

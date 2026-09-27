@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Table,
@@ -228,48 +228,75 @@ export function PricingConfigPanel() {
                 </TableHeader>
                 <TableBody>
                   {filteredPricing.map((model) => (
-                    <TableRow key={model.modelId}>
-                      <TableCell className="font-mono text-sm">
-                        {model.modelId}
-                      </TableCell>
-                      <TableCell>{model.displayName}</TableCell>
-                      <TableCell className="text-right font-mono text-sm">
-                        ${model.inputCostPerMillion}
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-sm">
-                        ${model.outputCostPerMillion}
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-sm">
-                        ${model.cacheReadCostPerMillion}
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-sm">
-                        ${model.cacheCreationCostPerMillion}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => {
-                              setIsAddingNew(false);
-                              setEditingModel(model);
-                            }}
-                            title={t("common.edit")}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => setDeleteConfirm(model.modelId)}
-                            title={t("common.delete")}
-                            className="text-destructive hover:text-destructive"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
+                    <Fragment key={model.modelId}>
+                      <TableRow>
+                        <TableCell className="font-mono text-sm">
+                          {model.modelId}
+                        </TableCell>
+                        <TableCell>{model.displayName}</TableCell>
+                        <TableCell className="text-right font-mono text-sm">
+                          ${model.inputCostPerMillion}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-sm">
+                          ${model.outputCostPerMillion}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-sm">
+                          ${model.cacheReadCostPerMillion}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-sm">
+                          ${model.cacheCreationCostPerMillion}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => {
+                                setIsAddingNew(false);
+                                setEditingModel(model);
+                              }}
+                              title={t("common.edit")}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setDeleteConfirm(model.modelId)}
+                              title={t("common.delete")}
+                              className="text-destructive hover:text-destructive"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                      {model.longContext && (
+                        <TableRow className="text-muted-foreground">
+                          <TableCell colSpan={2} className="pl-6 text-xs">
+                            Long context: &gt;{" "}
+                            {model.longContext.thresholdInputTokens.toLocaleString()}{" "}
+                            input tokens
+                          </TableCell>
+                          {(
+                            [
+                              "inputCostPerMillion",
+                              "outputCostPerMillion",
+                              "cacheReadCostPerMillion",
+                              "cacheCreationCostPerMillion",
+                            ] as const
+                          ).map((key) => (
+                            <TableCell
+                              key={key}
+                              className="text-right font-mono text-sm"
+                            >
+                              ${model.longContext![key]}
+                            </TableCell>
+                          ))}
+                          <TableCell />
+                        </TableRow>
+                      )}
+                    </Fragment>
                   ))}
                   {filteredPricing.length === 0 && (
                     <TableRow>

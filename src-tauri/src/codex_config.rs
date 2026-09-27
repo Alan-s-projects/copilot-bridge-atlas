@@ -320,13 +320,7 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
                 .iter()
                 .filter_map(Value::as_str)
                 .collect::<Vec<_>>();
-            reasoning_levels = Some(
-                reasoning_levels
-                    .unwrap_or_else(|| supported.iter().map(|level| level.to_string()).collect())
-                    .into_iter()
-                    .filter(|level| supported.contains(&level.as_str()))
-                    .collect(),
-            );
+            reasoning_levels = Some(supported.into_iter().map(str::to_string).collect());
         }
         if ultra_enabled {
             if let Some(ref mut levels) = reasoning_levels {
@@ -645,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn ultra_toggle_does_not_replace_saved_choices_or_override_canonical_false() {
+    fn ultra_toggle_extends_live_efforts_without_overriding_canonical_false() {
         let models = json!([
             {"model":"reasoning", "reasoningLevels":["low","high"], "supportedReasoningLevels":["low","high","max"]},
             {"model":"none-only", "supportedReasoningLevels":["none"]},
@@ -671,9 +665,9 @@ mod tests {
             assert_eq!(
                 levels,
                 if enabled {
-                    vec!["low", "high", "ultra"]
+                    vec!["low", "high", "max", "ultra"]
                 } else {
-                    vec!["low", "high"]
+                    vec!["low", "high", "max"]
                 }
             );
             assert_eq!(

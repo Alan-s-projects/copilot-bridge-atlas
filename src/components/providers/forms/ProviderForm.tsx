@@ -310,12 +310,42 @@ export function ProviderForm({
     }
   };
 
+  const savePending =
+    saving ||
+    (autoSaveVersion !== savedVersionRef.current && saveStatus === "idle");
+  const catalogStatus = autoSave ? (
+    <div className="flex min-h-5 items-center text-xs text-muted-foreground">
+      {savePending ? (
+        <span
+          role="status"
+          aria-live="polite"
+          className="inline-flex items-center gap-1.5"
+        >
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          {t("settings.saving")}
+        </span>
+      ) : saveStatus === "saved" || (saveStatus === "idle" && initialData) ? (
+        <span role="status" aria-live="polite">
+          {t("settings.saved")}
+        </span>
+      ) : saveStatus === "error" ? (
+        <span role="alert">{t("settings.saveFailedGeneric")}</span>
+      ) : saveStatus === "invalid" ? (
+        <span role="alert">Model IDs must not contain whitespace.</span>
+      ) : saveStatus === "auth-required" ? (
+        <span role="alert">Sign in to GitHub Copilot to save changes.</span>
+      ) : null}
+    </div>
+  ) : undefined;
+
   return (
     <form id="provider-form" onSubmit={submit} className="space-y-6">
       <p className="text-sm text-muted-foreground">
         {t("bridge.providerSettings")}
       </p>
       <CodexFormFields
+        catalogStatus={catalogStatus}
+        catalogSavePending={autoSave && savePending}
         isCopilotAuthenticated={hasAnyAccount}
         selectedGitHubAccountId={accountId}
         onGitHubAccountSelect={(id) => {
@@ -334,34 +364,7 @@ export function ProviderForm({
           markChanged();
         }}
       />
-      {autoSave ? (
-        <div className="flex min-h-5 justify-end text-xs text-muted-foreground">
-          {saving && (
-            <span
-              role="status"
-              aria-live="polite"
-              className="inline-flex items-center gap-1.5"
-            >
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              {t("settings.saving")}
-            </span>
-          )}
-          {!saving && saveStatus === "saved" && (
-            <span role="status" aria-live="polite">
-              {t("settings.saved")}
-            </span>
-          )}
-          {!saving && saveStatus === "error" && (
-            <span role="alert">{t("settings.saveFailedGeneric")}</span>
-          )}
-          {!saving && saveStatus === "invalid" && (
-            <span role="alert">Model IDs must not contain whitespace.</span>
-          )}
-          {!saving && saveStatus === "auth-required" && (
-            <span role="alert">Sign in to GitHub Copilot to save changes.</span>
-          )}
-        </div>
-      ) : (
+      {!autoSave && (
         <div className="flex justify-end gap-2">
           {onCancel && (
             <Button

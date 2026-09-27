@@ -98,6 +98,7 @@ export const usageApi = {
     outputCost: string,
     cacheReadCost: string,
     cacheCreationCost: string,
+    longContext?: ModelPricing["longContext"],
   ): Promise<void> => {
     return invoke("update_model_pricing", {
       modelId,
@@ -106,6 +107,7 @@ export const usageApi = {
       outputCost,
       cacheReadCost,
       cacheCreationCost,
+      longContext,
     });
   },
 

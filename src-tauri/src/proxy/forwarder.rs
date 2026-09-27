@@ -24,6 +24,7 @@ use tokio::sync::RwLock;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexUpstreamFormat {
     NativeResponses,
+    CompatibleResponses,
     ChatCompletions,
 }
 
@@ -208,10 +209,16 @@ impl RequestForwarder {
         let mut effective_endpoint = endpoint.to_string();
         if is_responses {
             let resolved = self.resolve_codex_copilot_model(provider, &body).await?;
+            let compatible = resolved
+                .as_ref()
+                .is_some_and(|model| model.vendor.eq_ignore_ascii_case("xai"));
             let transport =
                 apply_codex_copilot_model(&mut body, resolved, &provider.settings_config)?;
             effective_endpoint = rewrite_codex_endpoint_for_copilot(endpoint, &transport.endpoint);
             upstream_format = Some(match transport.protocol {
+                CopilotProtocol::Responses if compatible => {
+                    CodexUpstreamFormat::CompatibleResponses
+                }
                 CopilotProtocol::Responses => CodexUpstreamFormat::NativeResponses,
                 CopilotProtocol::Chat => CodexUpstreamFormat::ChatCompletions,
             });
@@ -232,6 +239,9 @@ impl RequestForwarder {
             );
         } else if upstream_format == Some(CodexUpstreamFormat::NativeResponses) {
             super::providers::transform_codex_chat::normalize_legacy_chat_message_ids(&mut body);
+        } else if upstream_format == Some(CodexUpstreamFormat::CompatibleResponses) {
+            self.codex_chat_history.enrich_request(&mut body).await;
+            super::providers::transform_copilot_responses::adapt_request(&mut body)?;
         }
         let body = prepare_upstream_request_body(body);
         let outbound_model = body
@@ -446,7 +456,7 @@ fn codex_copilot_lookup_error(model_id: &str, error: CopilotAuthError) -> ProxyE
 fn apply_codex_copilot_model(
     body: &mut Value,
     resolved: Option<ResolvedCopilotModel>,
-    settings: &Value,
+    _settings: &Value,
 ) -> Result<CopilotTransport, ProxyError> {
     let requested = "a supported chat endpoint";
     let Some(resolved) = resolved else {
@@ -509,34 +519,16 @@ fn apply_codex_copilot_model(
             {
                 body["reasoning"]["effort"] = json!(level);
             } else {
-                let selected = configured_reasoning_efforts(settings, &resolved.id);
-                let allowed = |level: &str| {
-                    selected.as_ref().is_none_or(|levels| {
-                        levels
-                            .iter()
-                            .any(|selected| selected.eq_ignore_ascii_case(level))
-                    })
-                };
-                // A synthetic Ultra option must not bypass the model's saved
-                // choices. Live capabilities still bound every fallback.
+                // Copilot's live declaration is authoritative, including Ultra fallback.
                 const CANONICAL_EFFORTS: &[&str] = &[
                     "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
                 ];
                 let fallback = CANONICAL_EFFORTS
                     .iter()
                     .rev()
-                    .find(|candidate| {
-                        allowed(candidate)
-                            && supported.iter().any(|s| s.eq_ignore_ascii_case(candidate))
-                    })
+                    .find(|candidate| supported.iter().any(|s| s.eq_ignore_ascii_case(candidate)))
                     .copied()
-                    .or_else(|| {
-                        supported
-                            .iter()
-                            .rev()
-                            .find(|level| allowed(level))
-                            .map(String::as_str)
-                    });
+                    .or_else(|| supported.iter().rev().next().map(String::as_str));
                 if let Some(level) = fallback.filter(|level| *level != "none") {
                     body["reasoning"]["effort"] = json!(level);
                 } else if let Some(object) = body.as_object_mut() {
@@ -547,32 +539,6 @@ fn apply_codex_copilot_model(
     }
     body["model"] = Value::String(resolved.id);
     Ok(transport)
-}
-
-fn configured_reasoning_efforts(settings: &Value, model: &str) -> Option<Vec<String>> {
-    let row = settings
-        .pointer("/modelCatalog/models")?
-        .as_array()?
-        .iter()
-        .find(|row| {
-            row.get("model")
-                .and_then(Value::as_str)
-                .is_some_and(|id| id.trim().eq_ignore_ascii_case(model))
-        })?;
-    ["reasoningLevels", "reasoning_levels"]
-        .into_iter()
-        .find_map(|key| {
-            let levels: Vec<String> = row
-                .get(key)?
-                .as_array()?
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|level| !level.is_empty())
-                .map(str::to_string)
-                .collect();
-            (!levels.is_empty()).then_some(levels)
-        })
 }
 
 fn rewrite_codex_endpoint_for_copilot(inbound_endpoint: &str, supported_endpoint: &str) -> String {
@@ -1130,27 +1096,6 @@ mod tests {
     }
 
     #[test]
-    fn saved_reasoning_aliases_match_catalog_precedence() {
-        let settings = json!({"modelCatalog":{"models":[
-            {"model":" canonical ", "reasoningLevels":[" high "], "reasoning_levels":["max"]},
-            {"model":"legacy", "reasoningLevels":[], "reasoning_levels":["low","high"]},
-            {"model":"unset", "reasoningLevels":[]},
-            {"model":"invalid", "reasoningLevels":[null, false, " "]}
-        ]}});
-        assert_eq!(
-            configured_reasoning_efforts(&settings, "CANONICAL"),
-            Some(vec!["high".into()])
-        );
-        assert_eq!(
-            configured_reasoning_efforts(&settings, "legacy"),
-            Some(vec!["low".into(), "high".into()])
-        );
-        for model in ["unset", "invalid", "missing"] {
-            assert_eq!(configured_reasoning_efforts(&settings, model), None);
-        }
-    }
-
-    #[test]
     fn clamps_unsupported_reasoning_effort_to_highest_supported_level() {
         let model = super::super::providers::copilot_auth::CopilotModel {
             id: "gpt-6-astra".into(),
@@ -1485,20 +1430,20 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn review_reasoning_fallback_respects_saved_choices_for_both_protocols() {
+        async fn reasoning_fallback_uses_live_capabilities_for_both_protocols() {
             for protocol in [CopilotProtocol::Responses, CopilotProtocol::Chat] {
                 for (supported, selected, requested, expected) in [
                     (
                         vec!["low", "high", "max"],
                         json!(["low", "high"]),
                         "ultra",
-                        Some("high"),
+                        Some("max"),
                     ),
                     (
                         vec!["low", "high", "max"],
                         json!(["low", "high"]),
                         "unknown",
-                        Some("high"),
+                        Some("max"),
                     ),
                     (
                         vec!["low", "high", "max"],
@@ -1518,7 +1463,12 @@ mod tests {
                         "low",
                         Some("low"),
                     ),
-                    (vec!["low", "high"], json!(["retired"]), "ultra", None),
+                    (
+                        vec!["low", "high"],
+                        json!(["retired"]),
+                        "ultra",
+                        Some("high"),
+                    ),
                     (vec![], Value::Null, "ultra", None),
                 ] {
                     let upstream =
@@ -1546,6 +1496,134 @@ mod tests {
                     assert_eq!(effort, expected, "{protocol:?} {supported:?} {selected}");
                     assert_eq!(reasoning_effort.requested.as_deref(), Some(requested));
                     assert_eq!(reasoning_effort.applied.as_deref(), expected);
+                }
+            }
+        }
+
+        #[tokio::test]
+        #[ignore = "opt-in Copilot smoke test; consumes tokens and requires temporary test credentials"]
+        async fn live_copilot_tool_compatibility() {
+            use super::super::super::providers::{
+                streaming_codex_chat, transform_codex_chat, transform_copilot_responses,
+            };
+            let token = std::env::var("ATLAS_COPILOT_TEST_TOKEN")
+                .expect("explicit live-test token required");
+            let endpoint = std::env::var("ATLAS_COPILOT_TEST_ENDPOINT")
+                .expect("explicit live-test endpoint required");
+            for (model, vendor, protocol) in [
+                ("gemini-3.8-flash", "Google", CopilotProtocol::Chat),
+                ("grok-4.7", "xAI", CopilotProtocol::Responses),
+            ] {
+                for stream in [false, true] {
+                    let upstream =
+                        mock_upstream(StatusCode::OK, HeaderMap::new(), Bytes::from_static(b"{}"))
+                            .await;
+                    let (mut forwarder, provider) = fixture(&upstream, protocol);
+                    let config = forwarder.copilot_fixture.as_mut().unwrap();
+                    config.endpoint = endpoint.clone();
+                    config.token = token.clone();
+                    config.client = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(60))
+                        .build()
+                        .unwrap();
+                    config.models[0].id = model.into();
+                    config.models[0].vendor = vendor.into();
+                    config.models[0].reasoning_efforts = Some(vec!["low".into()]);
+                    let request = json!({
+                        "model": model, "stream":stream, "max_output_tokens":512,
+                        "reasoning":{"effort":"low"},
+                        "input":[
+                            {"role":"user","content":"hi"},
+                            {"type":"reasoning","summary":[],"encrypted_content":"foreign-history"},
+                            {"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello."}]},
+                            {"role":"user","content":"Call functions.lookup with q set to hello."}
+                        ],
+                        "tools":[
+                            {"type":"namespace","name":"functions","tools":[
+                                {"type":"function","name":"lookup","parameters":{"type":"object","anyOf":[
+                                    {"type":"object","properties":{"q":{"type":"string"}},"required":["q"]},
+                                    {"type":"object","properties":{"id":{"type":"integer"}},"required":["id"]}
+                                ]}}
+                            ]},
+                            {"type":"custom","name":"patch","format":{"type":"text"}},
+                            {"type":"tool_search","execution":"client"}
+                        ],
+                        "tool_choice":{"type":"function","namespace":"functions","name":"lookup"}
+                    });
+                    let context =
+                        transform_codex_chat::build_codex_tool_context_from_request(&request);
+                    let result = forwarder
+                        .forward_request(
+                            http::Method::POST,
+                            "/responses",
+                            request,
+                            HeaderMap::new(),
+                            &provider,
+                            &mut ReasoningEffort::default(),
+                        )
+                        .await
+                        .unwrap();
+                    let mut raw_chat_sse = String::new();
+                    let bytes = if protocol == CopilotProtocol::Responses {
+                        transform_copilot_responses::adapt_response(result.response, context)
+                            .await
+                            .unwrap()
+                            .bytes_with_limit(MAX_RESPONSE_BODY_BYTES)
+                            .await
+                            .unwrap()
+                    } else if stream {
+                        let raw = result
+                            .response
+                            .bytes_with_limit(MAX_RESPONSE_BODY_BYTES)
+                            .await
+                            .unwrap();
+                        raw_chat_sse = String::from_utf8_lossy(&raw).to_string();
+                        let chunks = streaming_codex_chat::create_responses_sse_stream_from_chat_with_context(
+                            futures::stream::once(async move { Ok::<_, std::io::Error>(raw) }), context);
+                        ProxyResponse::streamed(StatusCode::OK, HeaderMap::new(), chunks)
+                            .bytes_with_limit(MAX_RESPONSE_BODY_BYTES)
+                            .await
+                            .unwrap()
+                    } else {
+                        let bytes = result
+                            .response
+                            .bytes_with_limit(MAX_RESPONSE_BODY_BYTES)
+                            .await
+                            .unwrap();
+                        let response =
+                            transform_codex_chat::chat_completion_to_response_with_context(
+                                serde_json::from_slice(&bytes).unwrap(),
+                                &context,
+                            )
+                            .unwrap();
+                        Bytes::from(response.to_string())
+                    };
+                    let text = String::from_utf8(bytes.to_vec()).unwrap();
+                    let response: Value = if stream {
+                        text.lines()
+                            .filter_map(|line| line.strip_prefix("data: "))
+                            .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+                            .find(|event| event["type"] == "response.completed")
+                            .expect("completed SSE")["response"]
+                            .clone()
+                    } else {
+                        serde_json::from_str(&text).unwrap()
+                    };
+                    let call = response["output"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|item| item["type"] == "function_call")
+                        .expect("tool call");
+                    assert_eq!(call["name"], "lookup", "{model} stream={stream}");
+                    assert_eq!(call["namespace"], "functions");
+                    let args: Value = serde_json::from_str(call["arguments"].as_str().unwrap())
+                        .unwrap_or_else(|e| panic!("{model} stream={stream}: {e}; call={call}; synthetic SSE={raw_chat_sse}"));
+                    assert_eq!(
+                        args["q"], "hello",
+                        "{model} stream={stream} restored arguments: {args}"
+                    );
+                    println!("verified {model} stream={stream}: restored namespace and original arguments");
                 }
             }
         }

@@ -66,6 +66,32 @@ beforeEach(() => {
 });
 
 describe("Manual pricing configuration", () => {
+  it("shows long-context thresholds and all four rates beside the default model", () => {
+    mocks.pricing.mockReturnValue({
+      data: [
+        {
+          ...model,
+          longContext: {
+            thresholdInputTokens: 272000,
+            inputCostPerMillion: "20",
+            outputCostPerMillion: "75",
+            cacheReadCostPerMillion: "2",
+            cacheCreationCostPerMillion: "25",
+          },
+        },
+      ],
+      isLoading: false,
+    });
+    render(<PricingConfigPanel />);
+    const tier = screen
+      .getByText(/Long context: > 272,000 input tokens/)
+      .closest("tr")!;
+    for (const price of ["$20", "$75", "$2", "$25"]) {
+      expect(within(tier).getByText(price)).toBeVisible();
+    }
+    expect(screen.getByText(model.modelId)).toBeVisible();
+  });
+
   it("keeps model prices without pricing defaults or sync controls", () => {
     render(<PricingConfigPanel />);
     expect(screen.getByText("gpt-6-astra")).toBeVisible();

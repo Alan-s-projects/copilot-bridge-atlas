@@ -416,6 +416,7 @@ pub fn run() {
             commands::open_external,
             commands::get_init_error,
             commands::open_app_config_folder,
+            commands::open_generated_model_catalog,
             commands::get_settings,
             commands::save_settings,
             commands::get_log_config,

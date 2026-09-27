@@ -129,7 +129,7 @@ pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingI
 
     let mut stmt = conn.prepare(
         "SELECT model_id, display_name, input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
+                cache_read_cost_per_million, cache_creation_cost_per_million, long_context
          FROM model_pricing
          ORDER BY display_name",
     )?;
@@ -142,6 +142,18 @@ pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingI
             output_cost_per_million: row.get(3)?,
             cache_read_cost_per_million: row.get(4)?,
             cache_creation_cost_per_million: row.get(5)?,
+            long_context: row
+                .get::<_, Option<String>>(6)?
+                .map(|value| {
+                    serde_json::from_str(&value).map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            6,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })
+                })
+                .transpose()?,
         })
     })?;
 
@@ -163,10 +175,12 @@ pub fn update_model_pricing(
     output_cost: String,
     cache_read_cost: String,
     cache_creation_cost: String,
+    long_context: Option<crate::services::model_pricing::LongContextPricing>,
 ) -> Result<(), AppError> {
     crate::services::model_pricing::update_model_pricing(
         &state.db,
         ModelPricingInfo {
+            long_context,
             model_id,
             display_name,
             input_cost_per_million: input_cost,

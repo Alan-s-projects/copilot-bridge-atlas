@@ -9,6 +9,7 @@ export interface RequestLog {
   appliedReasoningEffort?: string;
   /** 写入时实际用于计价的模型名；路由接管 + request 计价模式下可能与 model 不同 */
   pricingModel?: string;
+  pricingTier?: "default" | "long_context";
   costMultiplier: string;
   inputTokens: number;
   /** Normalized by Atlas using the stored row's input-token semantics. */
@@ -41,6 +42,15 @@ export interface PaginatedLogs {
 export interface ModelPricing {
   modelId: string;
   displayName: string;
+  inputCostPerMillion: string;
+  outputCostPerMillion: string;
+  cacheReadCostPerMillion: string;
+  cacheCreationCostPerMillion: string;
+  longContext?: LongContextPricing;
+}
+
+export interface LongContextPricing {
+  thresholdInputTokens: number;
   inputCostPerMillion: string;
   outputCostPerMillion: string;
   cacheReadCostPerMillion: string;
@@ -78,6 +88,10 @@ export interface ModelStats {
   model: string;
   requestCount: number;
   totalTokens: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheCreationTokens: number;
   totalCost: string;
   avgCostPerRequest: string;
 }

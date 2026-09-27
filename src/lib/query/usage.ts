@@ -299,6 +299,7 @@ export function useUpdateModelPricing() {
       outputCost: string;
       cacheReadCost: string;
       cacheCreationCost: string;
+      longContext?: import("@/types/usage").LongContextPricing;
     }) =>
       usageApi.updateModelPricing(
         params.modelId,
@@ -307,6 +308,7 @@ export function useUpdateModelPricing() {
         params.outputCost,
         params.cacheReadCost,
         params.cacheCreationCost,
+        params.longContext,
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: usageKeys.all });

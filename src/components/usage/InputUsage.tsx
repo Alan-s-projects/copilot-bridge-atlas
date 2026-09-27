@@ -19,14 +19,16 @@ export function InputUsageValue({
   cached,
   hit,
   compact = false,
+  compactDecimals,
 }: {
   fresh: number;
   cached: number;
   hit: string;
   compact?: boolean;
+  compactDecimals?: 1 | 2;
 }) {
   const format = compact
-    ? formatTokensShort
+    ? (value: number) => formatTokensShort(value, compactDecimals)
     : (value: number) => fmtInt(value, "en-US");
   return (
     <span

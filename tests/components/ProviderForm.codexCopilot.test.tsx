@@ -1,4 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -65,6 +72,46 @@ function formatControl() {
 }
 
 describe("Codex Copilot provider form", () => {
+  it("shows saving and saved next to Model catalog, including the debounce period", async () => {
+    const onSubmit = renderForm(undefined, true);
+    const header = screen.getByRole("heading", {
+      name: "Model catalog",
+    }).parentElement!;
+    expect(within(header).getByRole("status")).toHaveTextContent(
+      "settings.saved",
+    );
+    let finish!: () => void;
+    onSubmit.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Ultra reasoning effort" }),
+    );
+    expect(within(header).getByRole("status")).toHaveTextContent(
+      "settings.saving",
+    );
+    expect(
+      screen.getByRole("button", { name: "Open generated JSON" }),
+    ).toBeDisabled();
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(within(header).getByRole("status")).toHaveTextContent(
+      "settings.saving",
+    );
+    await act(async () => finish());
+    await waitFor(() =>
+      expect(within(header).getByRole("status")).toHaveTextContent(
+        "settings.saved",
+      ),
+    );
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(
+      screen.getByRole("button", { name: "Open generated JSON" }),
+    ).toBeEnabled();
+  });
+
   it.each([
     [{ enableUltraReasoning: false, enable_ultra_reasoning: true }, false],
     [{ enableUltraReasoning: true, enable_ultra_reasoning: false }, true],
@@ -101,7 +148,9 @@ describe("Codex Copilot provider form", () => {
         ],
       },
     });
-    expect(screen.getByText(/Total context: 500,000/)).toBeVisible();
+    expect(screen.getByLabelText("Context window")).toHaveTextContent(
+      "372,000 / 500,000",
+    );
     fireEvent.click(
       screen.getByRole("switch", { name: /codexConfig.modelAvailableInCodex/ }),
     );
@@ -140,15 +189,17 @@ describe("Codex Copilot provider form", () => {
 
   it("shows the model catalog without TOML, provider metadata, or advanced request editors", () => {
     renderForm();
-    expect(screen.getAllByDisplayValue("gpt-6-astra")).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "gpt-6-astra" })).toBeVisible();
     expect(
       screen.queryByLabelText("codexConfig.defaultModelLabel"),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByText("codexConfig.writeCommonConfig"),
     ).not.toBeInTheDocument();
-    expect(screen.getByDisplayValue("gpt-6-luna")).toBeVisible();
-    expect(screen.getByDisplayValue("1048576")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "gpt-6-luna" })).toBeVisible();
+    expect(screen.getAllByLabelText("Context window")[0]).toHaveTextContent(
+      "1,048,576",
+    );
     for (const label of ["Provider name", "Notes", "Website", "Icon"]) {
       expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
     }
@@ -167,9 +218,7 @@ describe("Codex Copilot provider form", () => {
     ]) {
       expect(screen.queryByText(label)).not.toBeInTheDocument();
     }
-    expect(
-      screen.getAllByRole("combobox", { name: "Reasoning levels" }),
-    ).toHaveLength(2);
+    expect(screen.getAllByLabelText("Reasoning levels")).toHaveLength(2);
   });
 
   it("saves per-model enabled state without deleting catalog rows", async () => {
@@ -194,9 +243,9 @@ describe("Codex Copilot provider form", () => {
 
   it("auto-saves Copilot edits without showing Save or Cancel buttons", async () => {
     const onSubmit = renderForm(undefined, true);
-    fireEvent.change(screen.getAllByLabelText("Display name")[0], {
-      target: { value: "Custom model name" },
-    });
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Ultra reasoning effort" }),
+    );
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(

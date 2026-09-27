@@ -1,51 +1,63 @@
-# Bundled Model Pricing
+# GitHub Copilot Pricing
 
-Atlas bundles 219 model-price entries in
-`src-tauri/src/resources/model-pricing.json`. The file is compiled into the app;
-it is not downloaded or synchronized at runtime.
+Atlas bundles the 33 model/mode entries listed in GitHub's
+[Models and pricing](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing)
+table, verified September 27, 2026. No unrelated vendor models are seeded.
+The snapshot is compiled from `src-tauri/src/resources/model-pricing.json`;
+Atlas does not fetch or scrape pricing at runtime.
 
-## Provenance
+Prices are decimal USD per one million tokens. They estimate token charges,
+not the final subscription bill, included allowance, tax, or annual-plan
+request-based billing. GitHub defines one AI credit as USD 0.01.
 
-- Source repository: [farion1231/cc-switch](https://github.com/farion1231/cc-switch).
-- Revision: `1ee2fdc3a791f1e73476c631c7ab7ce8fac0638f`.
-- Source file: `src-tauri/src/database/schema.rs`, `seed_model_pricing`.
-- Source blob: `cb4724133064a52b006f674da0f958d590c068fe`.
-- Source license: MIT.
+## Long Context
 
-The six fields in each row are model ID, display name, input, output, cache read,
-and cache creation. All four prices are decimal USD per one million tokens.
-The snapshot was extracted from Rust string literals with a Rust syntax parser,
-not inferred from model names or generated from a model-family multiplier.
+The `longContext` map records all 11 published long-context tiers:
 
-## Behavior
+- 272,000 input tokens: GPT-5.4, GPT-5.5, GPT-5.6 Sol/Terra, GPT-6 Astra/Luna/Sol.
+- 200,000 input tokens: GPT-5.6 Luna and Grok 4.5/4.6/4.7.
 
-Startup fills missing defaults without overwriting saved prices. Local overrides
-and deletion tombstones are stored in Atlas's `model-pricing.json` data file.
-These apply to every vendor and to future custom model IDs.
+The higher tier applies **strictly above** the threshold, to the entire request,
+not just excess tokens. The threshold uses total input, including cached reads
+and cache writes; output tokens do not select the tier. Fresh input, cached
+input, cache writes, and output then use their respective rates in that tier.
+This is shared by new request logging and missing-cost backfill. Historical
+fresh/total/legacy input semantics are normalized before choosing a tier.
+Both request tables show `Pricing Tier` as `Default` or `Long context`, recorded
+with the calculated cost. Errors and unpriced requests have no tier. Later price
+edits do not relabel recorded tiers, including zero-cost requests. Existing
+positive-cost proxy records from the flat-rate implementation migrate as
+`Default`, without changing any cost.
 
-The Cost Pricing reset action clears overrides and tombstones for all models,
-then restores the compiled defaults. Models absent from the bundled snapshot
-become unpriced. The confirmation describes this scope. Existing nonzero request
-costs, imported conversation history, and retired metadata are not repriced.
+The Cost Pricing table displays each long-context tier underneath its default
+rate. The price editor saves both tiers, so editing a default does not silently
+discard its long-context rates. Add and Edit both offer an optional long-context
+switch, editable positive-integer input threshold, and all four rates, including
+for models without a bundled tier. A custom flat price with no `longContext`
+field remains flat.
 
-New models remain usable without a known price. Usage displays a missing-price
-warning instead of borrowing a price from a different model or vendor. The
-current snapshot does not price `mai-code-1.1-flash` or the internal
-`gpt-5.6-sol-fast` entry.
+## Upgrade and Overrides
 
-Price lookup tries the exact model ID first. Legacy OpenAI GPT namespace/effort
-aliases and dated variants are supported; arbitrary namespaces and future
-vendor-specific suffixes are not treated as interchangeable SKUs.
+Schema 22 adds optional tier metadata. On upgrade it removes **unchanged**
+entries from the previous bundled table and seeds the GitHub snapshot. The old
+snapshot is retained in `legacy-model-pricing.json` solely to identify these
+unchanged rows, never as an active pricing source.
 
-## Limitations
+Explicit local overrides and deletion tombstones are reapplied. Edited or
+imported non-default prices survive. Reset to code defaults clears overrides
+and tombstones and restores only the official bundled entries and tiers.
+Existing nonzero request costs and imported conversation history are not
+repriced. Previously recorded flat-rate long-context estimates remain historical
+estimates; this update does not silently rewrite them.
 
-These are the flat token estimates recorded by cc-switch, not a GitHub Copilot
-subscription bill or independently verified live vendor rates. The source table
-does not represent every long-context tier, region, promotion, batch mode,
-tool-call fee, image/audio rate, or time-based cache-storage charge. For example,
-the Gemini 3.6-3.8 Flash entries use cc-switch's introductory rates, and Grok 4.5-4.7
-entries use its base context tier.
+Models absent from the price list remain usable and are reported as unpriced.
+Lookup does not borrow a price from a different model. Existing GPT date and
+reasoning aliases still resolve to their explicitly priced base model.
 
-Future pricing updates require a reviewed bundled-data update or a manual price
-override. A newly discovered model is not assumed to be free just because its
-price has not yet been added.
+## Snapshot Limits
+
+GitHub's Gemini 3.6/3.7/3.8 Flash rates are promotional through December 31, 2026.
+The snapshot needs a reviewed update when that promotion or any published rate
+changes. Cache writes listed as not applicable, or absent from a vendor's table,
+have no separate charge. No unpublished storage, audio, batch, or tool fees are
+invented.

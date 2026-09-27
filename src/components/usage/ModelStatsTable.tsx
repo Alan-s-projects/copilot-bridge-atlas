@@ -8,7 +8,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useModelStats } from "@/lib/query/usage";
-import { fmtUsd } from "./format";
+import {
+  fmtInt,
+  fmtUsd,
+  formatReadCacheHitRate,
+  formatTokensShort,
+} from "./format";
+import { InputUsageHeading, InputUsageValue } from "./InputUsage";
 import type { UsageRangeSelection } from "@/types/usage";
 
 interface ModelStatsTableProps {
@@ -44,13 +50,15 @@ export function ModelStatsTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>{t("usage.model", "Model")}</TableHead>
+            <TableHead>{t("usage.billingModel", "Billing Model")}</TableHead>
             <TableHead className="text-right">
               {t("usage.requests", "Requests")}
             </TableHead>
             <TableHead className="text-right">
-              {t("usage.tokens", "Tokens")}
+              Total <InputUsageHeading />
             </TableHead>
+            <TableHead className="text-right">Total Output</TableHead>
+            <TableHead className="text-right">Total Cache Write</TableHead>
             <TableHead className="text-right">
               {t("usage.totalCost", "Total Cost")}
             </TableHead>
@@ -63,7 +71,7 @@ export function ModelStatsTable({
           {stats?.length === 0 ? (
             <TableRow>
               <TableCell
-                colSpan={5}
+                colSpan={7}
                 className="text-center text-muted-foreground"
               >
                 {t("usage.noData", "No data")}
@@ -79,7 +87,31 @@ export function ModelStatsTable({
                   {stat.requestCount.toLocaleString()}
                 </TableCell>
                 <TableCell className="text-right">
-                  {stat.totalTokens.toLocaleString()}
+                  <InputUsageValue
+                    compact
+                    compactDecimals={1}
+                    fresh={stat.totalInputTokens}
+                    cached={stat.totalCacheReadTokens}
+                    hit={formatReadCacheHitRate({
+                      appType: "codex",
+                      inputTokens: stat.totalInputTokens,
+                      freshInputTokens: stat.totalInputTokens,
+                      cacheReadTokens: stat.totalCacheReadTokens,
+                      cacheCreationTokens: stat.totalCacheCreationTokens,
+                    })}
+                  />
+                </TableCell>
+                <TableCell
+                  className="text-right tabular-nums"
+                  title={fmtInt(stat.totalOutputTokens)}
+                >
+                  {formatTokensShort(stat.totalOutputTokens, 1)}
+                </TableCell>
+                <TableCell
+                  className="text-right tabular-nums"
+                  title={fmtInt(stat.totalCacheCreationTokens)}
+                >
+                  {formatTokensShort(stat.totalCacheCreationTokens, 1)}
                 </TableCell>
                 <TableCell className="text-right">
                   {fmtUsd(stat.totalCost, 4)}

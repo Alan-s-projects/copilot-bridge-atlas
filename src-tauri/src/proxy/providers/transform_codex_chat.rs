@@ -66,9 +66,26 @@ pub(crate) struct CodexToolContext {
     seen_chat_names: HashSet<String>,
     chat_name_to_spec: HashMap<String, CodexToolSpec>,
     namespace_name_to_chat_name: HashMap<(String, String), String>,
+    wrapped_arguments: HashSet<String>,
 }
 
 impl CodexToolContext {
+    pub(crate) fn has_wrapped_arguments(&self, name: &str) -> bool {
+        self.wrapped_arguments.contains(name)
+    }
+
+    pub(crate) fn unwrap_arguments(&self, name: &str, arguments: &str) -> String {
+        if self.has_wrapped_arguments(name) && !arguments.is_empty() {
+            if let Ok(Value::Object(mut value)) = serde_json::from_str(arguments) {
+                if let Some(arguments) = value.remove("arguments") {
+                    // Some Chat gateways serialize the nested object again.
+                    return canonicalize_tool_arguments(Some(&arguments));
+                }
+            }
+        }
+        arguments.to_string()
+    }
+
     pub(crate) fn chat_tools(&self) -> &[Value] {
         &self.chat_tools
     }
@@ -121,9 +138,28 @@ impl CodexToolContext {
             .map(|namespace| flatten_namespace_tool_name(namespace, &original_name))
             .unwrap_or_else(|| original_name.clone());
 
-        let Some(chat_tool) = responses_function_tool_to_chat_tool(tool, &chat_name) else {
+        let Some(mut chat_tool) = responses_function_tool_to_chat_tool(tool, &chat_name) else {
             return;
         };
+        let parameters = &mut chat_tool["function"]["parameters"];
+        if ["anyOf", "oneOf", "allOf"]
+            .iter()
+            .any(|key| parameters.get(key).is_some())
+        {
+            // Gemini rejects root combinators and treats nested unions as
+            // strings. Retain the original schema in an explicit JSON envelope.
+            let description = format!(
+                "A JSON-encoded object of tool arguments. Return valid JSON inside this string, not key=value text or Markdown. The object must satisfy the original schema.\nOriginal JSON Schema:\n{}",
+                canonical_json_string(parameters)
+            );
+            *parameters = json!({
+                "type": "object",
+                "properties": {"arguments": {"type":"string", "description":description}},
+                "required": ["arguments"],
+                "additionalProperties": false
+            });
+            self.wrapped_arguments.insert(chat_name.clone());
+        }
         let spec = CodexToolSpec {
             kind: if namespace.is_some() {
                 CodexToolKind::Namespace
@@ -1159,6 +1195,14 @@ fn normalize_function_parameters(params: Option<&Value>) -> Value {
         _ => json!({"type": "object", "properties": {}}),
     };
     if let Some(obj) = params.as_object_mut() {
+        // Root combinators are enveloped by CodexToolContext. Adding a type
+        // here changes the schema and Gemini rejects type + anyOf together.
+        if ["anyOf", "oneOf", "allOf"]
+            .iter()
+            .any(|key| obj.contains_key(*key))
+        {
+            return params;
+        }
         match obj.get("type").and_then(|v| v.as_str()) {
             Some("object") => {}
             _ => {
@@ -1217,7 +1261,7 @@ fn responses_function_tool_to_chat_tool(tool: &Value, chat_name: &str) -> Option
     }))
 }
 
-fn responses_function_call_to_chat_tool_call(
+pub(crate) fn responses_function_call_to_chat_tool_call(
     item: &Value,
     tool_context: &CodexToolContext,
 ) -> Value {
@@ -1229,7 +1273,10 @@ fn responses_function_call_to_chat_tool_call(
     let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let namespace = item.get("namespace").and_then(|v| v.as_str());
     let chat_name = tool_context.chat_name_for_response_function(name, namespace);
-    let arguments = canonicalize_tool_arguments(item.get("arguments"));
+    let mut arguments = canonicalize_tool_arguments(item.get("arguments"));
+    if tool_context.has_wrapped_arguments(&chat_name) {
+        arguments = canonical_json_string(&json!({"arguments": arguments}));
+    }
 
     json!({
         "id": call_id,
@@ -1241,7 +1288,7 @@ fn responses_function_call_to_chat_tool_call(
     })
 }
 
-fn responses_custom_tool_call_to_chat_tool_call(item: &Value) -> Value {
+pub(crate) fn responses_custom_tool_call_to_chat_tool_call(item: &Value) -> Value {
     let call_id = item
         .get("call_id")
         .or_else(|| item.get("id"))
@@ -1260,7 +1307,7 @@ fn responses_custom_tool_call_to_chat_tool_call(item: &Value) -> Value {
     })
 }
 
-fn responses_tool_search_call_to_chat_tool_call(item: &Value) -> Value {
+pub(crate) fn responses_tool_search_call_to_chat_tool_call(item: &Value) -> Value {
     let call_id = item
         .get("call_id")
         .or_else(|| item.get("id"))
@@ -1624,6 +1671,8 @@ pub(crate) fn response_tool_call_item_from_chat_name(
     reasoning: Option<&str>,
     tool_context: &CodexToolContext,
 ) -> Value {
+    let unwrapped = tool_context.unwrap_arguments(chat_name, arguments);
+    let arguments = unwrapped.as_str();
     match tool_context.lookup_chat_name(chat_name) {
         Some(spec) if spec.kind == CodexToolKind::ToolSearch => {
             response_tool_search_call_item(call_id, status, arguments, reasoning)
@@ -2404,6 +2453,79 @@ mod tests {
     }
 
     #[test]
+    fn typed_union_siblings_and_local_references_survive_the_envelope() {
+        let request = json!({"tools":[{"type":"function","name":"lookup","parameters":{
+            "type":"object",
+            "properties":{"q":{"type":"string"}},
+            "required":["q"],
+            "anyOf":[{"properties":{"q":{"$ref":"#/properties/q"}}}]
+        }}]});
+        let context = build_codex_tool_context_from_request(&request);
+        let params = &context.chat_tools()[0]["function"]["parameters"];
+        let nested = &params["properties"]["arguments"];
+        assert_eq!(nested["type"], "string");
+        let original: Value = serde_json::from_str(
+            nested["description"]
+                .as_str()
+                .unwrap()
+                .split_once("\nOriginal JSON Schema:\n")
+                .unwrap()
+                .1,
+        )
+        .unwrap();
+        assert_eq!(original, request["tools"][0]["parameters"]);
+    }
+
+    #[test]
+    fn root_combinator_tools_round_trip_arguments_without_changing_the_schema() {
+        for combinator in ["anyOf", "allOf", "oneOf"] {
+            let schema = json!({
+                "$defs":{"query":{"type":"object","properties":{"q":{"type":"string"}}}},
+                combinator:[{"$ref":"#/$defs/query"}]
+            });
+            let request = json!({"model":"gemini-3.8-flash",
+                "tools":[{"type":"namespace","name":"functions","tools":[
+                    {"type":"function","name":"lookup","parameters":schema}
+                ]}],
+                "input":[{"type":"function_call","call_id":"call_1","namespace":"functions","name":"lookup","arguments":"{\"q\":\"hello\"}"}]
+            });
+            let context = build_codex_tool_context_from_request(&request);
+            let converted = responses_to_chat_completions(request).unwrap();
+            let params = &converted["tools"][0]["function"]["parameters"];
+            assert!(params.get(combinator).is_none());
+            let original: Value = serde_json::from_str(
+                params["properties"]["arguments"]["description"]
+                    .as_str()
+                    .unwrap()
+                    .split_once("\nOriginal JSON Schema:\n")
+                    .unwrap()
+                    .1,
+            )
+            .unwrap();
+            assert_eq!(original, schema);
+            assert_eq!(
+                converted["messages"][0]["tool_calls"][0]["function"]["arguments"],
+                r#"{"arguments":"{\"q\":\"hello\"}"}"#
+            );
+            let restored = response_tool_call_item_from_chat_name(
+                "fc_1",
+                "completed",
+                "call_1",
+                "functions__lookup",
+                r#"{"arguments":{"q":"hello"}}"#,
+                None,
+                &context,
+            );
+            assert_eq!(restored["arguments"], r#"{"q":"hello"}"#);
+            assert_eq!(restored["namespace"], "functions");
+            assert_eq!(restored["name"], "lookup");
+            let stringified = context
+                .unwrap_arguments("functions__lookup", r#"{"arguments":"{\"q\":\"hello\"}"}"#);
+            assert_eq!(stringified, r#"{"q":"hello"}"#);
+        }
+    }
+
+    #[test]
     fn responses_request_to_chat_defaults_top_level_one_of_tool_parameters_to_object() {
         let input = json!({
             "model": "gpt-5.4",
@@ -2431,7 +2553,15 @@ mod tests {
 
         assert_eq!(parameters["type"], "object");
         assert_eq!(
-            parameters["oneOf"],
+            serde_json::from_str::<Value>(
+                parameters["properties"]["arguments"]["description"]
+                    .as_str()
+                    .unwrap()
+                    .split_once("\nOriginal JSON Schema:\n")
+                    .unwrap()
+                    .1
+            )
+            .unwrap()["oneOf"],
             json!([
                 {
                     "type": "object",

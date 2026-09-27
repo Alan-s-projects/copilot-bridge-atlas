@@ -71,6 +71,21 @@ describe("RequestLogTable", () => {
     );
   });
 
+  it("keeps empty-state colspan aligned with selected columns", () => {
+    render(
+      <RequestLogTable
+        range={{ preset: "today" }}
+        rangeLabel="Today"
+        refreshIntervalMs={0}
+        columns={["time", "cost"]}
+      />,
+    );
+    expect(
+      screen.getAllByRole("columnheader").map((header) => header.textContent),
+    ).toEqual(["usage.time", "usage.cost"]);
+    expect(screen.getByRole("cell")).toHaveAttribute("colspan", "2");
+  });
+
   it.each([false, true])(
     "omits Provider and Source columns and keeps cells aligned (has logs=%s)",
     (hasLogs) => {
@@ -114,7 +129,7 @@ describe("RequestLogTable", () => {
         />,
       );
       const headings = screen.getAllByRole("columnheader");
-      expect(screen.getByRole("table")).not.toHaveClass("[&_td]:py-2");
+      expect(screen.getByRole("table")).not.toHaveClass("[&_td]:py-1.5");
       expect(headings).toHaveLength(10);
       expect(headings[1]).toHaveTextContent("usage.billingModel");
       expect(headings[2]).toHaveTextContent("Reasoning(requested/applied)");

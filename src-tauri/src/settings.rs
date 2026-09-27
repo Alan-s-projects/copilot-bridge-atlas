@@ -5,6 +5,17 @@ use std::sync::{OnceLock, RwLock};
 
 use crate::{AppError, Database};
 
+/// Database-backed app preferences included in SQL exports and database backups.
+/// Missing selections mean all current columns; no browser-local storage is used.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UsageTableColumns {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_logs: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_stats: Option<Vec<String>>,
+}
+
 /// Device preferences live alongside Atlas's database. Unknown imported
 /// preferences remain opaque, so editing current settings does not erase them.
 #[derive(Debug, Clone, Serialize, Deserialize)]

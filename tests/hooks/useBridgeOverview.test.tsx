@@ -36,6 +36,7 @@ const summary: UsageSummary = {
 };
 const recent: PaginatedLogs = { data: [], total: 0, page: 0, pageSize: 5 };
 const listeners = new Set<() => void>();
+const activityListeners = new Set<(event: { payload: string }) => void>();
 const unlisteners: Array<ReturnType<typeof vi.fn>> = [];
 const clients: QueryClient[] = [];
 
@@ -75,15 +76,18 @@ describe("low-CPU bridge overview", () => {
     vi.setSystemTime(new Date(2026, 8, 26, 12));
     focusManager.setFocused(true);
     listeners.clear();
+    activityListeners.clear();
     unlisteners.length = 0;
     mocks.summary.mockReset().mockResolvedValue(summary);
     mocks.logs.mockReset().mockResolvedValue(recent);
     mocks.listen
       .mockReset()
-      .mockImplementation((_event: string, callback: () => void) => {
-        listeners.add(callback);
+      .mockImplementation((event: string, callback: () => void) => {
+        const target =
+          event === "proxy-request-activity" ? activityListeners : listeners;
+        target.add(callback);
         const off = vi.fn(() => {
-          listeners.delete(callback);
+          target.delete(callback);
         });
         unlisteners.push(off);
         return Promise.resolve(off);
@@ -166,9 +170,37 @@ describe("low-CPU bridge overview", () => {
     expect(result.current.data?.summary.totalRequests).toBe(4);
     expect(mocks.summary).toHaveBeenCalledTimes(2);
     expect(mocks.logs).toHaveBeenCalledTimes(2);
-    expect(mocks.listen).toHaveBeenCalledTimes(2);
+    expect(mocks.listen).toHaveBeenCalledTimes(4);
     await advance(30_000);
     expect(mocks.summary).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes active metadata without SQL polling and coalesces completion events", async () => {
+    const { client } = mount();
+    await advance(1);
+    const invalidations = vi.spyOn(client, "invalidateQueries");
+    act(() => {
+      for (const listener of activityListeners)
+        listener({ payload: "started" });
+    });
+    await advance(1);
+    expect(invalidations).toHaveBeenCalledWith(
+      { queryKey: ["proxyStatus"] },
+      { cancelRefetch: false },
+    );
+    expect(mocks.logs).toHaveBeenCalledTimes(1);
+    act(() => {
+      for (let index = 0; index < 20; index++) {
+        for (const listener of activityListeners)
+          listener({ payload: "finished" });
+      }
+    });
+    await advance(99);
+    expect(mocks.logs).toHaveBeenCalledTimes(1);
+    await advance(1);
+    expect(mocks.logs).toHaveBeenCalledTimes(2);
+    await advance(30_000);
+    expect(mocks.logs).toHaveBeenCalledTimes(2);
   });
 
   it("unsubscribes and cancels both the pending refresh and midnight timer on unmount", async () => {

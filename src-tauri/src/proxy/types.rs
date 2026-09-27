@@ -48,6 +48,8 @@ impl Default for ProxyConfig {
 /// 代理服务器状态
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProxyStatus {
+    #[serde(default)]
+    pub active_requests: Vec<ActiveProxyRequest>,
     /// 是否运行中
     pub running: bool,
     /// 监听地址
@@ -77,6 +79,18 @@ pub struct ProxyStatus {
     /// 当前活跃的代理目标列表
     #[serde(default)]
     pub active_targets: Vec<ActiveTarget>,
+}
+
+/// Ephemeral display metadata only; active requests do not affect recorded usage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveProxyRequest {
+    pub request_id: String,
+    pub model: String,
+    pub request_model: String,
+    pub requested_reasoning_effort: Option<String>,
+    pub applied_reasoning_effort: Option<String>,
+    pub created_at: i64,
 }
 
 /// 活跃的代理目标信息

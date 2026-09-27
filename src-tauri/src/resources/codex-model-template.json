@@ -1,0 +1,16 @@
+{
+  "default_reasoning_level": "medium",
+  "shell_type": "shell_command",
+  "visibility": "list",
+  "supported_in_api": true,
+  "supports_reasoning_summaries": false,
+  "default_reasoning_summary": "none",
+  "support_verbosity": false,
+  "apply_patch_tool_type": "freeform",
+  "truncation_policy": { "mode": "tokens", "limit": 10000 },
+  "supports_parallel_tool_calls": false,
+  "supports_image_detail_original": false,
+  "effective_context_window_percent": 95,
+  "experimental_supported_tools": [],
+  "supports_search_tool": false
+}

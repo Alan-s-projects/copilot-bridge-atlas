@@ -37,6 +37,7 @@ export function useBridgeOverview() {
     if (!active) return;
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
+    let unlistenActivity: UnlistenFn | undefined;
     let pending: ReturnType<typeof setTimeout> | undefined;
     let midnight: ReturnType<typeof setTimeout> | undefined;
     const refresh = () => {
@@ -76,9 +77,28 @@ export function useBridgeOverview() {
         else unlisten = off;
       })
       .catch((error) => console.error("Cannot observe recent usage:", error));
+    void listen<string>("proxy-request-activity", ({ payload }) => {
+      if (disposed || !focusManager.isFocused()) return;
+      void queryClient.invalidateQueries(
+        { queryKey: proxyKeys.status },
+        { cancelRefetch: false },
+      );
+      if (payload === "finished") {
+        clearTimeout(pending);
+        pending = setTimeout(refresh, 100);
+      }
+    })
+      .then((off) => {
+        if (disposed) off();
+        else unlistenActivity = off;
+      })
+      .catch((error) =>
+        console.error("Cannot observe active requests:", error),
+      );
     return () => {
       disposed = true;
       unlisten?.();
+      unlistenActivity?.();
       clearTimeout(pending);
       clearTimeout(midnight);
     };

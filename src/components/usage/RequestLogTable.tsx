@@ -16,6 +16,7 @@ import { UsageDateRangePicker } from "./UsageDateRangePicker";
 import { RequestLogsGrid } from "./RequestLogsGrid";
 
 interface RequestLogTableProps {
+  columns?: string[];
   range: UsageRangeSelection;
   rangeLabel: string;
   appType?: string;
@@ -33,6 +34,7 @@ export function RequestLogTable({
   model,
   refreshIntervalMs,
   onRangeChange,
+  columns,
 }: RequestLogTableProps) {
   const { t } = useTranslation();
 
@@ -128,7 +130,7 @@ export function RequestLogTable({
         <div className="h-[400px] animate-pulse rounded bg-gray-100" />
       ) : (
         <>
-          <RequestLogsGrid logs={logs} />
+          <RequestLogsGrid logs={logs} columns={columns} />
 
           <div className="flex items-center justify-between text-sm text-muted-foreground">
             <span>{t("usage.totalRecords", { total })}</span>

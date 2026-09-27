@@ -418,6 +418,8 @@ pub fn run() {
             commands::open_app_config_folder,
             commands::open_generated_model_catalog,
             commands::get_settings,
+            commands::get_usage_table_columns,
+            commands::set_usage_table_columns,
             commands::save_settings,
             commands::get_log_config,
             commands::set_log_config,

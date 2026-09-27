@@ -60,6 +60,8 @@ const snapshot = {
     successRate: 91.7,
     realTotalTokens: 1050,
     cacheHitRate: 0.8,
+    avgLatencyMs: 13200,
+    outputTokensPerSecond: 187.5,
   },
   recent: {
     data: [
@@ -125,14 +127,39 @@ describe("read-only bridge overview", () => {
     ).not.toBeInTheDocument();
     expect(proxy.getByText("http://127.0.0.1:15722/v1")).toBeVisible();
     expect(proxy.getByText("Proxy running")).toBeVisible();
-    expect(await usage.findByText("$1.3")).toBeVisible();
+    expect(proxy.getByText("Proxy running")).toHaveClass(
+      "font-mono",
+      "text-muted-foreground",
+    );
+    expect(screen.getByRole("region", { name: "Requests" })).toContainElement(
+      screen.getByRole("region", { name: "Proxy" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Refresh overview" }),
+    ).toHaveAttribute("title", "Refresh overview");
+    expect(
+      screen.getByRole("button", { name: "Refresh overview" }),
+    ).toHaveTextContent("");
+    expect(await usage.findByText("$1")).toBeVisible();
     expect(usage.getByText("80.0%")).toBeVisible();
     expect(usage.getByText("91.7%")).toBeVisible();
     expect(proxy.getByText("Active requests:").textContent).toContain("2");
     const table = requests.getByRole("table", {
-      name: "Latest 5 completed requests",
+      name: "Latest 5 requests",
     });
-    expect(table).toHaveClass("[&_td]:py-2", "[&_th]:h-10");
+    expect(table).not.toHaveClass("h-full", "[&_td]:py-1.5");
+    expect(usage.getByText("13.20s")).toBeVisible();
+    expect(usage.getByText("187.5 tps")).toBeVisible();
+    for (const label of [
+      "Total Cost",
+      "Output",
+      "Cache Write",
+      "Average Latency",
+      "Output Speed",
+      "Success Rate",
+    ]) {
+      expect(usage.getByText(label)).toBeVisible();
+    }
     expect(within(table).getByText("gpt-6-astra")).toBeVisible();
     const headings = within(table).getAllByRole("columnheader");
     expect(headings[1]).toHaveTextContent("Billing Model");
@@ -187,13 +214,13 @@ describe("read-only bridge overview", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("rounds Overview cost estimates to one decimal place", async () => {
+  it("uses the same summary cost formatting as Usage", async () => {
     mocks.summary.mockResolvedValue({
       ...snapshot.summary,
       totalCost: "553.0626",
     });
     renderOverview();
-    expect(await screen.findByText("$553.1")).toBeVisible();
+    expect(await screen.findByText("$553")).toBeVisible();
   });
 
   it("shows at most five requests even when an older cached response has more", async () => {
@@ -206,12 +233,53 @@ describe("read-only bridge overview", () => {
     });
     renderOverview();
     const table = await screen.findByRole("table", {
-      name: "Latest 5 completed requests",
+      name: "Latest 5 requests",
     });
     await within(table).findByText("model-0");
     expect(within(table).getAllByRole("row")).toHaveLength(6);
     expect(within(table).getByText("model-4")).toBeVisible();
     expect(within(table).queryByText("model-5")).not.toBeInTheDocument();
+  });
+
+  it("shows active rows first without invented costs or changes to recorded totals", async () => {
+    mocks.logs.mockResolvedValue({
+      data: Array.from({ length: 8 }, (_, index) => ({
+        ...snapshot.recent.data[0],
+        requestId: `done-${index}`,
+        model: `done-model-${index}`,
+      })),
+    });
+    renderOverview({
+      ...status,
+      active_requests: [
+        {
+          requestId: "pending:first",
+          model: "active-model",
+          createdAt: 1790397001,
+          requestedReasoningEffort: "ultra",
+          appliedReasoningEffort: "max",
+        },
+      ],
+    });
+    const table = await screen.findByRole("table", {
+      name: "Latest 5 requests",
+    });
+    await within(table).findByText("done-model-0");
+    const rows = within(table).getAllByRole("row");
+    expect(rows).toHaveLength(6);
+    const cells = within(rows[1]).getAllByRole("cell");
+    expect(cells[1]).toHaveTextContent("active-model");
+    expect(cells[2]).toHaveTextContent("ultra / max");
+    expect(cells[3]).toHaveTextContent("Pending");
+    for (const cell of cells.slice(4)) expect(cell).toHaveTextContent(/^N\/A$/);
+    expect(within(table).queryByText("done-model-4")).not.toBeInTheDocument();
+    const summary = within(
+      screen.getByRole("region", { name: "Today's usage" }),
+    );
+    expect(summary.getByText("Requests").nextElementSibling).toHaveTextContent(
+      "12",
+    );
+    expect(screen.getByText("Active requests:")).toHaveTextContent("2");
   });
 
   it.each([true, false])(
@@ -250,7 +318,7 @@ describe("read-only bridge overview", () => {
   it("reports read failures separately from a known misconfiguration and retains the last usage snapshot", async () => {
     mocks.invoke.mockRejectedValue(new Error("Unable to read file"));
     const { client } = renderOverview();
-    expect(await screen.findByText("$1.3")).toBeVisible();
+    expect(await screen.findByText("$1")).toBeVisible();
     mocks.summary.mockRejectedValue(new Error("Database unavailable"));
     await act(() =>
       client.invalidateQueries({ queryKey: ["bridge-overview"] }),
@@ -262,7 +330,7 @@ describe("read-only bridge overview", () => {
       screen.queryByText("Codex is not connected to Atlas"),
     ).not.toBeInTheDocument();
     expect(await screen.findByText(/Showing the last snapshot/)).toBeVisible();
-    expect(screen.getByText("$1.3")).toBeVisible();
+    expect(screen.getByText("$1")).toBeVisible();
   });
 
   it("does not invent success or cache rates when no requests are recorded", async () => {
@@ -271,24 +339,27 @@ describe("read-only bridge overview", () => {
       totalRequests: 0,
       totalInputTokens: 0,
       totalCacheReadTokens: 0,
+      cacheHitRate: 0,
     });
     mocks.logs.mockResolvedValue({ data: [] });
     renderOverview();
     expect(await screen.findByText("No data")).toBeVisible();
     expect(screen.getByRole("cell")).toHaveAttribute("colspan", "7");
-    for (const label of ["Success today", "Cache reuse today"]) {
-      expect(screen.getByText(label).nextElementSibling).toHaveTextContent("—");
+    for (const label of ["Success Rate", "Average Latency", "Output Speed"]) {
+      expect(screen.getByText(label).nextElementSibling).toHaveTextContent(
+        "--",
+      );
     }
   });
 
   it("explicitly refreshes usage, recent requests and the read-only connection check", async () => {
     renderOverview();
-    expect(await screen.findByText("$1.3")).toBeVisible();
+    expect(await screen.findByText("$1")).toBeVisible();
     const refresh = screen.getByRole("button", { name: "Refresh overview" });
     await waitFor(() => expect(refresh).toBeEnabled());
     mocks.summary.mockResolvedValue({ ...snapshot.summary, totalCost: "2.5" });
     fireEvent.click(refresh);
-    expect(await screen.findByText("$2.5")).toBeVisible();
+    expect(await screen.findByText("$3")).toBeVisible();
     expect(mocks.summary).toHaveBeenCalledTimes(2);
     expect(mocks.logs).toHaveBeenCalledTimes(2);
     expect(mocks.invoke).toHaveBeenCalledTimes(2);

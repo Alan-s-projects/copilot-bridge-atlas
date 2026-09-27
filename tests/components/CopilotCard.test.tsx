@@ -1,10 +1,4 @@
-import {
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CopilotCard } from "@/components/providers/CopilotCard";
@@ -18,7 +12,6 @@ const mocks = vi.hoisted(() => ({
     isLoadingStatus: false,
   },
   quota: vi.fn(),
-  probe: vi.fn(),
 }));
 vi.mock("@/components/providers/forms/hooks/useCopilotAuth", () => ({
   useCopilotAuth: () => mocks.auth,
@@ -28,9 +21,6 @@ vi.mock("@/components/CopilotQuotaFooter", () => ({
     mocks.quota(meta);
     return <span>Copilot quota</span>;
   },
-}));
-vi.mock("@/lib/api/connectivity-check", () => ({
-  streamCheckProvider: mocks.probe,
 }));
 
 const provider: Provider = {
@@ -53,32 +43,26 @@ describe("Copilot account card", () => {
     mocks.auth.accounts = [{ id: "account-1", login: "test-user" }];
     mocks.auth.isLoadingStatus = false;
     mocks.quota.mockClear();
-    mocks.probe.mockReset().mockResolvedValue({
-      status: "operational",
-      success: true,
-      message: "Reachable",
-      responseTimeMs: 125,
-      httpStatus: 401,
-    });
   });
 
-  it("reports a signed-out account and keeps connectivity available without signing in", () => {
+  it("reports a signed-out account without a health-check action", () => {
     mocks.auth.accounts = [];
     renderCard();
     expect(screen.getByText("Needs setup")).toBeVisible();
+    expect(screen.getByText("GitHub Copilot is signed out.")).toBeVisible();
     expect(
-      screen.getByText("GitHub Copilot is signed out."),
-    ).toBeVisible();
-    expect(screen.queryByText(/save the bridge settings/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Health check" })).toBeEnabled();
+      screen.queryByText(/save the bridge settings/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Health check" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Edit" }),
     ).not.toBeInTheDocument();
-    expect(mocks.probe).not.toHaveBeenCalled();
     expect(mocks.quota).not.toHaveBeenCalled();
   });
 
-  it("keeps the account, model count, and quota, and runs health checks from the card", async () => {
+  it("keeps the account, model count, and quota without health-check controls", () => {
     renderCard();
     expect(
       screen.getByText("test-user · 1 models available to Codex"),
@@ -92,11 +76,7 @@ describe("Copilot account card", () => {
     expect(
       within(card).getByRole("heading", { name: "GitHub Copilot", level: 3 }),
     ).toBeVisible();
-    expect(mocks.probe).not.toHaveBeenCalled();
-    fireEvent.click(within(card).getByRole("button", { name: "Health check" }));
-    await waitFor(() =>
-      expect(mocks.probe.mock.calls[0]?.[0]).toBe(provider.id),
-    );
+    expect(within(card).queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("counts only catalog models enabled for Codex", () => {

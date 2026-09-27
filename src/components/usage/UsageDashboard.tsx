@@ -35,6 +35,9 @@ import { UsageDateRangePicker } from "./UsageDateRangePicker";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatTokensShort } from "./format";
 import type { UnpricedModelUsage } from "@/types/usage";
+import type { UsageTableColumns, UsageTableName } from "@/lib/api/settings";
+import { TableColumnsMenu } from "./TableColumnsMenu";
+import { MODEL_STATS_COLUMNS, REQUEST_LOG_COLUMNS } from "./tableColumns";
 
 const DEFAULT_REFRESH_INTERVAL_MS = 30000;
 const REFRESH_INTERVAL_OPTIONS_MS = [0, 5000, 10000, 30000, 60000] as const;
@@ -56,6 +59,12 @@ const decodeOptionValue = (value: string) =>
   value === "all" ? undefined : value.slice(DYNAMIC_OPTION_PREFIX.length);
 
 interface UsageDashboardProps {
+  tableColumns?: UsageTableColumns;
+  onTableColumnsChange?: (
+    table: UsageTableName,
+    columns: string[],
+  ) => Promise<void>;
+  columnsSaving?: boolean;
   refreshIntervalMs?: number;
   onRefreshIntervalChange?: (next: number) => Promise<boolean> | boolean | void;
 }
@@ -63,6 +72,9 @@ interface UsageDashboardProps {
 export function UsageDashboard({
   refreshIntervalMs: savedRefreshIntervalMs,
   onRefreshIntervalChange,
+  tableColumns,
+  onTableColumnsChange,
+  columnsSaving,
 }: UsageDashboardProps = {}) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -272,7 +284,7 @@ export function UsageDashboard({
 
       <div className="space-y-4">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <div className="flex items-center justify-between mb-4">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <TabsList className="bg-muted/50">
               <TabsTrigger value="logs" className="gap-2">
                 <ListFilter className="h-4 w-4" />
@@ -287,6 +299,30 @@ export function UsageDashboard({
                 {t("usage.costPricing", "Cost Pricing")}
               </TabsTrigger>
             </TabsList>
+            {activeTab !== "pricing" && (
+              <TableColumnsMenu
+                options={
+                  activeTab === "logs"
+                    ? REQUEST_LOG_COLUMNS
+                    : MODEL_STATS_COLUMNS
+                }
+                selected={
+                  activeTab === "logs"
+                    ? tableColumns?.requestLogs
+                    : tableColumns?.modelStats
+                }
+                saving={columnsSaving}
+                onChange={
+                  onTableColumnsChange
+                    ? (columns) =>
+                        onTableColumnsChange(
+                          activeTab === "logs" ? "requestLogs" : "modelStats",
+                          columns,
+                        )
+                    : undefined
+                }
+              />
+            )}
           </div>
 
           <motion.div
@@ -296,6 +332,7 @@ export function UsageDashboard({
           >
             <TabsContent value="logs" className="mt-0">
               <RequestLogTable
+                columns={tableColumns?.requestLogs}
                 range={range}
                 rangeLabel={rangeLabel}
                 appType={appType}
@@ -306,6 +343,7 @@ export function UsageDashboard({
             </TabsContent>
             <TabsContent value="models" className="mt-0">
               <ModelStatsTable
+                columns={tableColumns?.modelStats}
                 range={range}
                 appType={appType}
                 model={model}

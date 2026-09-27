@@ -793,7 +793,7 @@ dependencies = [
 
 [[package]]
 name = "copilot-bridge-atlas"
-version = "4.2.12"
+version = "4.2.13"
 dependencies = [
  "arboard",
  "async-stream",

@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import {
   OVERVIEW_REQUEST_LIMIT,
   useBridgeOverview,
@@ -6,24 +6,32 @@ import {
 import { useGlobalProxyConfig } from "@/lib/query/proxy";
 import type { ProxyStatus } from "@/types/proxy";
 import type { RequestLog } from "@/types/usage";
-import { fmtInt, fmtUsd } from "@/components/usage/format";
 import { RequestLogsGrid } from "@/components/usage/RequestLogsGrid";
+import { UsageSummaryCard } from "@/components/usage/UsageHero";
 
-const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
 const clock = (timestamp: number) =>
   new Date(timestamp * 1000).toLocaleTimeString("en-US", { hour12: false });
 
 const RecentRequests = memo(function RecentRequests({
   logs,
+  active,
 }: {
   logs: RequestLog[];
+  active: NonNullable<ProxyStatus["active_requests"]>;
 }) {
+  const rows = useMemo(
+    () =>
+      [
+        ...active.map((request) => ({ ...request, pending: true as const })),
+        ...logs,
+      ].slice(0, OVERVIEW_REQUEST_LIMIT),
+    [active, logs],
+  );
   return (
     <RequestLogsGrid
-      logs={logs.slice(0, OVERVIEW_REQUEST_LIMIT)}
-      caption={`Latest ${OVERVIEW_REQUEST_LIMIT} completed requests`}
+      logs={rows}
+      caption={`Latest ${OVERVIEW_REQUEST_LIMIT} requests`}
       showTokenDetails={false}
-      compact
     />
   );
 });
@@ -42,82 +50,29 @@ export function BridgeOverview({ status }: { status?: ProxyStatus }) {
       : localAddress;
   const endpoint =
     host && port ? `http://${host}:${port}/v1` : "Loading proxy address…";
-  const metrics = [
-    ["Requests today", summary ? fmtInt(summary.totalRequests, "en-US") : "—"],
-    ["Estimated cost today", summary ? fmtUsd(summary.totalCost, 1) : "—"],
-    [
-      "Success today",
-      summary?.totalRequests ? `${summary.successRate.toFixed(1)}%` : "—",
-    ],
-    [
-      "Cache reuse today",
-      summary && summary.totalInputTokens + summary.totalCacheReadTokens > 0
-        ? percent(summary.cacheHitRate)
-        : "—",
-    ],
-  ];
   return (
-    <section className="space-y-3" aria-label="Bridge overview">
+    <section className="space-y-5" aria-label="Bridge overview">
+      <UsageSummaryCard
+        title="Today's usage"
+        summary={summary}
+        isLoading={!summary && !overview.error}
+        notice={
+          overview.error
+            ? `Usage could not be refreshed. ${overview.data ? "Showing the last snapshot." : "Open Usage to retry."}`
+            : undefined
+        }
+      />
       <section
-        className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border pb-3"
-        aria-labelledby="bridge-proxy-title"
+        className="space-y-5 rounded-xl border border-border bg-card p-6 shadow-sm"
+        aria-labelledby="bridge-requests-title"
       >
-        <h2 id="bridge-proxy-title" className="sr-only">
-          Proxy
-        </h2>
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1">
-          <p className="text-sm font-medium">
-            {status
-              ? status.running
-                ? "Proxy running"
-                : "Proxy stopped"
-              : "Checking proxy"}
-          </p>
-          <p className="break-all font-mono text-xs text-muted-foreground">
-            {endpoint}
-          </p>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          Active requests:{" "}
-          <span className="font-medium text-foreground">
-            {status?.active_connections ?? "—"}
-          </span>
-        </p>
-      </section>
-      <section
-        className="space-y-2 border-b border-border pb-3"
-        aria-labelledby="bridge-usage-title"
-      >
-        <h2 id="bridge-usage-title" className="text-sm font-semibold">
-          Today's usage
-        </h2>
-        {overview.error && (
-          <p role="alert" className="text-sm text-destructive">
-            Usage could not be refreshed.{" "}
-            {overview.data
-              ? "Showing the last snapshot."
-              : "Open Usage to retry."}
-          </p>
-        )}
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
-          {metrics.map(([label, value]) => (
-            <div key={label} className="min-w-0">
-              <dt className="text-xs text-muted-foreground">{label}</dt>
-              <dd className="mt-1 break-words text-xl font-semibold tabular-nums">
-                {value}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      </section>
-      <section className="space-y-2" aria-labelledby="bridge-requests-title">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h2 id="bridge-requests-title" className="text-sm font-semibold">
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <div>
+            <h2 id="bridge-requests-title" className="text-base font-semibold">
               Requests
             </h2>
-            <p className="text-xs text-muted-foreground">
-              Latest {OVERVIEW_REQUEST_LIMIT} completed requests
+            <p className="mt-1 text-xs text-muted-foreground">
+              Latest {OVERVIEW_REQUEST_LIMIT} requests
             </p>
           </div>
           <p className="text-xs text-muted-foreground">
@@ -127,8 +82,34 @@ export function BridgeOverview({ status }: { status?: ProxyStatus }) {
             Updates while this window is active
           </p>
         </div>
-        {overview.data ? (
-          <RecentRequests logs={overview.data.recent.data} />
+        <section
+          className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-border pb-3"
+          aria-label="Proxy"
+        >
+          <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
+            <p className="font-mono text-sm text-muted-foreground">
+              {status
+                ? status.running
+                  ? "Proxy running"
+                  : "Proxy stopped"
+                : "Checking proxy"}
+            </p>
+            <p className="break-all font-mono text-sm text-muted-foreground">
+              {endpoint}
+            </p>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Active requests:{" "}
+            <span className="font-medium text-foreground">
+              {status?.active_connections ?? "—"}
+            </span>
+          </p>
+        </section>
+        {overview.data || status?.active_requests?.length ? (
+          <RecentRequests
+            logs={overview.data?.recent.data ?? []}
+            active={status?.active_requests ?? []}
+          />
         ) : !overview.error ? (
           <p className="text-sm text-muted-foreground">
             Loading recent requests…

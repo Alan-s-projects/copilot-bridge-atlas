@@ -105,10 +105,19 @@ export default function App() {
         ) : view === "usage" ? (
           <UsagePage />
         ) : (
-          <div className="space-y-3 px-4 pb-4 pt-3 sm:px-6">
-            <div className="flex items-center justify-between gap-4">
-              <h1 className="text-xl font-bold">Overview</h1>
-              <OverviewRefreshButton />
+          <div className="space-y-5 px-6 pb-6 pt-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex min-w-0 flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <h1 className="text-2xl font-bold tracking-tight">
+                    Overview
+                  </h1>
+                  <OverviewRefreshButton />
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Monitor your Copilot connection, proxy activity, and usage
+                </p>
+              </div>
             </div>
             <BridgeWarnings status={status} />
             {isLoading ? (

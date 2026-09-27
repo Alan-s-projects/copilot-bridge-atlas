@@ -2038,6 +2038,33 @@ mod tests {
 
     #[test]
     #[serial]
+    fn usage_columns_round_trip_through_database_and_sql_backups() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let _settings = SettingsGuard::with_backup_retain_count(10);
+        let db = Database::init()?;
+        assert_eq!(
+            db.get_usage_table_columns()?,
+            crate::settings::UsageTableColumns::default()
+        );
+        db.set_usage_table_columns("requestLogs", vec!["time".into(), "cost".into()])?;
+        let expected =
+            db.set_usage_table_columns("modelStats", vec!["model".into(), "requests".into()])?;
+        assert_eq!(expected.request_logs.as_ref().unwrap(), &["time", "cost"]);
+        let backup = db.backup_database_file()?.unwrap();
+        let exported = db.export_sql_string()?;
+        db.set_usage_table_columns("requestLogs", vec!["status".into()])?;
+        db.restore_from_backup(backup.file_name().unwrap().to_str().unwrap())?;
+        assert_eq!(db.get_usage_table_columns()?, expected);
+        db.set_usage_table_columns("modelStats", vec!["cost".into()])?;
+        db.import_sql_string(&exported)?;
+        assert_eq!(db.get_usage_table_columns()?, expected);
+        assert!(db.set_usage_table_columns("unknown", vec![]).is_err());
+        assert_eq!(db.get_usage_table_columns()?, expected);
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
     fn restore_with_retain_one_keeps_source_and_exact_safety_snapshot() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let _settings = SettingsGuard::with_backup_retain_count(1);

@@ -3,6 +3,24 @@ import { normalizeCodexCatalogModelsForSave } from "@/components/providers/forms
 import { mapCodexCatalogModelForForm } from "@/utils/codexModelCatalog";
 
 describe("ProviderForm Codex catalog helpers", () => {
+  it.each(["maxContextWindow", "max_context_window"])(
+    "preserves the total context limit through load and save from %s",
+    (key) => {
+      const loaded = mapCodexCatalogModelForForm({
+        model: "grok-4.7",
+        contextWindow: 372000,
+        [key]: 500000,
+      });
+      expect(normalizeCodexCatalogModelsForSave([loaded])).toEqual([
+        {
+          model: "grok-4.7",
+          contextWindow: 372000,
+          maxContextWindow: 500000,
+        },
+      ]);
+    },
+  );
+
   it("normalizes catalog rows and removes empty or duplicate models", () => {
     expect(
       normalizeCodexCatalogModelsForSave([

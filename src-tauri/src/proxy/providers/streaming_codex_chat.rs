@@ -5,7 +5,7 @@ use super::{
     codex_chat_common::extract_reasoning_field_text,
     transform_codex_chat::{
         chat_usage_to_responses_usage, custom_tool_input_from_chat_arguments,
-        response_id_from_chat_id, response_status_from_finish_reason,
+        message_id_from_response_id, response_id_from_chat_id, response_status_from_finish_reason,
         response_tool_call_item_from_chat_name, response_tool_call_item_id_from_chat_name,
         CodexToolContext,
     },
@@ -201,7 +201,7 @@ impl ChatToResponsesState {
 
         if !self.text.added {
             let output_index = self.next_output_index();
-            let item_id = format!("{}_msg", self.response_id);
+            let item_id = message_id_from_response_id(&self.response_id);
             self.text.output_index = Some(output_index);
             self.text.item_id = item_id.clone();
             self.text.added = true;
@@ -808,6 +808,33 @@ mod tests {
                 serde_json::from_str(data).ok()
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn review_streamed_message_ids_are_valid_and_stable_through_completion() {
+        let output = collect(vec![
+            "data: {\"id\":\"chatcmpl_switch\",\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_switch\",\"choices\":[{\"delta\":{\"content\":\" again\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        ])
+        .await;
+        let events = parse_sse_events(&output);
+        let completed = events
+            .iter()
+            .find(|event| event["type"] == "response.completed")
+            .unwrap();
+        let message = &completed["response"]["output"][0];
+        let id = message["id"].as_str().unwrap();
+        assert!(id.starts_with("msg_"), "{id}");
+        assert_eq!(message["content"][0]["text"], "Hello again");
+        for event in &events {
+            if let Some(item_id) = event.get("item_id") {
+                assert_eq!(item_id, id);
+            }
+            if event["item"]["type"] == "message" {
+                assert_eq!(event["item"]["id"], id);
+            }
+        }
     }
 
     #[tokio::test]

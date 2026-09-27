@@ -1,5 +1,11 @@
 import { createContext, useContext, type ReactNode } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "@/components/settings/SettingsPage";
@@ -158,35 +164,49 @@ describe("SettingsPage", () => {
     );
   });
 
-  it("keeps Backup & Restore, removes duplicate and customization panels, and has no global Save button", async () => {
+  it("places backup and diagnostic logs below About without an Advanced tab", async () => {
     const user = userEvent.setup();
     render(<SettingsPage />);
-    await user.click(
-      screen.getByRole("button", { name: "settings.tabAdvanced" }),
-    );
+    const sidebar = screen.getByRole("navigation");
+    expect(
+      within(sidebar)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual([
+      "settings.tabGeneral",
+      "settings.tabProxy",
+      "Accounts",
+      "Models",
+      "About",
+    ]);
+    expect(
+      screen.queryByRole("button", { name: "settings.tabAdvanced" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "About" }));
 
+    const about = within(
+      screen.getByRole("region", { name: "Settings content" }),
+    ).getByText("About");
     const backupTrigger = screen.getByRole("button", {
       name: /Backup & Restore/,
     });
+    const logTrigger = screen.getByRole("button", {
+      name: /settings\.about\.logConfig\.title/,
+    });
+    expect(
+      about.compareDocumentPosition(backupTrigger) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      backupTrigger.compareDocumentPosition(logTrigger) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     await user.click(backupTrigger);
     expect(
       await screen.findByRole("heading", { name: "Backup & Restore" }),
     ).toBeVisible();
-    await user.click(
-      screen.getByRole("button", {
-        name: /settings\.advanced\.logConfig\.title/,
-      }),
-    );
+    await user.click(logTrigger);
     expect(screen.getByText("Log settings")).toBeVisible();
-    expect(
-      screen.queryByText("settings.advanced.configDir.title"),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByText("settings.advanced.data.title"),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByText("settings.advanced.connectivityCheck.title"),
-    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "common.save" }),
     ).not.toBeInTheDocument();

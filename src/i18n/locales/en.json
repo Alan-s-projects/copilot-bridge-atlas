@@ -25,12 +25,11 @@
   "settings": {
     "tabGeneral": "General",
     "tabAuth": "Accounts",
-    "tabAdvanced": "Advanced",
     "tabProxy": "Routing",
     "authCenter": {
       "copilotDescription": "Manage GitHub Copilot accounts"
     },
-    "advanced": {
+    "about": {
       "backup": {
         "title": "Backup & Restore",
         "description": "Manage automatic backups, view and restore database snapshots"

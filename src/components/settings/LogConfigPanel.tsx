@@ -48,9 +48,9 @@ export function LogConfigPanel() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="space-y-0.5">
-          <Label>{t("settings.advanced.logConfig.enabled")}</Label>
+          <Label>{t("settings.about.logConfig.enabled")}</Label>
           <p className="text-xs text-muted-foreground">
-            {t("settings.advanced.logConfig.enabledDescription")}
+            {t("settings.about.logConfig.enabledDescription")}
           </p>
         </div>
         <Switch
@@ -61,9 +61,9 @@ export function LogConfigPanel() {
 
       <div className="flex items-center justify-between">
         <div className="space-y-0.5">
-          <Label>{t("settings.advanced.logConfig.level")}</Label>
+          <Label>{t("settings.about.logConfig.level")}</Label>
           <p className="text-xs text-muted-foreground">
-            {t("settings.advanced.logConfig.levelDescription")}
+            {t("settings.about.logConfig.levelDescription")}
           </p>
         </div>
         <Select
@@ -79,7 +79,7 @@ export function LogConfigPanel() {
           <SelectContent>
             {LOG_LEVELS.map((level) => (
               <SelectItem key={level} value={level}>
-                {t(`settings.advanced.logConfig.levels.${level}`)}
+                {t(`settings.about.logConfig.levels.${level}`)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -89,28 +89,28 @@ export function LogConfigPanel() {
       {/* 日志级别说明 */}
       <div className="rounded-lg bg-muted/50 p-4 text-xs space-y-1.5">
         <p className="font-medium text-muted-foreground mb-2">
-          {t("settings.advanced.logConfig.levelHint")}
+          {t("settings.about.logConfig.levelHint")}
         </p>
         <div className="grid gap-1 text-muted-foreground">
           <p>
             <span className="font-mono text-red-500">error</span> -{" "}
-            {t("settings.advanced.logConfig.levelDesc.error")}
+            {t("settings.about.logConfig.levelDesc.error")}
           </p>
           <p>
             <span className="font-mono text-orange-500">warn</span> -{" "}
-            {t("settings.advanced.logConfig.levelDesc.warn")}
+            {t("settings.about.logConfig.levelDesc.warn")}
           </p>
           <p>
             <span className="font-mono text-blue-500">info</span> -{" "}
-            {t("settings.advanced.logConfig.levelDesc.info")}
+            {t("settings.about.logConfig.levelDesc.info")}
           </p>
           <p>
             <span className="font-mono text-green-500">debug</span> -{" "}
-            {t("settings.advanced.logConfig.levelDesc.debug")}
+            {t("settings.about.logConfig.levelDesc.debug")}
           </p>
           <p>
             <span className="font-mono text-gray-500">trace</span> -{" "}
-            {t("settings.advanced.logConfig.levelDesc.trace")}
+            {t("settings.about.logConfig.levelDesc.trace")}
           </p>
         </div>
       </div>

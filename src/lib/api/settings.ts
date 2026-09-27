@@ -55,6 +55,10 @@ export const settingsApi = {
     await invoke("check_for_updates");
   },
 
+  async getAvailableReleaseVersion(): Promise<string | null> {
+    return invoke("get_available_release_version");
+  },
+
   async openExternal(url: string): Promise<void> {
     try {
       const u = new URL(url);

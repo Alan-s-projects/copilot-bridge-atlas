@@ -8,8 +8,6 @@ mod schema;
 mod tests;
 
 // DAO 类型导出供外部使用
-pub(crate) use dao::proxy::{PRICING_SOURCE_REQUEST, PRICING_SOURCE_RESPONSE};
-
 use crate::config::get_app_config_dir;
 use crate::error::AppError;
 use rusqlite::Connection;

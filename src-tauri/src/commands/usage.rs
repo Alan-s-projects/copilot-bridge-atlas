@@ -48,26 +48,6 @@ pub fn get_usage_trends(
     )
 }
 
-/// 获取 Provider 统计
-#[tauri::command]
-pub fn get_provider_stats(
-    state: State<'_, AppState>,
-    start_date: Option<i64>,
-    end_date: Option<i64>,
-    app_type: Option<String>,
-    provider_name: Option<String>,
-    model: Option<String>,
-) -> Result<Vec<ProviderStats>, AppError> {
-    crate::copilot_bridge::require_codex(app_type.as_deref().unwrap_or("codex"))?;
-    state.db.get_provider_stats(
-        start_date,
-        end_date,
-        Some("codex"),
-        provider_name.as_deref(),
-        model.as_deref(),
-    )
-}
-
 /// 获取模型统计
 #[tauri::command]
 pub fn get_model_stats(

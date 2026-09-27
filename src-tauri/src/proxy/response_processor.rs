@@ -14,7 +14,6 @@ use super::{
     usage::parser::TokenUsage,
     ProxyError,
 };
-use crate::database::PRICING_SOURCE_REQUEST;
 use axum::http::{header::HeaderMap, HeaderName};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
@@ -560,11 +559,6 @@ fn spawn_log_usage(
 }
 
 /// 内部使用量记录函数
-///
-/// `outbound_model` 是「按请求计价」模式的锚点：实际发往上游的模型
-/// （路由接管映射后的真值，无映射时等于 request_model）。该模式的语义是
-/// 「按代理发出的请求计价、不信任上游回显」，接管场景下发出的请求模型是
-/// 映射后的 Y 而非客户端别名 X，按 X 计价会用错定价表行。
 #[allow(clippy::too_many_arguments)]
 async fn log_usage_internal(
     state: &ProxyState,
@@ -572,7 +566,7 @@ async fn log_usage_internal(
     app_type: &str,
     model: &str,
     request_model: &str,
-    outbound_model: &str,
+    _outbound_model: &str,
     usage: TokenUsage,
     latency_ms: u64,
     first_token_ms: Option<u64>,
@@ -584,12 +578,7 @@ async fn log_usage_internal(
     use super::usage::logger::UsageLogger;
 
     let logger = UsageLogger::new(&state.db);
-    let (multiplier, pricing_model_source) = logger.resolve_pricing_config(app_type).await;
-    let pricing_model = if pricing_model_source == PRICING_SOURCE_REQUEST {
-        outbound_model
-    } else {
-        model
-    };
+    let pricing_model = model;
 
     let request_id = usage.dedup_request_id(app_type, provider_id);
 
@@ -610,7 +599,7 @@ async fn log_usage_internal(
         request_model.to_string(),
         pricing_model.to_string(),
         usage,
-        multiplier,
+        rust_decimal::Decimal::ONE,
         latency_ms,
         first_token_ms,
         status_code,
@@ -1056,128 +1045,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_log_usage_ignores_legacy_provider_pricing_overrides() -> Result<(), AppError> {
+    async fn test_log_usage_uses_response_model_and_preserves_legacy_metadata() -> Result<(), AppError>
+    {
         let db = Arc::new(Database::memory()?);
         let app_type = "codex";
-        seed_pricing(&db)?;
-        let state = build_state(db.clone());
-        let cases = [
-            (
-                "provider-response",
-                "response",
-                "request",
-                "1.5",
-                "gpt-response-fixture",
-                "1.5",
-            ),
-            (
-                "provider-request",
-                "request",
-                "response",
-                "2.5",
-                "gpt-request-fixture",
-                "5",
-            ),
-        ];
-        for (provider_id, source, legacy_source, multiplier, _, _) in cases {
-            db.set_default_cost_multiplier(app_type, multiplier).await?;
-            db.set_pricing_model_source(app_type, source).await?;
-            // Seed raw historical JSON so removed typed metadata fields cannot
-            // silently discard the conflicting overrides before they reach storage.
-            insert_provider(
-                &db,
-                provider_id,
-                app_type,
-                serde_json::json!({
-                    "providerType": "github_copilot",
-                    "costMultiplier": "9",
-                    "pricingModelSource": legacy_source
-                }),
-            )?;
-            let usage = TokenUsage {
-                input_tokens: 1_000_000,
-                output_tokens: 0,
-                cache_read_tokens: 0,
-                cache_creation_tokens: 0,
-                model: None,
-                message_id: None,
-            };
-            log_usage_internal(
-                &state,
-                provider_id,
-                app_type,
-                "gpt-response-fixture",
-                "gpt-request-fixture",
-                "gpt-request-fixture",
-                usage,
-                10,
-                None,
-                false,
-                200,
-                None,
-                ReasoningEffort::default(),
-            )
-            .await;
-        }
-
-        // Inspect both rows after changing the globals: prior records must retain
-        // their original pricing model, multiplier, and recorded cost.
-        let conn = crate::database::lock_conn!(db.conn);
-        for (provider_id, _, legacy_source, multiplier, expected_model, expected_cost) in cases {
-            let (model, request_model, pricing_model, total_cost, cost_multiplier): (
-                String,
-                String,
-                String,
-                String,
-                String,
-            ) = conn
-                .query_row(
-                    "SELECT model, request_model, pricing_model, total_cost_usd, cost_multiplier
-                     FROM proxy_request_logs WHERE provider_id = ?1",
-                    [provider_id],
-                    |row| {
-                        Ok((
-                            row.get(0)?,
-                            row.get(1)?,
-                            row.get(2)?,
-                            row.get(3)?,
-                            row.get(4)?,
-                        ))
-                    },
-                )
-                .map_err(|e| AppError::Database(e.to_string()))?;
-            assert_eq!(model, "gpt-response-fixture");
-            assert_eq!(request_model, "gpt-request-fixture");
-            assert_eq!(pricing_model, expected_model);
-            assert_eq!(
-                Decimal::from_str(&cost_multiplier).unwrap(),
-                Decimal::from_str(multiplier).unwrap()
-            );
-            assert_eq!(
-                Decimal::from_str(&total_cost).unwrap(),
-                Decimal::from_str(expected_cost).unwrap()
-            );
-
-            let raw_meta: String = conn
-                .query_row(
-                    "SELECT meta FROM providers WHERE id = ?1 AND app_type = ?2",
-                    rusqlite::params![provider_id, app_type],
-                    |row| row.get(0),
-                )
-                .map_err(|e| AppError::Database(e.to_string()))?;
-            let meta: serde_json::Value = serde_json::from_str(&raw_meta).unwrap();
-            assert_eq!(meta["costMultiplier"], "9");
-            assert_eq!(meta["pricingModelSource"], legacy_source);
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_request_pricing_mode_anchors_to_outbound_model() -> Result<(), AppError> {
-        let db = Arc::new(Database::memory()?);
-        let app_type = "codex";
-
-        db.set_pricing_model_source(app_type, "request").await?;
         seed_pricing(&db)?;
         {
             let conn = crate::database::lock_conn!(db.conn);
@@ -1187,30 +1058,40 @@ mod tests {
                 [],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
+            conn.execute(
+                "UPDATE proxy_config
+                 SET default_cost_multiplier = '9', pricing_model_source = 'request'
+                 WHERE app_type = 'codex'",
+                [],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
         }
-
-        insert_provider(&db, "provider-3", app_type, serde_json::json!({}))?;
-
+        insert_provider(
+            &db,
+            "provider-current",
+            app_type,
+            serde_json::json!({
+                "providerType": "github_copilot",
+                "costMultiplier": "9",
+                "pricingModelSource": "request"
+            }),
+        )?;
         let state = build_state(db.clone());
-        let usage = TokenUsage {
-            input_tokens: 1_000_000,
-            output_tokens: 0,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
-            model: None,
-            message_id: None,
-        };
-
-        // 路由接管场景：客户端请求 gpt-request-fixture（$2/M），代理实际发出 gpt-outbound-fixture
-        // （$4/M），上游回显 gpt-response-fixture。「按请求计价」必须锚定实际发出的模型。
         log_usage_internal(
             &state,
-            "provider-3",
+            "provider-current",
             app_type,
             "gpt-response-fixture",
             "gpt-request-fixture",
             "gpt-outbound-fixture",
-            usage,
+            TokenUsage {
+                input_tokens: 1_000_000,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                model: None,
+                message_id: None,
+            },
             10,
             None,
             false,
@@ -1221,83 +1102,44 @@ mod tests {
         .await;
 
         let conn = crate::database::lock_conn!(db.conn);
-        let (model, request_model, total_cost): (String, String, String) = conn
+        let (model, request_model, pricing_model, total_cost, cost_multiplier): (
+            String,
+            String,
+            String,
+            String,
+            String,
+        ) = conn
             .query_row(
-                "SELECT model, request_model, total_cost_usd
-                 FROM proxy_request_logs WHERE provider_id = ?1",
-                ["provider-3"],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                "SELECT model, request_model, pricing_model, total_cost_usd, cost_multiplier
+                 FROM proxy_request_logs WHERE provider_id = 'provider-current'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
-
-        // model / request_model 列不受计价锚点影响
         assert_eq!(model, "gpt-response-fixture");
         assert_eq!(request_model, "gpt-request-fixture");
-        // 按 gpt-outbound-fixture（$4/M）计价，而不是 gpt-request-fixture（$2/M）或 gpt-response-fixture（$1/M）
-        assert_eq!(
-            Decimal::from_str(&total_cost).unwrap(),
-            Decimal::from_str("4").unwrap()
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_log_usage_uses_global_defaults_without_provider_metadata() -> Result<(), AppError>
-    {
-        let db = Arc::new(Database::memory()?);
-        let app_type = "codex";
-
-        db.set_default_cost_multiplier(app_type, "1.5").await?;
-        db.set_pricing_model_source(app_type, "response").await?;
-        seed_pricing(&db)?;
-
-        insert_provider(&db, "provider-2", app_type, serde_json::json!({}))?;
-
-        let state = build_state(db.clone());
-        let usage = TokenUsage {
-            input_tokens: 1_000_000,
-            output_tokens: 0,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
-            model: None,
-            message_id: None,
-        };
-
-        log_usage_internal(
-            &state,
-            "provider-2",
-            app_type,
-            "gpt-response-fixture",
-            "gpt-request-fixture",
-            "gpt-request-fixture",
-            usage,
-            10,
-            None,
-            false,
-            200,
-            None,
-            ReasoningEffort::default(),
-        )
-        .await;
-
-        let conn = crate::database::lock_conn!(db.conn);
-        let (total_cost, cost_multiplier): (String, String) = conn
+        assert_eq!(pricing_model, "gpt-response-fixture");
+        assert_eq!(Decimal::from_str(&cost_multiplier).unwrap(), Decimal::ONE);
+        assert_eq!(Decimal::from_str(&total_cost).unwrap(), Decimal::ONE);
+        let raw_meta: String = conn
             .query_row(
-                "SELECT total_cost_usd, cost_multiplier
-                 FROM proxy_request_logs WHERE provider_id = ?1",
-                ["provider-2"],
+                "SELECT meta FROM providers WHERE id = 'provider-current'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let meta: serde_json::Value = serde_json::from_str(&raw_meta).unwrap();
+        assert_eq!(meta["costMultiplier"], "9");
+        assert_eq!(meta["pricingModelSource"], "request");
+        let stored: (String, String) = conn
+            .query_row(
+                "SELECT default_cost_multiplier, pricing_model_source
+                 FROM proxy_config WHERE app_type = 'codex'",
+                [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
-
-        assert_eq!(
-            Decimal::from_str(&cost_multiplier).unwrap(),
-            Decimal::from_str("1.5").unwrap()
-        );
-        assert_eq!(
-            Decimal::from_str(&total_cost).unwrap(),
-            Decimal::from_str("1.5").unwrap()
-        );
+        assert_eq!(stored, ("9".into(), "request".into()));
         Ok(())
     }
 }

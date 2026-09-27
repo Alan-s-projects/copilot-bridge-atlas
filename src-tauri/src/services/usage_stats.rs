@@ -74,19 +74,6 @@ pub struct DailyStats {
     pub total_cache_read_tokens: u64,
 }
 
-/// Provider 统计
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProviderStats {
-    pub provider_id: String,
-    pub provider_name: String,
-    pub request_count: u64,
-    pub total_tokens: u64,
-    pub total_cost: String,
-    pub success_rate: f32,
-    pub avg_latency_ms: u64,
-}
-
 /// 模型统计
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -920,150 +907,6 @@ impl Database {
             }
 
             current_day = current_day.succ_opt().unwrap_or(current_day);
-        }
-
-        Ok(stats)
-    }
-
-    /// 获取 Provider 统计
-    pub fn get_provider_stats(
-        &self,
-        start_date: Option<i64>,
-        end_date: Option<i64>,
-        app_type: Option<&str>,
-        provider_name: Option<&str>,
-        model: Option<&str>,
-    ) -> Result<Vec<ProviderStats>, AppError> {
-        let conn = lock_conn!(self.conn);
-
-        let mut detail_conditions = vec![effective_usage_log_filter("l")];
-        let mut detail_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        if let Some(start) = start_date {
-            detail_conditions.push("l.created_at >= ?".to_string());
-            detail_params.push(Box::new(start));
-        }
-        if let Some(end) = end_date {
-            detail_conditions.push("l.created_at <= ?".to_string());
-            detail_params.push(Box::new(end));
-        }
-        if let Some(at) = app_type {
-            detail_conditions.push("l.app_type = ?".to_string());
-            detail_params.push(Box::new(at.to_string()));
-        }
-        push_provider_model_filters(
-            &mut detail_conditions,
-            &mut detail_params,
-            "l",
-            "p",
-            provider_name,
-            model,
-        );
-        let detail_where = if detail_conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", detail_conditions.join(" AND "))
-        };
-
-        let mut rollup_conditions = vec![effective_usage_rollup_filter("r")];
-        let mut rollup_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        let rollup_bounds = compute_rollup_date_bounds(start_date, end_date)?;
-        push_rollup_date_filters(
-            &mut rollup_conditions,
-            &mut rollup_params,
-            "r.date",
-            &rollup_bounds,
-        );
-        if let Some(at) = app_type {
-            rollup_conditions.push("r.app_type = ?".to_string());
-            rollup_params.push(Box::new(at.to_string()));
-        }
-        push_provider_model_filters(
-            &mut rollup_conditions,
-            &mut rollup_params,
-            "r",
-            "p2",
-            provider_name,
-            model,
-        );
-        let rollup_where = if rollup_conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", rollup_conditions.join(" AND "))
-        };
-
-        // UNION detail logs + rollup data, then aggregate
-        let detail_pname = provider_name_coalesce("l", "p");
-        let rollup_pname = provider_name_coalesce("r", "p2");
-        let fresh_input_detail = fresh_input_sql("l");
-        let fresh_input_rollup = fresh_input_sql("r");
-        let sql = format!(
-            "SELECT
-                provider_id, app_type, provider_name,
-                SUM(request_count) as request_count,
-                SUM(total_tokens) as total_tokens,
-                SUM(total_cost) as total_cost,
-                SUM(success_count) as success_count,
-                CASE WHEN SUM(request_count) > 0
-                    THEN SUM(latency_sum) / SUM(request_count)
-                    ELSE 0 END as avg_latency
-            FROM (
-                SELECT l.provider_id, l.app_type,
-                    {detail_pname} as provider_name,
-                    COUNT(*) as request_count,
-                    COALESCE(SUM({fresh_input_detail} + l.output_tokens), 0) as total_tokens,
-                    COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as total_cost,
-                    COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0) as success_count,
-                    COALESCE(SUM(l.latency_ms), 0) as latency_sum
-                FROM proxy_request_logs l
-                LEFT JOIN providers p ON l.provider_id = p.id AND l.app_type = p.app_type
-                {detail_where}
-                GROUP BY l.provider_id, l.app_type
-                UNION ALL
-                SELECT r.provider_id, r.app_type,
-                    {rollup_pname} as provider_name,
-                    COALESCE(SUM(r.request_count), 0),
-                    COALESCE(SUM({fresh_input_rollup} + r.output_tokens), 0),
-                    COALESCE(SUM(CAST(r.total_cost_usd AS REAL)), 0),
-                    COALESCE(SUM(r.success_count), 0),
-                    COALESCE(SUM(r.avg_latency_ms * r.request_count), 0)
-                FROM usage_daily_rollups r
-                LEFT JOIN providers p2 ON r.provider_id = p2.id AND r.app_type = p2.app_type
-                {rollup_where}
-                GROUP BY r.provider_id, r.app_type
-            )
-            GROUP BY provider_id, app_type
-            ORDER BY total_cost DESC"
-        );
-
-        let mut stmt = conn.prepare(&sql)?;
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> = detail_params;
-        params.extend(rollup_params);
-        let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-        let row_mapper = |row: &rusqlite::Row| {
-            let request_count: i64 = row.get(3)?;
-            let success_count: i64 = row.get(6)?;
-            let success_rate = if request_count > 0 {
-                (success_count as f32 / request_count as f32) * 100.0
-            } else {
-                0.0
-            };
-
-            Ok(ProviderStats {
-                provider_id: row.get(0)?,
-                provider_name: row.get(2)?,
-                request_count: request_count as u64,
-                total_tokens: row.get::<_, i64>(4)? as u64,
-                total_cost: format!("{:.6}", row.get::<_, f64>(5)?),
-                success_rate,
-                avg_latency_ms: row.get::<_, f64>(7)? as u64,
-            })
-        };
-
-        let rows = stmt.query_map(param_refs.as_slice(), row_mapper)?;
-
-        let mut stats = Vec::new();
-        for row in rows {
-            stats.push(row?);
         }
 
         Ok(stats)
@@ -2116,9 +1959,6 @@ mod tests {
             grand_tokens
         );
         assert_aggregate(&summary.total_cost, grand_total);
-        let providers = db.get_provider_stats(None, None, Some("codex"), None, None)?;
-        assert_eq!(providers.len(), 1);
-        assert_aggregate(&providers[0].total_cost, grand_total);
         let trends = db.get_daily_trends(None, None, Some("codex"), None, None)?;
         let trend_total: Decimal = trends
             .iter()
@@ -2199,9 +2039,6 @@ mod tests {
         let models = db.get_model_stats(None, None, Some("codex"), None, None)?;
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].model, "gpt-6-astra");
-        let providers = db.get_provider_stats(None, None, Some("codex"), None, None)?;
-        assert_eq!(providers.len(), 1);
-        assert_eq!(providers[0].request_count, 1);
         let logs = db.get_request_logs(
             &LogFilters {
                 app_type: Some("codex".into()),
@@ -3209,12 +3046,6 @@ mod tests {
         let session = db.get_usage_summary(None, None, None, Some("_codex_session"), None)?;
         assert_eq!(session.total_requests, 0);
 
-        // ⑤ Provider 统计 + 模型过滤：只剩 Previous Copilot 一行。
-        let provider_stats = db.get_provider_stats(None, None, None, None, Some("gpt-6-luna"))?;
-        assert_eq!(provider_stats.len(), 1);
-        assert_eq!(provider_stats[0].provider_name, "Previous Copilot");
-        assert_eq!(provider_stats[0].request_count, 8);
-
         // ⑥ 模型统计 + Provider 过滤：只剩 Current Copilot 名下的模型。
         let model_stats = db.get_model_stats(None, None, None, Some("Current Copilot"), None)?;
         let models: Vec<&str> = model_stats.iter().map(|m| m.model.as_str()).collect();
@@ -3696,143 +3527,6 @@ mod tests {
         assert!(db
             .get_unpriced_model_usage(Some(end + 10), Some(end + 100), Some("codex"), None, None)?
             .is_empty());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_provider_stats_with_time_filter() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            conn.execute(
-                "INSERT INTO proxy_request_logs (
-                    request_id, provider_id, app_type, model,
-                    input_tokens, output_tokens, total_cost_usd,
-                    latency_ms, status_code, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    "old",
-                    "p1",
-                    "codex",
-                    "gpt-6-astra",
-                    100,
-                    50,
-                    "0.01",
-                    100,
-                    200,
-                    1000
-                ],
-            )?;
-            conn.execute(
-                "INSERT INTO proxy_request_logs (
-                    request_id, provider_id, app_type, model,
-                    input_tokens, output_tokens, total_cost_usd,
-                    latency_ms, status_code, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    "new",
-                    "p1",
-                    "codex",
-                    "gpt-6-astra",
-                    200,
-                    75,
-                    "0.02",
-                    120,
-                    200,
-                    2000
-                ],
-            )?;
-        }
-
-        let stats = db.get_provider_stats(Some(1500), Some(2500), Some("codex"), None, None)?;
-        assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].provider_id, "p1");
-        assert_eq!(stats[0].request_count, 1);
-        assert_eq!(stats[0].total_tokens, 275);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_provider_stats_excludes_partial_rollup_boundary_days() -> Result<(), AppError> {
-        let db = Database::memory()?;
-        let start = local_ts(2024, 2, 1, 12, 0, 0);
-        let end = local_ts(2024, 2, 3, 12, 0, 0);
-
-        {
-            let conn = lock_conn!(db.conn);
-            conn.execute(
-                "INSERT INTO usage_daily_rollups (
-                    date, app_type, provider_id, model,
-                    request_count, success_count, input_tokens, output_tokens,
-                    cache_read_tokens, cache_creation_tokens, total_cost_usd, avg_latency_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    "2024-02-01",
-                    "codex",
-                    "p-rollup",
-                    "gpt-6-astra",
-                    5,
-                    5,
-                    500,
-                    250,
-                    0,
-                    0,
-                    "0.50",
-                    100
-                ],
-            )?;
-            conn.execute(
-                "INSERT INTO usage_daily_rollups (
-                    date, app_type, provider_id, model,
-                    request_count, success_count, input_tokens, output_tokens,
-                    cache_read_tokens, cache_creation_tokens, total_cost_usd, avg_latency_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    "2024-02-02",
-                    "codex",
-                    "p-rollup",
-                    "gpt-6-astra",
-                    8,
-                    7,
-                    800,
-                    400,
-                    0,
-                    0,
-                    "0.80",
-                    120
-                ],
-            )?;
-            conn.execute(
-                "INSERT INTO usage_daily_rollups (
-                    date, app_type, provider_id, model,
-                    request_count, success_count, input_tokens, output_tokens,
-                    cache_read_tokens, cache_creation_tokens, total_cost_usd, avg_latency_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    "2024-02-03",
-                    "codex",
-                    "p-rollup",
-                    "gpt-6-astra",
-                    12,
-                    11,
-                    1200,
-                    600,
-                    0,
-                    0,
-                    "1.20",
-                    140
-                ],
-            )?;
-        }
-
-        let stats = db.get_provider_stats(Some(start), Some(end), Some("codex"), None, None)?;
-        assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].provider_id, "p-rollup");
-        assert_eq!(stats[0].request_count, 8);
-        assert_eq!(stats[0].total_tokens, 1200);
 
         Ok(())
     }

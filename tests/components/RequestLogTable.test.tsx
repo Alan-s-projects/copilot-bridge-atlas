@@ -47,7 +47,7 @@ vi.mock("@/components/ui/select", () => ({
 }));
 
 vi.mock("@/components/ui/table", () => ({
-  Table: ({ children }: any) => <table>{children}</table>,
+  Table: ({ children, ...props }: any) => <table {...props}>{children}</table>,
   TableBody: ({ children }: any) => <tbody>{children}</tbody>,
   TableCell: ({ children, ...props }: any) => <td {...props}>{children}</td>,
   TableHead: ({ children, ...props }: any) => <th {...props}>{children}</th>,
@@ -69,6 +69,21 @@ describe("RequestLogTable", () => {
         isLoading: false,
       }),
     );
+  });
+
+  it("keeps empty-state colspan aligned with selected columns", () => {
+    render(
+      <RequestLogTable
+        range={{ preset: "today" }}
+        rangeLabel="Today"
+        refreshIntervalMs={0}
+        columns={["time", "cost"]}
+      />,
+    );
+    expect(
+      screen.getAllByRole("columnheader").map((header) => header.textContent),
+    ).toEqual(["usage.time", "usage.cost"]);
+    expect(screen.getByRole("cell")).toHaveAttribute("colspan", "2");
   });
 
   it.each([false, true])(
@@ -114,6 +129,7 @@ describe("RequestLogTable", () => {
         />,
       );
       const headings = screen.getAllByRole("columnheader");
+      expect(screen.getByRole("table")).not.toHaveClass("[&_td]:py-1.5");
       expect(headings).toHaveLength(10);
       expect(headings[1]).toHaveTextContent("usage.billingModel");
       expect(headings[2]).toHaveTextContent("Reasoning(requested/applied)");

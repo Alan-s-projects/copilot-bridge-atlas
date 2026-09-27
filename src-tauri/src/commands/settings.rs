@@ -8,6 +8,28 @@ fn merge_settings_for_save(
 }
 
 #[tauri::command]
+pub async fn get_usage_table_columns(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::settings::UsageTableColumns, String> {
+    state
+        .db
+        .get_usage_table_columns()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_usage_table_columns(
+    state: tauri::State<'_, crate::AppState>,
+    table: String,
+    columns: Vec<String>,
+) -> Result<crate::settings::UsageTableColumns, String> {
+    state
+        .db
+        .set_usage_table_columns(&table, columns)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn get_settings() -> Result<crate::settings::AppSettings, String> {
     Ok(crate::settings::get_settings_for_frontend())
 }

@@ -1,4 +1,7 @@
+import type { PendingRequestLog } from "./usage";
+
 export interface ProxyStatus {
+  active_requests?: Omit<PendingRequestLog, "pending">[];
   running: boolean;
   address: string;
   port: number;
@@ -31,5 +34,4 @@ export interface GlobalProxyConfig {
   proxyEnabled: boolean;
   listenAddress: string;
   listenPort: number;
-  enableLogging: boolean;
 }

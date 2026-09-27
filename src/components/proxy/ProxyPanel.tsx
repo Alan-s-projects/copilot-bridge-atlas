@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import {
   useGlobalProxyConfig,
   useUpdateGlobalProxyConfig,
@@ -129,20 +128,6 @@ export function ProxyPanel() {
     setSaveStatus("idle");
   };
 
-  const updateLogging = async (enabled: boolean) => {
-    setSaveStatus("saving");
-    try {
-      await persistConfig({ enableLogging: enabled });
-      if (!dirty) setSaveStatus("saved");
-    } catch (error) {
-      console.error(
-        "[ProxyPanel] Failed to save request logging setting",
-        error,
-      );
-      setSaveStatus("error");
-    }
-  };
-
   return (
     <section className="space-y-5 rounded-xl border bg-card p-6">
       <div className="flex items-center justify-between">
@@ -216,31 +201,6 @@ export function ProxyPanel() {
           Copy
         </Button>
       </div>
-      <div className="flex items-center justify-between">
-        <Label htmlFor="proxy-log">
-          Record requests for the usage dashboard
-        </Label>
-        <Switch
-          id="proxy-log"
-          checked={config?.enableLogging ?? true}
-          disabled={!config || isPending}
-          onCheckedChange={updateLogging}
-        />
-      </div>
-      <dl className="grid grid-cols-3 gap-3 border-t pt-4 text-sm">
-        <div>
-          <dt className="text-muted-foreground">Requests</dt>
-          <dd>{status?.total_requests ?? 0}</dd>
-        </div>
-        <div>
-          <dt className="text-muted-foreground">Active connections</dt>
-          <dd>{status?.active_connections ?? 0}</dd>
-        </div>
-        <div>
-          <dt className="text-muted-foreground">Success rate</dt>
-          <dd>{(status?.success_rate ?? 0).toFixed(1)}%</dd>
-        </div>
-      </dl>
     </section>
   );
 }

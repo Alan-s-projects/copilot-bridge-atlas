@@ -1945,6 +1945,183 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bundled_pricing_reconciles_request_model_summary_and_trend_costs() -> Result<(), AppError> {
+        use crate::proxy::{
+            types::ReasoningEffort,
+            usage::{logger::UsageLogger, parser::TokenUsage},
+        };
+        use rust_decimal::Decimal;
+
+        let db = Database::memory()?;
+        let logger = UsageLogger::new(&db);
+        let tiers = Database::bundled_long_context_prices()?;
+        let mut requests = HashMap::new();
+        let mut models = HashMap::new();
+        let mut grand_total = Decimal::ZERO;
+        let mut grand_tokens = [0_u64; 4];
+        let million = Decimal::from(1_000_000);
+        // Aggregate API strings intentionally round to six decimal places.
+        let assert_aggregate = |actual: &str, expected: Decimal| {
+            let actual = Decimal::from_str(actual).unwrap();
+            assert!(
+                (actual - expected).abs() <= Decimal::new(5, 7),
+                "aggregate {actual} differs from expected {expected}"
+            );
+        };
+        for [model, _, input, output, read, write] in Database::bundled_model_prices()? {
+            let tier = tiers.get(&model);
+            let threshold = tier
+                .map(|tier| tier.threshold_input_tokens)
+                .unwrap_or(272000) as u32;
+            let mut model_total = Decimal::ZERO;
+            let mut model_tokens = [0_u64; 4];
+            let cases = [
+                ("below", 100, threshold - 201, 100, 1_000_000, "1"),
+                ("boundary", 100, threshold - 200, 100, 1_000_000, "1"),
+                ("read-crosses", 100, threshold - 199, 100, 20, "1.5"),
+                ("write-crosses", 100, 0, threshold - 99, 20, "1"),
+                ("zero-multiplier", threshold + 1, 0, 0, 20, "0"),
+                ("output-only", 0, 0, 0, 1_000_000, "1"),
+            ];
+            for (case, fresh, cached, written, output_tokens, multiplier) in cases {
+                let total_input = fresh + cached + written;
+                let long = tier.filter(|tier| u64::from(total_input) > tier.threshold_input_tokens);
+                let (expected_tier, rates) = if let Some(tier) = long {
+                    (
+                        "long_context",
+                        [
+                            &tier.input_cost_per_million,
+                            &tier.output_cost_per_million,
+                            &tier.cache_read_cost_per_million,
+                            &tier.cache_creation_cost_per_million,
+                        ],
+                    )
+                } else {
+                    ("default", [&input, &output, &read, &write])
+                };
+                // Independent arithmetic from the published rate fixture, not the production calculator.
+                let tokens = [fresh, output_tokens, cached, written];
+                let components = std::array::from_fn::<_, 4, _>(|index| {
+                    Decimal::from(tokens[index]) * Decimal::from_str(rates[index]).unwrap()
+                        / million
+                });
+                let total = components.iter().copied().sum::<Decimal>()
+                    * Decimal::from_str(multiplier).unwrap();
+                let id = format!("{model}:{case}");
+                logger.log_with_calculation(
+                    id.clone(),
+                    "copilot".into(),
+                    "codex".into(),
+                    format!("{model}-upstream"),
+                    format!("{model}@low"),
+                    model.clone(),
+                    TokenUsage {
+                        input_tokens: total_input,
+                        output_tokens,
+                        cache_read_tokens: cached,
+                        cache_creation_tokens: written,
+                        model: None,
+                        message_id: None,
+                    },
+                    Decimal::from_str(multiplier).unwrap(),
+                    100,
+                    None,
+                    200,
+                    None,
+                    None,
+                    false,
+                    ReasoningEffort::default(),
+                )?;
+                requests.insert(id, (expected_tier, components, total));
+                model_total += total;
+                for (index, count) in tokens.into_iter().enumerate() {
+                    model_tokens[index] += u64::from(count);
+                    grand_tokens[index] += u64::from(count);
+                }
+            }
+            grand_total += model_total;
+            models.insert(model, (model_total, model_tokens, cases.len() as u64));
+        }
+        assert!(!models.is_empty());
+        let logs = db.get_request_logs(&LogFilters::default(), 0, requests.len() as u32)?;
+        assert_eq!(logs.total as usize, requests.len());
+        for log in logs.data {
+            let (tier, components, total) = &requests[&log.request_id];
+            assert_eq!(
+                log.pricing_tier.as_deref(),
+                Some(*tier),
+                "{}",
+                log.request_id
+            );
+            assert_eq!(
+                Decimal::from_str(&log.total_cost_usd).unwrap(),
+                *total,
+                "{}",
+                log.request_id
+            );
+            for (actual, expected) in [
+                &log.input_cost_usd,
+                &log.output_cost_usd,
+                &log.cache_read_cost_usd,
+                &log.cache_creation_cost_usd,
+            ]
+            .into_iter()
+            .zip(components)
+            {
+                assert_eq!(
+                    Decimal::from_str(actual).unwrap(),
+                    *expected,
+                    "{}",
+                    log.request_id
+                );
+            }
+        }
+        let stats = db.get_model_stats(None, None, Some("codex"), None, None)?;
+        assert_eq!(stats.len(), models.len());
+        for stat in stats {
+            let (total, tokens, count) = models[&stat.model];
+            assert_eq!(stat.request_count, count);
+            assert_eq!(
+                [
+                    stat.total_input_tokens,
+                    stat.total_output_tokens,
+                    stat.total_cache_read_tokens,
+                    stat.total_cache_creation_tokens
+                ],
+                tokens
+            );
+            assert_aggregate(&stat.total_cost, total);
+            assert_aggregate(&stat.avg_cost_per_request, total / Decimal::from(count));
+            let filtered =
+                db.get_usage_summary(None, None, Some("codex"), None, Some(&stat.model))?;
+            assert_eq!(filtered.total_requests, count);
+            assert_aggregate(&filtered.total_cost, total);
+        }
+        let summary = db.get_usage_summary(None, None, Some("codex"), None, None)?;
+        assert_eq!(summary.total_requests as usize, requests.len());
+        assert_eq!(
+            [
+                summary.total_input_tokens,
+                summary.total_output_tokens,
+                summary.total_cache_read_tokens,
+                summary.total_cache_creation_tokens
+            ],
+            grand_tokens
+        );
+        assert_aggregate(&summary.total_cost, grand_total);
+        let providers = db.get_provider_stats(None, None, Some("codex"), None, None)?;
+        assert_eq!(providers.len(), 1);
+        assert_aggregate(&providers[0].total_cost, grand_total);
+        let trends = db.get_daily_trends(None, None, Some("codex"), None, None)?;
+        let trend_total: Decimal = trends
+            .iter()
+            .map(|day| Decimal::from_str(&day.total_cost).unwrap())
+            .sum();
+        assert_aggregate(&trend_total.to_string(), grand_total);
+        Ok(())
+    }
+
+    #[test]
     fn long_context_rates_are_strictly_above_the_documented_input_threshold() -> Result<(), AppError>
     {
         let db = Database::memory()?;

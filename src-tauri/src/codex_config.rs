@@ -8,7 +8,6 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const CODEX_MODEL_CATALOG_TEMPLATE_SLUG: &str = "gpt-5.5";
 #[cfg(not(test))]
 static CODEX_MODEL_CATALOG_TEMPLATE_CACHE: OnceCell<Value> = OnceCell::new();
 
@@ -47,14 +46,13 @@ fn codex_catalog_input_modalities(
     declared_modalities: Option<&[String]>,
 ) -> Vec<String> {
     let modalities = match image_input_capability_from_modalities(model, declared_modalities) {
-        ImageInputCapability::Unsupported => &["text"][..],
-        ImageInputCapability::Supported | ImageInputCapability::Unknown => &["text", "image"][..],
+        ImageInputCapability::Supported => &["text", "image"][..],
+        ImageInputCapability::Unsupported | ImageInputCapability::Unknown => &["text"][..],
     };
     modalities.iter().map(|item| (*item).to_string()).collect()
 }
 
-/// Canonical reasoning effort levels Codex understands, with the same
-/// descriptions the official gpt-5.5 template uses. `none` disables thinking.
+/// Canonical reasoning effort levels Codex understands. `none` disables thinking.
 const CODEX_REASONING_LEVEL_DESCRIPTIONS: &[(&str, &str)] = &[
     ("none", "Disable Thinking"),
     ("minimal", "Minimal reasoning"),
@@ -169,15 +167,12 @@ fn codex_catalog_model_entry(
     entry_obj.insert("availability_nux".to_string(), Value::Null);
     entry_obj.insert("upgrade".to_string(), Value::Null);
 
-    // Image support is a model capability, not a tool-profile capability.
-    // Trust hidden preset metadata first, then the confirmed text-only registry;
-    // every unknown model fails open so GPT/relay aliases are never declared
-    // text-only merely because a template had a conservative default.
+    // Publish only declared image support; the compatibility template is model-neutral.
     entry_obj.insert(
         "input_modalities".to_string(),
         json!(codex_catalog_input_modalities(
             &spec.model,
-            spec.input_modalities.as_deref(),
+            spec.input_modalities.as_deref()
         )),
     );
 
@@ -186,9 +181,7 @@ fn codex_catalog_model_entry(
         json!(spec.supports_parallel_tool_calls.unwrap_or(false)),
     );
 
-    // Per-model reasoning levels override the template's conservative
-    // none/high default (e.g. a LiteLLM gateway serving a model that accepts
-    // low/medium/high/xhigh/max). Applies to every profile.
+    // Reasoning efforts come from the model, not the compatibility template.
     let template_default = template
         .get("default_reasoning_level")
         .and_then(|value| value.as_str());
@@ -206,15 +199,13 @@ struct CodexCatalogModelSpec {
     context_window: Option<u64>,
     /// Total context limit from Copilot capability limits.
     max_context_window: Option<u64>,
-    /// Per-row override for the native template's `supports_parallel_tool_calls`
-    /// (e.g. live Copilot declaration).
+    /// Live Copilot parallel-tool declaration.
     supports_parallel_tool_calls: Option<bool>,
     /// Live Copilot image-input declaration.
     input_modalities: Option<Vec<String>>,
     /// Per-row override for the generated catalog's `supported_reasoning_levels`
-    /// (e.g. ["none", "low", "medium", "high", "xhigh", "max"]). When omitted
-    /// the template's conservative default (none/high) is kept. Consulted for
-    /// each model entry.
+    /// (e.g. ["none", "low", "medium", "high", "xhigh", "max"]). Missing
+    /// declarations expose only `none`, never another model's efforts.
     reasoning_levels: Option<Vec<String>>,
     /// Per-row override for the generated catalog's `default_reasoning_level`.
     /// Only meaningful together with `reasoning_levels`; when absent the
@@ -356,89 +347,29 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
     specs
 }
 
-fn find_codex_model_template(catalog: &Value) -> Option<Value> {
-    catalog
-        .get("models")
-        .and_then(|models| models.as_array())
-        .and_then(|models| {
-            models.iter().find(|model| {
-                model.get("slug").and_then(|slug| slug.as_str())
-                    == Some(CODEX_MODEL_CATALOG_TEMPLATE_SLUG)
-            })
-        })
-        .cloned()
-}
-
-fn load_codex_model_template_from_cache() -> Result<Option<Value>, AppError> {
-    let path = get_codex_config_dir().join("models_cache.json");
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let text = fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?;
-    let catalog: Value = serde_json::from_str(&text).map_err(|e| AppError::json(&path, e))?;
-    Ok(find_codex_model_template(&catalog))
-}
-
-fn load_codex_model_template_static() -> Option<Value> {
-    let text = include_str!("resources/gpt5_5_template.json");
-    match serde_json::from_str(text) {
-        Ok(template) => Some(template),
-        Err(e) => {
-            log::warn!("Failed to parse bundled gpt-5.5 template: {e}");
-            None
-        }
-    }
-}
-
-const CODEX_CATALOG_PARSER_REQUIRED_FIELDS: &[&str] = &[
-    "supports_reasoning_summaries",
-    // codex 0.148.0 rejects the catalog without it (#6661); a models_cache.json
-    // written by an older build can lack it.
-    "supports_parallel_tool_calls",
-];
-
-/// `models_cache.json` is shared by every Codex install on the machine (npm
-/// CLI, desktop-bundled binary, ...), and each version serializes its own
-/// `ModelInfo` shape — the cache's field set follows whichever process wrote
-/// it last, so it cannot be assumed to satisfy the current external-catalog
-/// schema (observed live: 0.144.5 requires `supports_reasoning_summaries`
-/// while a coexisting build kept rewriting the cache without it). Backfill
-/// ONLY parser-required fields from the bundled static template: optional
-/// capability fields keep their missing-means-default semantics, and existing
-/// values always win.
-fn fill_template_fields_from_static(template: &mut Value) {
-    let Some(static_template) = load_codex_model_template_static() else {
-        return;
-    };
-    let (Some(template_obj), Some(static_obj)) =
-        (template.as_object_mut(), static_template.as_object())
-    else {
-        return;
-    };
-    for key in CODEX_CATALOG_PARSER_REQUIRED_FIELDS {
-        if !template_obj.contains_key(*key) {
-            if let Some(value) = static_obj.get(*key) {
-                template_obj.insert((*key).to_string(), value.clone());
-            }
-        }
-    }
-}
-
 fn load_codex_model_catalog_template_uncached() -> Result<Value, AppError> {
-    // ① models_cache.json (created by Codex when it connects to OpenAI)
-    if let Some(mut template) = load_codex_model_template_from_cache()? {
-        fill_template_fields_from_static(&mut template);
-        return Ok(template);
-    }
-    // ③ Static fallback bundled at compile time
-    if let Some(template) = load_codex_model_template_static() {
-        return Ok(template);
-    }
-
-    Err(AppError::Message(format!(
-        "Codex model catalog template `{CODEX_MODEL_CATALOG_TEMPLATE_SLUG}` not found. Please start Codex once so models_cache.json is available, or restore the bundled model template."
-    )))
+    let mut template: Value =
+        serde_json::from_str(include_str!("resources/codex-model-template.json"))
+            .map_err(|error| AppError::Config(format!("Invalid Atlas Codex template: {error}")))?;
+    let object = template
+        .as_object_mut()
+        .ok_or_else(|| AppError::Config("Atlas Codex template must be an object".into()))?;
+    let instructions = include_str!("resources/codex-agent-instructions.md").trim();
+    // Older clients use base_instructions; newer clients render model_messages.
+    // Neither path depends on a model cache or contains a second prompt source.
+    object.insert("base_instructions".into(), json!(instructions));
+    object.insert(
+        "model_messages".into(),
+        json!({
+            "instructions_template": instructions,
+            "instructions_variables": {
+                "personality_default": "",
+                "personality_friendly": "",
+                "personality_pragmatic": ""
+            }
+        }),
+    );
+    Ok(template)
 }
 
 fn get_or_load_codex_model_catalog_template<F>(
@@ -521,7 +452,7 @@ mod tests {
         }]}});
         let specs = codex_catalog_model_specs(&settings);
         let entry = codex_catalog_model_entry(
-            &load_codex_model_template_static().unwrap(),
+            &load_codex_model_catalog_template().unwrap(),
             &specs[0],
             0,
             128000,
@@ -724,7 +655,7 @@ mod tests {
             )))
             .is_err()
         );
-        let template = json!({"slug": "gpt-5.5"});
+        let template = json!({"shell_type": "shell_command"});
         assert_eq!(
             get_or_load_codex_model_catalog_template(&cache, || Ok(template.clone())).unwrap(),
             template
@@ -739,12 +670,54 @@ mod tests {
     }
 
     #[test]
-    fn stale_template_gets_required_fields_without_replacing_live_values() {
-        let mut template = json!({"supports_parallel_tool_calls": false, "context_window": 872000});
-        fill_template_fields_from_static(&mut template);
-        assert_eq!(template["supports_parallel_tool_calls"], false);
-        assert_eq!(template["context_window"], 872000);
-        assert!(template["supports_reasoning_summaries"].is_boolean());
+    fn template_instructions_have_one_model_neutral_source() {
+        let template = load_codex_model_catalog_template_uncached().unwrap();
+        let instructions = include_str!("resources/codex-agent-instructions.md").trim();
+        assert!((400..=700).contains(&instructions.split_whitespace().count()));
+        assert_eq!(template["base_instructions"], instructions);
+        assert_eq!(
+            template["model_messages"]["instructions_template"],
+            instructions
+        );
+        assert!(!instructions.contains("{{"));
+        assert!(!instructions.contains("GPT-"));
+        assert!(instructions.contains("until the user requests it"));
+        assert!(template.get("slug").is_none());
+        for flag in [
+            "supports_reasoning_summaries",
+            "support_verbosity",
+            "supports_image_detail_original",
+            "supports_search_tool",
+        ] {
+            assert_eq!(template[flag], false, "{flag}");
+        }
+    }
+
+    #[test]
+    fn undeclared_capabilities_are_not_borrowed_from_another_model() {
+        let settings = json!({"modelCatalog": {"models": [{"model": "future-model"}]}});
+        let catalog = codex_model_catalog_from_settings(&settings, "")
+            .unwrap()
+            .unwrap();
+        let entry = &catalog["models"][0];
+        assert_eq!(entry["input_modalities"], json!(["text"]));
+        assert_eq!(entry["supports_parallel_tool_calls"], false);
+        assert_eq!(entry["default_reasoning_level"], "none");
+        assert_eq!(entry["apply_patch_tool_type"], "freeform");
+        assert_eq!(entry["shell_type"], "shell_command");
+    }
+
+    #[test]
+    #[ignore = "exports a catalog for opt-in installed-Codex contract checks"]
+    fn export_catalog_compatibility_fixture() {
+        let settings_path = std::env::var("ATLAS_CODEX_CATALOG_SETTINGS").unwrap();
+        let output = std::env::var("ATLAS_CODEX_CATALOG_OUT").unwrap();
+        let settings: Value =
+            serde_json::from_str(&fs::read_to_string(settings_path).unwrap()).unwrap();
+        let catalog = codex_model_catalog_from_settings(&settings, "")
+            .unwrap()
+            .unwrap();
+        fs::write(output, serde_json::to_string_pretty(&catalog).unwrap()).unwrap();
     }
 
     #[test]

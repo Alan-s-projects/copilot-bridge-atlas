@@ -211,6 +211,7 @@ impl ProxyServer {
 
     pub async fn get_status(&self) -> ProxyStatus {
         let mut status = self.state.status.read().await.clone();
+        status.active_requests.truncate(5);
 
         // 计算运行时间
         if let Some(start) = *self.state.start_time.read().await {

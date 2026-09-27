@@ -1,4 +1,4 @@
-import { Loader2, Radio } from "lucide-react";
+import { Loader2, Server } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { useProxyStatus } from "@/hooks/useProxyStatus";
 
@@ -21,7 +21,7 @@ export function ProxyToggle() {
           className="h-4 w-4 animate-spin text-muted-foreground"
         />
       ) : (
-        <Radio
+        <Server
           aria-hidden
           className={`h-4 w-4 ${isRunning ? "text-emerald-500" : "text-muted-foreground"}`}
         />

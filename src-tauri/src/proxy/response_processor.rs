@@ -202,76 +202,72 @@ pub async fn handle_non_streaming(
         body_bytes.len()
     );
 
-    // 解析并记录使用量。关闭 usage logging 时直接跳过，避免非流式响应整包 JSON parse。
-    if usage_logging_enabled(state) {
-        if let Ok(json_value) = serde_json::from_slice::<Value>(&body_bytes) {
-            // 解析使用量
-            if let Some(usage) = (parser_config.response_parser)(&json_value) {
-                // 归因优先级：usage 解析出的模型 → 响应 model 字段 → 映射后的出站
-                // 模型（路由接管真值）→ 客户端请求模型。空字符串视为缺失。
-                let model = usage
-                    .model
-                    .clone()
-                    .filter(|m| !m.is_empty())
-                    .or_else(|| {
-                        json_value
-                            .get("model")
-                            .and_then(|m| m.as_str())
-                            .filter(|m| !m.is_empty())
-                            .map(str::to_string)
-                    })
-                    .or_else(|| ctx.outbound_model.clone())
-                    .unwrap_or_else(|| ctx.request_model.clone());
+    // Usage recording is always on for the dashboard.
+    if let Ok(json_value) = serde_json::from_slice::<Value>(&body_bytes) {
+        // 解析使用量
+        if let Some(usage) = (parser_config.response_parser)(&json_value) {
+            // 归因优先级：usage 解析出的模型 → 响应 model 字段 → 映射后的出站
+            // 模型（路由接管真值）→ 客户端请求模型。空字符串视为缺失。
+            let model = usage
+                .model
+                .clone()
+                .filter(|m| !m.is_empty())
+                .or_else(|| {
+                    json_value
+                        .get("model")
+                        .and_then(|m| m.as_str())
+                        .filter(|m| !m.is_empty())
+                        .map(str::to_string)
+                })
+                .or_else(|| ctx.outbound_model.clone())
+                .unwrap_or_else(|| ctx.request_model.clone());
 
-                spawn_log_usage(
-                    state,
-                    ctx,
-                    usage,
-                    &model,
-                    &ctx.request_model,
-                    status.as_u16(),
-                    false,
-                );
-            } else {
-                let model = json_value
-                    .get("model")
-                    .and_then(|m| m.as_str())
-                    .filter(|m| !m.is_empty())
-                    .map(str::to_string)
-                    .or_else(|| ctx.outbound_model.clone())
-                    .unwrap_or_else(|| ctx.request_model.clone());
-                spawn_log_usage(
-                    state,
-                    ctx,
-                    TokenUsage::default(),
-                    &model,
-                    &ctx.request_model,
-                    status.as_u16(),
-                    false,
-                );
-                log::debug!(
-                    "[{}] 未能解析 usage 信息，跳过记录",
-                    parser_config.app_type_str
-                );
-            }
-        } else {
-            log::debug!(
-                "[{}] <<< 响应 (非 JSON): {} bytes",
-                ctx.tag,
-                body_bytes.len()
-            );
             spawn_log_usage(
                 state,
                 ctx,
-                TokenUsage::default(),
-                ctx.outbound_model.as_deref().unwrap_or(&ctx.request_model),
+                usage,
+                &model,
                 &ctx.request_model,
                 status.as_u16(),
                 false,
             );
+        } else {
+            let model = json_value
+                .get("model")
+                .and_then(|m| m.as_str())
+                .filter(|m| !m.is_empty())
+                .map(str::to_string)
+                .or_else(|| ctx.outbound_model.clone())
+                .unwrap_or_else(|| ctx.request_model.clone());
+            spawn_log_usage(
+                state,
+                ctx,
+                TokenUsage::default(),
+                &model,
+                &ctx.request_model,
+                status.as_u16(),
+                false,
+            );
+            log::debug!(
+                "[{}] 未能解析 usage 信息，跳过记录",
+                parser_config.app_type_str
+            );
         }
     } else {
-        log::debug!("[{}] usage logging 已关闭，跳过非流式 usage 解析", ctx.tag);
+        log::debug!(
+            "[{}] <<< 响应 (非 JSON): {} bytes",
+            ctx.tag,
+            body_bytes.len()
+        );
+        spawn_log_usage(
+            state,
+            ctx,
+            TokenUsage::default(),
+            ctx.outbound_model.as_deref().unwrap_or(&ctx.request_model),
+            &ctx.request_model,
+            status.as_u16(),
+            false,
+        );
     }
 
     // 构建响应
@@ -434,15 +430,6 @@ pub(crate) fn create_usage_collector(
     status_code: u16,
     parser_config: &UsageParserConfig,
 ) -> Option<SseUsageCollector> {
-    let logging_enabled = state
-        .config
-        .try_read()
-        .map(|c| c.enable_logging)
-        .unwrap_or(true);
-    if !logging_enabled {
-        return None;
-    }
-
     let state = state.clone();
     let provider_id = ctx.provider.id.clone();
     let request_model = ctx.request_model.clone();
@@ -538,13 +525,6 @@ fn spawn_log_usage(
     status_code: u16,
     is_streaming: bool,
 ) {
-    // Check enable_logging before spawning the log task
-    if let Ok(config) = state.config.try_read() {
-        if !config.enable_logging {
-            return;
-        }
-    }
-
     let state = state.clone();
     let provider_id = ctx.provider.id.clone();
     let app_type_str = ctx.app_type_str.to_string();
@@ -577,14 +557,6 @@ fn spawn_log_usage(
         )
         .await;
     });
-}
-
-pub(crate) fn usage_logging_enabled(state: &ProxyState) -> bool {
-    state
-        .config
-        .try_read()
-        .map(|config| config.enable_logging)
-        .unwrap_or(true)
 }
 
 /// 内部使用量记录函数

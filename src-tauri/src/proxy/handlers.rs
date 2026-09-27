@@ -24,7 +24,7 @@ use super::{
     response_processor::{
         create_logged_passthrough_stream, process_response, read_decoded_body,
         strip_entity_headers_for_rebuilt_body, strip_hop_by_hop_response_headers,
-        usage_logging_enabled, SseUsageCollector,
+        SseUsageCollector,
     },
     server::ProxyState,
     sse::{strip_sse_field, take_sse_block},
@@ -57,7 +57,8 @@ pub async fn health_check() -> (StatusCode, Json<Value>) {
 
 /// 获取服务状态
 pub async fn get_status(State(state): State<ProxyState>) -> Result<Json<ProxyStatus>, ProxyError> {
-    let status = state.status.read().await.clone();
+    let mut status = state.status.read().await.clone();
+    status.active_requests.truncate(5);
     Ok(Json(status))
 }
 
@@ -455,7 +456,7 @@ async fn handle_codex_chat_to_responses_transform(
         let sse_stream = create_responses_sse_stream_from_chat_with_context(stream, tool_context);
         let sse_stream = record_responses_sse_stream(sse_stream, state.codex_chat_history.clone());
 
-        let usage_collector = if usage_logging_enabled(state) {
+        let usage_collector = {
             let state = state.clone();
             let provider_id = ctx.provider.id.clone();
             let request_model = ctx.request_model.clone();
@@ -518,8 +519,6 @@ async fn handle_codex_chat_to_responses_transform(
                     });
                 },
             ))
-        } else {
-            None
         };
 
         let logged_stream = create_logged_passthrough_stream(
@@ -1437,10 +1436,6 @@ async fn log_usage(
 ) {
     use super::usage::logger::UsageLogger;
 
-    if !usage_logging_enabled(state) {
-        return;
-    }
-
     let logger = UsageLogger::new(&state.db);
 
     let (multiplier, pricing_model_source) = logger.resolve_pricing_config(app_type).await;
@@ -1482,7 +1477,7 @@ mod tests {
     use crate::proxy::ProxyError;
 
     #[tokio::test]
-    async fn reasoning_metadata_reaches_logs_for_native_and_chat_streaming_and_json() {
+    async fn reasoning_metadata_is_always_logged_for_native_and_chat_streaming_and_json() {
         use crate::{
             database::Database,
             provider::Provider,
@@ -1505,9 +1500,18 @@ mod tests {
         for chat in [false, true] {
             for stream in [false, true] {
                 let db = Arc::new(Database::memory().unwrap());
+                db.conn
+                    .lock()
+                    .unwrap()
+                    .execute(
+                        "UPDATE proxy_config SET enable_logging = 0 WHERE app_type = 'codex'",
+                        [],
+                    )
+                    .unwrap();
+                let config = db.get_proxy_config().await.unwrap();
                 let state = ProxyState {
                     db: db.clone(),
-                    config: Arc::new(RwLock::new(Default::default())),
+                    config: Arc::new(RwLock::new(config)),
                     status: Arc::new(RwLock::new(Default::default())),
                     start_time: Arc::new(RwLock::new(None)),
                     current_providers: Arc::new(RwLock::new(HashMap::new())),

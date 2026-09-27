@@ -11,14 +11,14 @@ use super::{
         },
         inject_codex_chat_prompt_cache_key, is_codex_responses_endpoint,
     },
-    types::{CopilotOptimizerConfig, ProxyStatus, ReasoningEffort},
+    types::{ActiveProxyRequest, CopilotOptimizerConfig, ProxyStatus, ReasoningEffort},
     upstream_response::{ProxyResponse, MAX_RESPONSE_BODY_BYTES},
     ProxyError,
 };
 use crate::{commands::CopilotAuthState, provider::Provider};
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,24 +67,79 @@ pub struct ForwardResult {
 /// The request remains active until the response body finishes or is dropped.
 pub(crate) struct ActiveConnectionGuard {
     status: Arc<RwLock<ProxyStatus>>,
+    request_id: String,
+    app_handle: Option<tauri::AppHandle>,
 }
 impl ActiveConnectionGuard {
-    pub(crate) async fn acquire(status: Arc<RwLock<ProxyStatus>>) -> Self {
+    pub(crate) async fn acquire(
+        status: Arc<RwLock<ProxyStatus>>,
+        app_handle: Option<tauri::AppHandle>,
+        body: &Value,
+    ) -> Self {
+        let request_id = format!("pending:{}", uuid::Uuid::new_v4());
+        let model = body
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned();
         {
             let mut s = status.write().await;
             s.active_connections = s.active_connections.saturating_add(1);
+            s.active_requests.insert(
+                0,
+                ActiveProxyRequest {
+                    request_id: request_id.clone(),
+                    request_model: model.clone(),
+                    model,
+                    requested_reasoning_effort: ReasoningEffort::from_request(body).requested,
+                    applied_reasoning_effort: None,
+                    created_at: chrono::Utc::now().timestamp(),
+                },
+            );
         }
-        Self { status }
+        if let Some(app) = &app_handle {
+            let _ = app.emit("proxy-request-activity", "started");
+        }
+        Self {
+            status,
+            request_id,
+            app_handle,
+        }
+    }
+
+    async fn update(&self, model: Option<&str>, effort: &ReasoningEffort) {
+        let mut status = self.status.write().await;
+        if let Some(row) = status
+            .active_requests
+            .iter_mut()
+            .find(|row| row.request_id == self.request_id)
+        {
+            if let Some(model) = model {
+                row.model = model.to_owned();
+            }
+            row.applied_reasoning_effort = effort.applied.clone();
+        }
+        drop(status);
+        if let Some(app) = &self.app_handle {
+            let _ = app.emit("proxy-request-activity", "updated");
+        }
     }
 }
 impl Drop for ActiveConnectionGuard {
     fn drop(&mut self) {
         // Drop 不能 await：把减量操作调度到 tokio runtime
         let status = self.status.clone();
+        let request_id = self.request_id.clone();
+        let app = self.app_handle.clone();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
                 let mut s = status.write().await;
                 s.active_connections = s.active_connections.saturating_sub(1);
+                s.active_requests.retain(|row| row.request_id != request_id);
+                drop(s);
+                if let Some(app) = app {
+                    let _ = app.emit("proxy-request-activity", "finished");
+                }
             });
         }
         // 没有 runtime 时静默丢失计数（仅 UI 展示用，可接受最终一致性）
@@ -145,7 +200,9 @@ impl RequestForwarder {
         reasoning_effort: &mut ReasoningEffort,
     ) -> Result<ForwardResult, ProxyError> {
         *reasoning_effort = ReasoningEffort::from_request(&body);
-        let guard = ActiveConnectionGuard::acquire(self.status.clone()).await;
+        let guard =
+            ActiveConnectionGuard::acquire(self.status.clone(), self.app_handle.clone(), &body)
+                .await;
         {
             let mut status = self.status.write().await;
             status.total_requests = status.total_requests.saturating_add(1);
@@ -154,7 +211,15 @@ impl RequestForwarder {
             status.current_provider_id = Some(provider.id.clone());
         }
         let result = self
-            .forward(provider, method, endpoint, body, &headers, reasoning_effort)
+            .forward(
+                provider,
+                method,
+                endpoint,
+                body,
+                &headers,
+                reasoning_effort,
+                Some(&guard),
+            )
             .await;
         let mut status = self.status.write().await;
         match result {
@@ -193,6 +258,7 @@ impl RequestForwarder {
         mut body: Value,
         headers: &http::HeaderMap,
         reasoning_effort: &mut ReasoningEffort,
+        active: Option<&ActiveConnectionGuard>,
     ) -> Result<(ProxyResponse, Option<String>, Option<CodexUpstreamFormat>), ProxyError> {
         crate::copilot_bridge::require_copilot(provider)
             .map_err(|error| ProxyError::ConfigError(error.to_string()))?;
@@ -298,6 +364,11 @@ impl RequestForwarder {
         let request = request.body(body_bytes);
         // Retain the sent value even when the upstream returns an error.
         reasoning_effort.record_applied(&body);
+        if let Some(active) = active {
+            active
+                .update(outbound_model.as_deref(), reasoning_effort)
+                .await;
+        }
         let response = if streaming {
             let timeout = std::time::Duration::from_secs(600);
             tokio::time::timeout(timeout, request.send())
@@ -1060,9 +1131,106 @@ mod tests {
                 json!({"model":"invalid model","input":"hello"}),
                 &HeaderMap::new(),
                 &mut ReasoningEffort::default(),
+                None,
             )
             .await;
         assert!(matches!(error, Err(ProxyError::InvalidRequest(_))));
+    }
+
+    #[tokio::test]
+    async fn active_rows_follow_guard_lifetime_without_request_content() {
+        let status = Arc::new(RwLock::new(ProxyStatus::default()));
+        let first = ActiveConnectionGuard::acquire(
+            status.clone(),
+            None,
+            &json!({
+                "model": "gpt-6-astra", "reasoning": {"effort": "ultra"},
+                "input": "private request content"
+            }),
+        )
+        .await;
+        let second = ActiveConnectionGuard::acquire(
+            status.clone(),
+            None,
+            &json!({
+                "model": "gpt-6-luna"
+            }),
+        )
+        .await;
+        first
+            .update(
+                Some("gpt-6-astra"),
+                &ReasoningEffort {
+                    requested: Some("ultra".into()),
+                    applied: Some("max".into()),
+                },
+            )
+            .await;
+        {
+            let state = status.read().await;
+            assert_eq!(state.active_connections, 2);
+            assert_eq!(state.active_requests[0].model, "gpt-6-luna");
+            assert_eq!(
+                state.active_requests[1]
+                    .requested_reasoning_effort
+                    .as_deref(),
+                Some("ultra")
+            );
+            assert_eq!(
+                state.active_requests[1].applied_reasoning_effort.as_deref(),
+                Some("max")
+            );
+            assert!(!serde_json::to_string(&state.active_requests)
+                .unwrap()
+                .contains("private request content"));
+        }
+        drop(first);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while status.read().await.active_connections != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            status.read().await.active_requests[0].request_id,
+            second.request_id
+        );
+        drop(second);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !status.read().await.active_requests.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(status.read().await.active_connections, 0);
+    }
+
+    #[tokio::test]
+    async fn cancelled_forwarding_clears_the_pending_row() {
+        let status = Arc::new(RwLock::new(ProxyStatus::default()));
+        let task_status = status.clone();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _guard =
+                ActiveConnectionGuard::acquire(task_status, None, &json!({"model": "gpt-6-sol"}))
+                    .await;
+            let _ = started.send(());
+            std::future::pending::<()>().await;
+        });
+        ready.await.unwrap();
+        assert_eq!(status.read().await.active_requests.len(), 1);
+        task.abort();
+        let _ = task.await;
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while status.read().await.active_connections != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(status.read().await.active_requests.is_empty());
     }
 
     #[test]

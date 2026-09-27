@@ -33,14 +33,18 @@ export function OverviewRefreshButton() {
 
   return (
     <Button
-      variant="outline"
-      size="sm"
-      className="shrink-0"
+      variant="ghost"
+      size="icon"
+      className="h-8 w-8 shrink-0"
+      aria-label="Refresh overview"
+      title="Refresh overview"
       disabled={refreshing || overviewFetching > 0 || connectionFetching > 0}
       onClick={() => void refresh()}
     >
-      <RefreshCw aria-hidden className="h-4 w-4" />
-      Refresh overview
+      <RefreshCw
+        aria-hidden
+        className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
+      />
     </Button>
   );
 }

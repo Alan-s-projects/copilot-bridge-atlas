@@ -44,7 +44,7 @@ pub async fn get_proxy_status(state: tauri::State<'_, AppState>) -> Result<Proxy
 
 /// 获取全局代理配置
 ///
-/// 返回统一的全局配置字段（代理开关、监听地址、端口、日志开关）
+/// Returns the proxy switch, listener address, and port. Usage recording is always on.
 #[tauri::command]
 pub async fn get_global_proxy_config(
     state: tauri::State<'_, AppState>,

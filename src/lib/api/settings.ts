@@ -9,6 +9,17 @@ export interface ConfigTransferResult {
 }
 
 export const settingsApi = {
+  async getUsageTableColumns(): Promise<UsageTableColumns> {
+    return await invoke("get_usage_table_columns");
+  },
+
+  async setUsageTableColumns(
+    table: UsageTableName,
+    columns: string[],
+  ): Promise<UsageTableColumns> {
+    return await invoke("set_usage_table_columns", { table, columns });
+  },
+
   async get(): Promise<Settings> {
     return await invoke("get_settings");
   },
@@ -50,6 +61,13 @@ export const settingsApi = {
     return await invoke("set_log_config", { config });
   },
 };
+
+export interface UsageTableColumns {
+  requestLogs?: string[];
+  modelStats?: string[];
+}
+
+export type UsageTableName = keyof UsageTableColumns;
 
 export interface LogConfig {
   enabled: boolean;

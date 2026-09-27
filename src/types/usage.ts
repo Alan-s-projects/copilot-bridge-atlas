@@ -32,6 +32,21 @@ export interface RequestLog {
   dataSource?: string;
 }
 
+export interface PendingRequestLog
+  extends Pick<
+    RequestLog,
+    | "requestId"
+    | "createdAt"
+    | "model"
+    | "requestModel"
+    | "requestedReasoningEffort"
+    | "appliedReasoningEffort"
+  > {
+  pending: true;
+}
+
+export type RequestLogRow = RequestLog | PendingRequestLog;
+
 export interface PaginatedLogs {
   data: RequestLog[];
   total: number;

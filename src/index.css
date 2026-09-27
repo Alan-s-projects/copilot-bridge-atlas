@@ -102,6 +102,14 @@ html {
   overscroll-behavior: none;
 }
 
+/* Only page content scrolls; focus and wheel events must not move the app shell. */
+html,
+body,
+#root {
+  height: 100%;
+  overflow: clip;
+}
+
 body {
   @apply m-0 p-0 text-sm;
   background-color: hsl(var(--background));

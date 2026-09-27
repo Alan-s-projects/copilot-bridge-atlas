@@ -25,6 +25,22 @@ vi.mock("@/lib/query/usage", () => ({
 }));
 
 describe("Model stats token details", () => {
+  it("shows only selected headers and matching cells", () => {
+    render(
+      <ModelStatsTable
+        range={{ preset: "today" }}
+        refreshIntervalMs={0}
+        columns={["model", "cost"]}
+      />,
+    );
+    expect(
+      screen.getAllByRole("columnheader").map((header) => header.textContent),
+    ).toEqual(["Billing Model", "Total Cost"]);
+    const cells = within(screen.getAllByRole("row")[1]).getAllByRole("cell");
+    expect(cells).toHaveLength(2);
+    expect(cells[1]).toHaveTextContent("$1.5000");
+  });
+
   it("uses billing-model order and input-only, token-weighted read hit rate", () => {
     render(
       <ModelStatsTable range={{ preset: "today" }} refreshIntervalMs={0} />,

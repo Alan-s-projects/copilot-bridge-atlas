@@ -1,11 +1,10 @@
 import { useTranslation } from "react-i18next";
-import { motion } from "framer-motion";
 import { Card, CardContent } from "@/components/ui/card";
 import { useUsageSummary } from "@/lib/query/usage";
 import { Loader2 } from "lucide-react";
 import { fmtUsd, formatTokensShort, parseFiniteNumber } from "./format";
 import { InputUsageHeading, InputUsageValue } from "./InputUsage";
-import type { UsageRangeSelection } from "@/types/usage";
+import type { UsageRangeSelection, UsageSummary } from "@/types/usage";
 
 interface UsageHeroProps {
   range: UsageRangeSelection;
@@ -26,8 +25,6 @@ export function UsageHero({
   model,
   refreshIntervalMs,
 }: UsageHeroProps) {
-  const { t } = useTranslation();
-
   const { data: summary, isLoading } = useUsageSummary(
     range,
     { appType, providerName, model },
@@ -36,6 +33,21 @@ export function UsageHero({
     },
   );
 
+  return <UsageSummaryCard summary={summary} isLoading={isLoading} />;
+}
+
+export function UsageSummaryCard({
+  summary,
+  isLoading = false,
+  title,
+  notice,
+}: {
+  summary?: UsageSummary;
+  isLoading?: boolean;
+  title?: string;
+  notice?: string;
+}) {
+  const { t } = useTranslation();
   const input = summary?.totalInputTokens ?? 0;
   const output = summary?.totalOutputTokens ?? 0;
   const cacheRead = summary?.totalCacheReadTokens ?? 0;
@@ -55,34 +67,36 @@ export function UsageHero({
       ? `${outputTps.toFixed(1)} tps`
       : "--";
 
-  if (isLoading) {
-    return (
-      <div
-        role="status"
-        aria-label="Loading usage"
-        className="flex min-h-24 items-center justify-center"
-      >
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/50" />
-      </div>
-    );
-  }
-
   const hitPercent = Math.max(0, Math.min(100, hitRate * 100));
   const hitPercentLabel = hitPercent.toFixed(hitPercent >= 99.95 ? 0 : 1);
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 5 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4 }}
+    <Card
+      role="region"
+      aria-label={title ?? t("usage.summary", "Usage summary")}
       className="min-w-0"
     >
-      <Card
-        role="region"
-        aria-label={t("usage.summary", "Usage summary")}
-        className="min-w-0"
-      >
-        <CardContent className="p-0">
-          <h2 className="sr-only">{t("usage.summary", "Usage summary")}</h2>
+      <CardContent className="p-0">
+        {(title || !isLoading) && (
+          <h2
+            className={title ? "px-4 pt-4 text-base font-semibold" : "sr-only"}
+          >
+            {title ?? t("usage.summary", "Usage summary")}
+          </h2>
+        )}
+        {notice && (
+          <p role="alert" className="px-4 pt-3 text-sm text-destructive">
+            {notice}
+          </p>
+        )}
+        {isLoading ? (
+          <div
+            role="status"
+            aria-label="Loading usage"
+            className="flex min-h-24 items-center justify-center"
+          >
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/50" />
+          </div>
+        ) : (
           <div className="divide-y divide-border md:grid md:grid-cols-[9rem_auto_auto_auto] md:gap-x-4">
             <div className="grid min-w-0 grid-cols-1 items-center gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,5fr)] md:col-span-4 md:grid-cols-subgrid">
               <dl className="min-w-0">
@@ -157,9 +171,9 @@ export function UsageHero({
               </div>
             </div>
           </div>
-        </CardContent>
-      </Card>
-    </motion.div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

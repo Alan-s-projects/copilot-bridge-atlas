@@ -8,30 +8,60 @@ export default function CopilotQuotaFooter({ meta }: { meta?: ProviderMeta }) {
   const { data, error, isFetching } = useCopilotQuota(accountId);
   const used = Math.max(0, Math.min(100, data?.utilization ?? 0));
   return (
-    <div className="space-y-3 border-t pt-4 text-sm">
-      <div className="flex items-center justify-between gap-3">
-        <span className="font-medium">Copilot premium requests</span>
-      </div>
+    <div className="flex max-w-full items-center gap-3 text-sm">
       {error ? (
         <p role="alert" className="text-destructive">
           {extractErrorMessage(error)}
         </p>
       ) : data ? (
         <>
-          <div className="h-2 overflow-hidden rounded-full bg-muted">
-            <div
-              className={`h-full ${used >= 90 ? "bg-red-500" : used >= 70 ? "bg-amber-500" : "bg-emerald-500"}`}
-              style={{ width: `${used}%` }}
-            />
-          </div>
-          <div className="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
-            <span>
-              {used.toFixed(1)}% used · {data.plan}
+          <div
+            role="img"
+            aria-label={`Copilot premium requests: ${used.toFixed(1)}% used`}
+            className="relative h-16 w-16 shrink-0"
+          >
+            <svg
+              aria-hidden
+              viewBox="0 0 64 64"
+              className="h-full w-full -rotate-90"
+            >
+              <circle
+                cx="32"
+                cy="32"
+                r="27"
+                fill="none"
+                strokeWidth="5"
+                className="stroke-muted"
+              />
+              <circle
+                cx="32"
+                cy="32"
+                r="27"
+                fill="none"
+                strokeWidth="5"
+                pathLength="100"
+                strokeDasharray={`${used} 100`}
+                strokeLinecap={used > 0 ? "round" : "butt"}
+                className={
+                  used >= 90
+                    ? "stroke-red-500"
+                    : used >= 70
+                      ? "stroke-amber-500"
+                      : "stroke-emerald-500"
+                }
+              />
+            </svg>
+            <span className="absolute inset-0 flex items-center justify-center text-xs font-semibold tabular-nums">
+              {used.toFixed(1)}%
             </span>
+          </div>
+          <div className="min-w-0 space-y-1">
+            <p className="font-medium">Copilot premium requests</p>
+            <p className="text-xs text-muted-foreground">{data.plan}</p>
             {data.resetDate && (
-              <span>
+              <p className="text-xs text-muted-foreground">
                 Resets {new Date(data.resetDate).toLocaleDateString("en-US")}
-              </span>
+              </p>
             )}
           </div>
         </>

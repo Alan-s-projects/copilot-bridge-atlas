@@ -40,10 +40,11 @@ impl Database {
     }
 
     pub async fn get_global_proxy_config(&self) -> Result<GlobalProxyConfig, AppError> {
+        // Keep the retired enable_logging column intact, but never use it to gate usage.
         self.ensure_proxy_config_row_exists("codex")?;
         lock_conn!(self.conn)
             .query_row(
-                "SELECT proxy_enabled, listen_address, listen_port, enable_logging
+                "SELECT proxy_enabled, listen_address, listen_port
              FROM proxy_config WHERE app_type = 'codex'",
                 [],
                 |row| {
@@ -51,7 +52,6 @@ impl Database {
                         proxy_enabled: row.get(0)?,
                         listen_address: row.get(1)?,
                         listen_port: row.get(2)?,
-                        enable_logging: row.get(3)?,
                     })
                 },
             )
@@ -66,13 +66,12 @@ impl Database {
         lock_conn!(self.conn)
             .execute(
                 "UPDATE proxy_config SET proxy_enabled = ?1, listen_address = ?2,
-             listen_port = ?3, enable_logging = ?4, updated_at = datetime('now')
+             listen_port = ?3, updated_at = datetime('now')
              WHERE app_type = 'codex'",
                 params![
                     config.proxy_enabled,
                     config.listen_address,
-                    config.listen_port,
-                    config.enable_logging
+                    config.listen_port
                 ],
             )
             .map_err(|error| AppError::Database(error.to_string()))?;
@@ -83,14 +82,13 @@ impl Database {
         self.ensure_proxy_config_row_exists("codex")?;
         lock_conn!(self.conn)
             .query_row(
-                "SELECT listen_address, listen_port, enable_logging
+                "SELECT listen_address, listen_port
              FROM proxy_config WHERE app_type = 'codex'",
                 [],
                 |row| {
                     Ok(ProxyConfig {
                         listen_address: row.get(0)?,
                         listen_port: row.get(1)?,
-                        enable_logging: row.get(2)?,
                     })
                 },
             )
@@ -102,13 +100,9 @@ impl Database {
         lock_conn!(self.conn)
             .execute(
                 "UPDATE proxy_config SET listen_address = ?1, listen_port = ?2,
-             enable_logging = ?3, updated_at = datetime('now')
+             updated_at = datetime('now')
              WHERE app_type = 'codex'",
-                params![
-                    config.listen_address,
-                    config.listen_port,
-                    config.enable_logging
-                ],
+                params![config.listen_address, config.listen_port],
             )
             .map_err(|error| AppError::Database(error.to_string()))?;
         Ok(())
@@ -168,6 +162,56 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn legacy_logging_flag_is_ignored_and_preserved() {
+        let db = Database::memory().unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE proxy_config SET enable_logging = 0 WHERE app_type = 'codex'",
+                [],
+            )
+            .unwrap();
+        let mut global = db.get_global_proxy_config().await.unwrap();
+        let mut listener = db.get_proxy_config().await.unwrap();
+        assert!(serde_json::to_value(&global)
+            .unwrap()
+            .get("enableLogging")
+            .is_none());
+        assert!(serde_json::to_value(&listener)
+            .unwrap()
+            .get("enable_logging")
+            .is_none());
+        global.listen_port = 15822;
+        db.update_global_proxy_config(global).await.unwrap();
+        listener.listen_port = 15922;
+        db.update_proxy_config(listener).await.unwrap();
+        let legacy_flag: bool = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT enable_logging FROM proxy_config WHERE app_type = 'codex'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            !legacy_flag,
+            "Retired settings are preserved, not rewritten"
+        );
+        let old_client: GlobalProxyConfig = serde_json::from_value(serde_json::json!({
+            "proxyEnabled": true,
+            "listenAddress": "127.0.0.1",
+            "listenPort": 15922,
+            "enableLogging": false
+        }))
+        .unwrap();
+        db.update_global_proxy_config(old_client).await.unwrap();
+        assert_eq!(db.get_proxy_config().await.unwrap().listen_port, 15922);
+    }
 
     #[tokio::test]
     async fn pricing_preferences_round_trip_and_reject_invalid_values() {
@@ -234,11 +278,9 @@ mod tests {
         assert_eq!(db.get_proxy_config().await.unwrap().listen_port, 15822);
         let mut listener = db.get_proxy_config().await.unwrap();
         listener.listen_port = 15922;
-        listener.enable_logging = false;
         db.update_proxy_config(listener).await.unwrap();
         let saved = db.get_proxy_config().await.unwrap();
         assert_eq!(saved.listen_port, 15922);
-        assert!(!saved.enable_logging);
         assert_eq!(
             db.conn
                 .lock()

@@ -153,6 +153,8 @@ describe("Atlas application scope", () => {
     );
     expect(screen.getByTestId("settings-page")).toBeVisible();
     expect(selectedPage()).toHaveTextContent("Settings");
+    expect(screen.getByRole("main")).toHaveClass("overflow-hidden");
+    expect(screen.getByRole("main")).not.toHaveClass("overflow-y-auto");
     expect(proxyControl).toBeVisible();
     expect(screen.queryByTestId("usage-dashboard")).not.toBeInTheDocument();
     fireEvent.click(
@@ -161,6 +163,7 @@ describe("Atlas application scope", () => {
     expect(screen.getByText("GitHub Copilot")).toBeVisible();
     expect(screen.getByTestId("bridge-overview")).toBeVisible();
     expect(selectedPage()).toHaveTextContent("Overview");
+    expect(screen.getByRole("main")).toHaveClass("overflow-y-auto");
     expect(proxyControl).toBeVisible();
     expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument();
     expect(

@@ -7,6 +7,50 @@ use crate::error::AppError;
 use rusqlite::params;
 
 impl Database {
+    pub fn get_usage_table_columns(&self) -> Result<crate::settings::UsageTableColumns, AppError> {
+        self.get_setting("usage_table_columns")?
+            .map(|json| {
+                serde_json::from_str(&json).map_err(|error| {
+                    AppError::Database(format!("Invalid column settings: {error}"))
+                })
+            })
+            .transpose()
+            .map(|settings| settings.unwrap_or_default())
+    }
+
+    pub fn set_usage_table_columns(
+        &self,
+        table: &str,
+        columns: Vec<String>,
+    ) -> Result<crate::settings::UsageTableColumns, AppError> {
+        use rusqlite::OptionalExtension;
+        let conn = lock_conn!(self.conn);
+        let saved: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'usage_table_columns'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let mut settings: crate::settings::UsageTableColumns = saved
+            .map(|json| serde_json::from_str(&json))
+            .transpose()
+            .map_err(|error| AppError::Database(format!("Invalid column settings: {error}")))?
+            .unwrap_or_default();
+        match table {
+            "requestLogs" => settings.request_logs = Some(columns),
+            "modelStats" => settings.model_stats = Some(columns),
+            _ => return Err(AppError::Config("Unknown usage table".into())),
+        }
+        let json = serde_json::to_string(&settings)
+            .map_err(|error| AppError::Database(error.to_string()))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('usage_table_columns', ?1)",
+            [json],
+        )?;
+        Ok(settings)
+    }
+
     /// 获取设置值
     pub fn get_setting(&self, key: &str) -> Result<Option<String>, AppError> {
         let conn = lock_conn!(self.conn);

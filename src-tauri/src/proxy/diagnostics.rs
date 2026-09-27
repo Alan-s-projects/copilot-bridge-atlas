@@ -25,7 +25,6 @@ use std::{
 
 const MAX_ERROR_PREVIEW: usize = 4096;
 const MAX_ERROR_JSON: usize = 32 * 1024;
-const MAX_MESSAGE_CHARS: usize = 200;
 const MAX_DIAGNOSTIC_IDS: usize = 6;
 
 #[derive(Default, Clone)]
@@ -429,63 +428,173 @@ fn looks_sensitive(value: &str) -> bool {
     .any(|marker| lower.contains(marker))
 }
 
-fn diagnostic_field(value: Option<&Value>) -> String {
+fn json_type_name(value: &Value) -> &'static str {
     match value {
-        Some(Value::String(value)) => bounded_error_text(value.as_bytes()),
-        Some(Value::Number(value)) => value.to_string(),
-        Some(Value::Bool(value)) => value.to_string(),
-        _ => "none".into(),
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
+}
+
+fn safe_token(value: &str, limit: usize) -> Option<String> {
+    let value = value.trim();
+    if (1..=limit).contains(&value.len())
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+        && !looks_sensitive(value)
+    {
+        Some(value.to_owned())
+    } else {
+        None
+    }
+}
+
+fn safe_param_path(value: &str) -> Option<String> {
+    let valid = (1..=128).contains(&value.len())
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '[' | ']'))
+        && !looks_sensitive(value)
+        && value.split('.').all(|part| {
+            let (name, index) = part.split_once('[').unwrap_or((part, ""));
+            !name.is_empty()
+                && name
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                && (index.is_empty()
+                    || index.strip_suffix(']').is_some_and(|index| {
+                        !index.is_empty() && index.chars().all(|ch| ch.is_ascii_digit())
+                    }))
+        });
+    valid.then(|| value.to_owned())
+}
+
+fn collect_numbers(value: &Value, path: &str, output: &mut Vec<String>) {
+    match value {
+        Value::Number(number)
+            if path
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.')) =>
+        {
+            output.push(format!("{path}={number}"));
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate().take(8) {
+                collect_numbers(item, &format!("{path}[{index}]"), output);
+            }
+        }
+        Value::Object(fields) => {
+            for (key, child) in fields.iter().take(12) {
+                if let Some(key) = safe_token(key, 48) {
+                    let next = if path.is_empty() {
+                        key
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    collect_numbers(child, &next, output);
+                }
+            }
+        }
+        _ => {}
+    }
+    output.truncate(12);
+}
+
+fn collect_structure(value: &Value, path: &str, output: &mut Vec<String>) {
+    match value {
+        Value::Object(fields) => {
+            for (key, child) in fields.iter().take(16) {
+                let key = safe_token(key, 48).unwrap_or_else(|| "invalid_key".into());
+                let next = if path.is_empty() {
+                    key
+                } else {
+                    format!("{path}.{key}")
+                };
+                output.push(format!("{next}:{}", json_type_name(child)));
+                if output.len() < 24 && (child.is_object() || child.is_array()) {
+                    collect_structure(child, &next, output);
+                }
+            }
+        }
+        Value::Array(items) => {
+            output.push(format!(
+                "{path}[]:{}",
+                items.first().map(json_type_name).unwrap_or("empty")
+            ));
+            if let Some(item) = items.first() {
+                collect_structure(item, &format!("{path}[]"), output);
+            }
+        }
+        _ => {}
+    }
+    output.truncate(24);
 }
 
 fn summarize_error_value(value: &Value) -> String {
     let error = value.get("error").unwrap_or(value);
-    let message = error
-        .get("message")
-        .or_else(|| error.get("detail"))
-        .or_else(|| value.get("message"))
+    let code = error
+        .get("code")
         .and_then(Value::as_str)
-        .map(|value| bounded_error_text(value.as_bytes()))
-        .unwrap_or_else(|| "[message unavailable]".into());
-    let code = diagnostic_field(error.get("code"));
-    let kind = diagnostic_field(error.get("type"));
-    let param = diagnostic_field(error.get("param"));
-    let request_id = ["request_id", "requestId", "correlation_id"]
-        .iter()
-        .find_map(|key| error.get(key).and_then(Value::as_str))
-        .and_then(safe_correlation_id)
+        .and_then(|value| safe_token(value, 96))
         .unwrap_or_else(|| "none".into());
-    format!("kind=json message={message:?} code={code} type={kind} param={param} body_request_id={request_id}")
-}
-
-fn bounded_error_text(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_ERROR_JSON)])
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(MAX_MESSAGE_CHARS)
-        .collect()
+    let kind = error
+        .get("type")
+        .and_then(Value::as_str)
+        .and_then(|value| safe_token(value, 96))
+        .unwrap_or_else(|| "none".into());
+    let param = error
+        .get("param")
+        .and_then(Value::as_str)
+        .and_then(safe_param_path)
+        .unwrap_or_else(|| "none".into());
+    let mut numbers = Vec::new();
+    collect_numbers(error, "", &mut numbers);
+    let mut structure = Vec::new();
+    collect_structure(error, "", &mut structure);
+    format!(
+        "kind=json code={code} type={kind} param={param} numbers={} fields={}",
+        if numbers.is_empty() {
+            "none".into()
+        } else {
+            numbers.join(",")
+        },
+        if structure.is_empty() {
+            "none".into()
+        } else {
+            structure.join(",")
+        }
+    )
 }
 
 fn summarize_body(body: &[u8], compressed: bool, truncated: bool) -> String {
     if body.is_empty() {
         return "kind=empty".into();
     }
-    let text = String::from_utf8_lossy(&body[..body.len().min(MAX_ERROR_JSON)]);
-    if !compressed && !truncated && body.len() <= MAX_ERROR_JSON {
-        if let Ok(value) = serde_json::from_str::<Value>(&text) {
+    if compressed {
+        return format!("kind=compressed bytes={}", body.len());
+    }
+    let sample = &body[..body.len().min(MAX_ERROR_JSON)];
+    if !truncated && body.len() <= MAX_ERROR_JSON {
+        if let Ok(value) = serde_json::from_slice::<Value>(sample) {
             return summarize_error_value(&value);
         }
     }
-    let kind = if compressed {
-        "compressed"
+    let kind = if sample.iter().any(|byte| {
+        !byte.is_ascii() || byte.is_ascii_control() && !matches!(byte, b'\n' | b'\r' | b'\t')
+    }) {
+        "binary"
+    } else if sample.starts_with(b"<") {
+        "html"
     } else if truncated {
         "truncated"
     } else {
         "text"
     };
-    format!("kind={kind} message={:?}", bounded_error_text(body))
+    format!("kind={kind} bytes={}", body.len())
 }
 
 #[cfg(test)]
@@ -551,32 +660,41 @@ mod tests {
     }
 
     #[test]
-    fn sanitizes_error_messages_and_never_logs_arbitrary_body_text() {
+    fn structured_failure_summaries_keep_codes_and_counts_without_freeform_text() {
+        let summary = summarize_body(br#"{"error":{"message":"prompt contains secret prompt","code":"model_max_prompt_tokens_exceeded","type":"invalid_request_error","param":"input","prompt_tokens":390003,"limit":372000,"unexpected":{"reason":"secret tool output","count":2}}}"#, false, false);
+        assert!(summary.contains("code=model_max_prompt_tokens_exceeded"));
+        assert!(summary.contains("type=invalid_request_error"));
+        assert!(summary.contains("param=input"));
+        assert!(summary.contains("prompt_tokens=390003"));
+        assert!(summary.contains("limit=372000"));
+        assert!(summary.contains("unexpected.count=2"));
+        assert!(summary.contains("unexpected:object"));
+        assert!(!summary.contains("secret prompt"));
+        assert!(!summary.contains("secret tool output"));
+
         assert_eq!(
-            summarize_body(br#"{"error":{"message":"prompt token count of 390003 exceeds the limit of 372000","code":"model_max_prompt_tokens_exceeded","type":"invalid_request_error","param":"input"}}"#, false, false),
-            "kind=json message=\"prompt token count of 390003 exceeds the limit of 372000\" code=model_max_prompt_tokens_exceeded type=invalid_request_error param=input body_request_id=none"
-        );
-        assert_eq!(
-            summarize_body(b"Bad Request\n", false, false),
-            "kind=text message=\"Bad Request\""
-        );
-        assert_eq!(
-            summarize_body(b"my private prompt and bearer secret", false, false),
-            "kind=text message=\"my private prompt and bearer secret\""
+            summarize_body(b"Bad Request\nsecret prompt", false, false),
+            "kind=text bytes=25"
         );
         assert_eq!(summarize_body(b"", false, false), "kind=empty");
         assert_eq!(
-            summarize_body(b"compressed bytes", true, false),
-            "kind=compressed message=\"compressed bytes\""
+            summarize_body(b"compressed secret", true, false),
+            "kind=compressed bytes=17"
         );
         assert_eq!(
-            summarize_body(
-                br#"{"error":{"message":"Authorization bearer private-token was rejected","code":"model_max_prompt_tokens_exceeded","param":"input.token_count"}}"#,
-                false,
-                false
-            ),
-            "kind=json message=\"Authorization bearer private-token was rejected\" code=model_max_prompt_tokens_exceeded type=none param=input.token_count body_request_id=none"
+            summarize_body(b"<html>secret prompt</html>", false, false),
+            "kind=html bytes=26"
         );
+        assert_eq!(
+            summarize_body(b"{not json secret", false, false),
+            "kind=text bytes=16"
+        );
+        assert!(summarize_body(
+            br#"{"error":{"code":"Bearer secret","param":"input.secret"}}"#,
+            false,
+            false
+        )
+        .contains("code=none"));
     }
 
     #[test]
@@ -626,7 +744,10 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].0, log::Level::Info);
         assert_eq!(entries[1].0, log::Level::Warn);
-        assert!(entries[1].1.contains("390003"));
+        assert!(entries[1]
+            .1
+            .contains("code=model_max_prompt_tokens_exceeded"));
+        assert!(!entries[1].1.contains("secret prompt"));
         assert!(entries[1].1.contains("model_max_prompt_tokens_exceeded"));
         for (_, line) in &entries {
             assert_eq!(line.lines().count(), 1);
@@ -684,7 +805,7 @@ mod tests {
             .1
             .contains(&format!("response_bytes={}", encoded.len())));
         assert!(entries[1].1.contains("kind=compressed"));
-        assert!(entries[1].1.contains("private compressed"));
+        assert!(!entries[1].1.contains("private compressed"));
 
         logger.0.lock().unwrap().clear();
         let diagnostics = make_diagnostics(Arc::new(Database::memory().unwrap()));
@@ -709,7 +830,7 @@ mod tests {
         let entries = logger.0.lock().unwrap().clone();
         assert!(entries[1].1.contains("body_truncated=true"));
         assert!(entries[1].1.contains("kind=truncated"));
-        assert!(entries[1].1.contains("pppppp"));
+        assert!(!entries[1].1.contains("pppppp"));
     }
 
     #[tokio::test]
@@ -781,13 +902,7 @@ mod tests {
         let diagnostics = make_diagnostics(db.clone());
         diagnostics.failed_event(&serde_json::json!({
             "type": "response.failed",
-            "response": {
-                "error": {
-                    "message": "prompt token count of 390003 exceeds the limit of 372000",
-                    "code": "model_max_prompt_tokens_exceeded",
-                    "param": "input"
-                }
-            }
+            "response": {"error": {"message": "secret tool output", "code": "model_max_prompt_tokens_exceeded", "param": "input", "prompt_tokens": 390003}}
         }));
         let history = db.get_request_logs(&Default::default(), 0, 10).unwrap();
         assert_eq!(history.data[0].request_id, diagnostics.id);
@@ -795,6 +910,11 @@ mod tests {
         assert!(entries
             .iter()
             .any(|(_, line)| line.contains("code=model_max_prompt_tokens_exceeded")));
-        assert!(entries.iter().any(|(_, line)| line.contains("390003")));
+        assert!(entries
+            .iter()
+            .any(|(_, line)| line.contains("prompt_tokens=390003")));
+        assert!(!entries
+            .iter()
+            .any(|(_, line)| line.contains("secret tool output")));
     }
 }

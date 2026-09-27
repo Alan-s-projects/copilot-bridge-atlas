@@ -144,29 +144,16 @@ describe("read-only bridge overview", () => {
     );
     expect(within(table).getByText("400")).toBeVisible();
     const firstCells = within(rows[1]).getAllByRole("cell");
-    expect(firstCells).toHaveLength(9);
+    expect(firstCells).toHaveLength(6);
     expect(firstCells[3]).toHaveTextContent("200");
-    expect(firstCells.slice(4, 7).map((cell) => cell.textContent)).toEqual([
-      "300 / 600 / 60.0%",
-      "200/100 tps",
-      "100",
-    ]);
-    expect(headings.slice(4, 7).map((heading) => heading.textContent)).toEqual([
-      "Input(fresh/cached/hit)",
-      "Output",
-      "Cache Write",
-    ]);
-    expect(firstCells[8]).toHaveTextContent("$0.0100");
+    expect(firstCells[5]).toHaveTextContent("$0.0100");
     expect(within(table).getByText("2.5s")).toBeVisible();
-    expect(firstCells[7]).toHaveTextContent(/^2\.5s$/);
+    expect(firstCells[4]).toHaveTextContent(/^2\.5s$/);
     expect(headings.map((heading) => heading.textContent)).toEqual([
       "Time",
       "Billing Model",
       "Reasoning(requested/applied)",
       "Status",
-      "Input(fresh/cached/hit)",
-      "Output",
-      "Cache Write",
       "Duration",
       "Cost",
     ]);
@@ -280,6 +267,7 @@ describe("read-only bridge overview", () => {
     mocks.logs.mockResolvedValue({ data: [] });
     renderOverview();
     expect(await screen.findByText("No data")).toBeVisible();
+    expect(screen.getByRole("cell")).toHaveAttribute("colspan", "6");
     for (const label of ["Success today", "Cache reuse today"]) {
       expect(screen.getByText(label).nextElementSibling).toHaveTextContent("—");
     }

@@ -25,9 +25,11 @@ import {
 export const RequestLogsGrid = memo(function RequestLogsGrid({
   logs,
   caption,
+  showTokenDetails = true,
 }: {
   logs: RequestLog[];
   caption?: string;
+  showTokenDetails?: boolean;
 }) {
   const { t } = useTranslation();
   const locale = "en-US";
@@ -50,15 +52,19 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
             <TableHead className="text-center whitespace-nowrap">
               {t("usage.status", "Status")}
             </TableHead>
-            <TableHead className="text-center whitespace-nowrap min-w-44">
-              <InputUsageHeading />
-            </TableHead>
-            <TableHead className="text-center whitespace-nowrap">
-              {t("usage.outputTokens", "Output")}
-            </TableHead>
-            <TableHead className="text-center whitespace-nowrap">
-              {t("usage.cacheWrite", "Cache Write")}
-            </TableHead>
+            {showTokenDetails && (
+              <>
+                <TableHead className="text-center whitespace-nowrap min-w-44">
+                  <InputUsageHeading />
+                </TableHead>
+                <TableHead className="text-center whitespace-nowrap">
+                  {t("usage.outputTokens", "Output")}
+                </TableHead>
+                <TableHead className="text-center whitespace-nowrap">
+                  {t("usage.cacheWrite", "Cache Write")}
+                </TableHead>
+              </>
+            )}
             <TableHead className="text-center whitespace-nowrap">
               {t("usage.timingInfo", "Duration")}
             </TableHead>
@@ -71,7 +77,7 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
           {logs.length === 0 ? (
             <TableRow>
               <TableCell
-                colSpan={9}
+                colSpan={showTokenDetails ? 9 : 6}
                 className="text-center text-muted-foreground"
               >
                 {t("usage.noData", "No data")}
@@ -81,7 +87,9 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
             logs.map((log) => {
               const unpriced = isUnpricedUsage(log);
               const multiplier = parseFiniteNumber(log.costMultiplier);
-              const tps = formatOutputTokensPerSecond(log);
+              const tps = showTokenDetails
+                ? formatOutputTokensPerSecond(log)
+                : null;
               return (
                 <TableRow key={log.requestId}>
                   <TableCell className="text-center whitespace-nowrap text-xs px-1.5">
@@ -128,22 +136,26 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
                       {log.statusCode}
                     </span>
                   </TableCell>
-                  <TableCell className="text-center whitespace-nowrap px-1.5">
-                    <RequestInputValue log={log} />
-                  </TableCell>
-                  <TableCell className="text-center px-1.5">
-                    <div className="tabular-nums">
-                      {fmtInt(log.outputTokens, locale)}
-                      {tps != null && (
-                        <span className="text-muted-foreground text-xs">
-                          /{tps} tps
-                        </span>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-center px-1.5 tabular-nums">
-                    {fmtInt(log.cacheCreationTokens, locale)}
-                  </TableCell>
+                  {showTokenDetails && (
+                    <>
+                      <TableCell className="text-center whitespace-nowrap px-1.5">
+                        <RequestInputValue log={log} />
+                      </TableCell>
+                      <TableCell className="text-center px-1.5">
+                        <div className="tabular-nums">
+                          {fmtInt(log.outputTokens, locale)}
+                          {tps != null && (
+                            <span className="text-muted-foreground text-xs">
+                              /{tps} tps
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-center px-1.5 tabular-nums">
+                        {fmtInt(log.cacheCreationTokens, locale)}
+                      </TableCell>
+                    </>
+                  )}
                   <TableCell className="text-center whitespace-nowrap text-xs tabular-nums">
                     {(log.latencyMs / 1000).toFixed(1)}s
                   </TableCell>

@@ -22,6 +22,7 @@ const RecentRequests = memo(function RecentRequests({
     <RequestLogsGrid
       logs={logs.slice(0, OVERVIEW_REQUEST_LIMIT)}
       caption={`Latest ${OVERVIEW_REQUEST_LIMIT} completed requests`}
+      showTokenDetails={false}
     />
   );
 });

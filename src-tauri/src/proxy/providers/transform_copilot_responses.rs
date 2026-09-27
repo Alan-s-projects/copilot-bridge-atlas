@@ -30,8 +30,18 @@ pub(crate) fn adapt_request(body: &mut Value) -> Result<(), ProxyError> {
         .collect();
     if !tools.is_empty() {
         body["tools"] = json!(tools);
-    } else if body.get("tools").is_some() {
-        body["tools"] = json!([]);
+    } else {
+        if body.get("tools").is_some() {
+            body["tools"] = json!([]);
+        }
+        // Codex's local compaction sends tools: [] with tool_choice: "auto".
+        // xAI rejects a tool choice without available tools. Inline tool
+        // carriers were included in the context above, so this only removes
+        // selection fields when the converted request really has no tools.
+        if let Some(object) = body.as_object_mut() {
+            object.remove("tool_choice");
+            object.remove("parallel_tool_calls");
+        }
     }
     if let Some(choice) = body
         .get_mut("tool_choice")
@@ -399,6 +409,46 @@ mod tests {
         assert_eq!(request["input"][5]["type"], "function_call_output");
         assert_eq!(request["input"][6]["name"], "tool_search");
         assert_eq!(request["input"][7]["type"], "function_call_output");
+    }
+
+    #[test]
+    fn omits_tool_selection_only_when_no_tools_can_be_sent() {
+        for tools in [None, Some(json!([])), Some(Value::Null)] {
+            for choice in [
+                json!("auto"),
+                json!("none"),
+                json!({"type":"function","name":"unused"}),
+            ] {
+                let mut body = json!({
+                    "model":"grok-4.7",
+                    "input":[{"role":"user","content":"Summarize this fixture."}],
+                    "tool_choice":choice,
+                    "parallel_tool_calls":true,
+                    "stream":true
+                });
+                if let Some(tools) = &tools {
+                    body["tools"] = tools.clone();
+                }
+                adapt_request(&mut body).unwrap();
+                assert!(body.get("tool_choice").is_none());
+                assert!(body.get("parallel_tool_calls").is_none());
+                assert!(body["tools"].as_array().is_none_or(Vec::is_empty));
+                assert_eq!(body["input"][0]["content"], "Summarize this fixture.");
+            }
+        }
+
+        let mut inline_tools = json!({
+            "input":[{"type":"additional_tools","role":"developer","tools":[
+                {"type":"function","name":"lookup","parameters":{"type":"object","properties":{}}}
+            ]}],
+            "tools":[],
+            "tool_choice":"auto",
+            "parallel_tool_calls":true
+        });
+        adapt_request(&mut inline_tools).unwrap();
+        assert_eq!(inline_tools["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(inline_tools["tool_choice"], "auto");
+        assert_eq!(inline_tools["parallel_tool_calls"], true);
     }
 
     #[test]

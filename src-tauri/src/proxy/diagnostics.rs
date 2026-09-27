@@ -1,15 +1,14 @@
-//! Bounded HTTP diagnostics for requests sent to Copilot.
+//! Bounded, content-free HTTP diagnostics for requests sent to Copilot.
 //!
-//! The Atlas ID is also the request ID of a failed usage-history row. Failed
-//! upstream response bodies are recorded verbatim up to MAX_ERROR_JSON bytes
-//! for troubleshooting. They can contain echoed prompts or credentials.
+//! The Atlas ID is also the request ID of a failed usage-history row. Never
+//! interpolate request bodies, arbitrary headers, or upstream error text into
+//! a log record without passing through the small allowlists below.
 
 use super::{
     error_mapper::map_proxy_error_to_status, types::ReasoningEffort,
     upstream_response::ProxyResponse, usage::logger::UsageLogger, ProxyError,
 };
 use crate::Database;
-use base64::Engine;
 use bytes::Bytes;
 use futures::{stream::Stream, task::Poll};
 use http::HeaderMap;
@@ -235,9 +234,11 @@ impl RequestDiagnostics {
     pub fn error_body(&self, bytes: &[u8], decoded: bool) {
         let mut details = self.details();
         details.body_truncated = bytes.len() > MAX_ERROR_JSON;
-        let encoded = details.encoding.is_some() && !decoded;
-        let summary = summarize_body(bytes, encoded, bytes.len() > MAX_ERROR_JSON);
-        details.body_summary = Some(format!("{summary} {}", exact_error_body(bytes, encoded)));
+        details.body_summary = Some(summarize_body(
+            bytes,
+            details.encoding.is_some() && !decoded,
+            bytes.len() > MAX_ERROR_JSON,
+        ));
     }
 
     pub fn failed_event(&self, event: &Value) {
@@ -252,8 +253,8 @@ impl RequestDiagnostics {
     }
 
     pub fn proxy_failure(&self, stage: &'static str, error: &ProxyError) {
-        // The client receives the original error. Diagnostics and Usage history
-        // retain a bounded copy of upstream error bodies for investigation.
+        // The client receives the original error. Only the private diagnostic
+        // and history row use these bounded, sanitized categories.
         self.completed(self.details().status.is_some(), stage);
         self.record_failure(stage, map_proxy_error_to_status(error));
     }
@@ -635,26 +636,6 @@ fn summarize_body(body: &[u8], compressed: bool, truncated: bool) -> String {
     format!("kind={kind} bytes={}", body.len())
 }
 
-fn exact_error_body(body: &[u8], encoded: bool) -> String {
-    let sample = &body[..body.len().min(MAX_ERROR_JSON)];
-    if !encoded {
-        if let Ok(text) = std::str::from_utf8(sample) {
-            // JSON quoting keeps each error on one log line without altering
-            // the underlying response sent to the client.
-            return format!(
-                "raw_body={}",
-                serde_json::to_string(text).expect("UTF-8 string serialization cannot fail")
-            );
-        }
-    }
-    // Preserve the exact bytes when the upstream sends an unknown encoding or
-    // the capped prefix ends inside a UTF-8 code point.
-    format!(
-        "raw_body_base64={}",
-        base64::engine::general_purpose::STANDARD.encode(sample)
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -742,6 +723,10 @@ mod tests {
             summarize_body(b"Bad Request\nsecret prompt", false, false),
             "kind=text bytes=25"
         );
+        assert_eq!(
+            summarize_body(b"Bad Request\n", false, false),
+            "kind=text bytes=12"
+        );
         assert_eq!(summarize_body(b"", false, false), "kind=empty");
         assert_eq!(
             summarize_body(b"compressed secret", true, false),
@@ -761,29 +746,6 @@ mod tests {
             false
         )
         .contains("code=none"));
-    }
-
-    #[test]
-    fn exact_error_body_preserves_text_and_binary_without_multiline_logs() {
-        assert_eq!(
-            exact_error_body(b"Bad Request\n", false),
-            "raw_body=\"Bad Request\\n\""
-        );
-        assert_eq!(
-            exact_error_body(br#"{"error":{"message":"a private prompt"}}"#, false),
-            r#"raw_body="{\"error\":{\"message\":\"a private prompt\"}}""#
-        );
-        assert_eq!(
-            exact_error_body(b"\x1f\x8bprivate", true),
-            format!(
-                "raw_body_base64={}",
-                base64::engine::general_purpose::STANDARD.encode(b"\x1f\x8bprivate")
-            )
-        );
-        assert_eq!(
-            exact_error_body(&vec![b'x'; MAX_ERROR_JSON + 1], false).len(),
-            "raw_body=\"\"".len() + MAX_ERROR_JSON
-        );
     }
 
     #[test]
@@ -836,9 +798,6 @@ mod tests {
         assert!(entries[1]
             .1
             .contains("code=model_max_prompt_tokens_exceeded"));
-        assert!(entries[1]
-            .1
-            .contains("raw_body=\"{\\\"error\\\":{\\\"message\\\":\\\"prompt token count"));
         assert!(!entries[1].1.contains("secret prompt"));
         assert!(entries[1].1.contains("model_max_prompt_tokens_exceeded"));
         for (_, line) in &entries {
@@ -858,16 +817,16 @@ mod tests {
         assert_eq!(history.total, 1);
         assert_eq!(history.data[0].request_id, diagnostics.id);
         assert_eq!(history.data[0].status_code, 400);
-        assert!(history.data[0]
+        assert!(!history.data[0]
             .error_message
             .as_deref()
             .unwrap()
-            .contains("raw_body="));
+            .contains("private-token"));
     }
 
     #[tokio::test]
     #[serial_test::serial]
-    async fn plain_text_upstream_400_is_saved_exactly_in_log_and_history() {
+    async fn plain_text_upstream_400_omits_raw_body_from_log_and_history() {
         let logger = captured_logger();
         let db = Arc::new(Database::memory().unwrap());
         let diagnostics = make_diagnostics(db.clone());
@@ -894,15 +853,16 @@ mod tests {
         let entries = logger.0.lock().unwrap().clone();
         let warning = &entries[1].1;
         assert!(warning.contains("upstream_status=400"));
-        assert!(warning.contains("body=kind=text bytes=12 raw_body=\"Bad Request\\n\""));
-        assert_eq!(warning.lines().count(), 1);
+        assert!(warning.contains("body=kind=text bytes=12"));
+        assert!(!warning.contains("Bad Request"));
+        assert!(!warning.contains("raw_body="));
         let history = db.get_request_logs(&Default::default(), 0, 10).unwrap();
         assert_eq!(history.data[0].request_id, diagnostics.id);
-        assert!(history.data[0]
-            .error_message
-            .as_deref()
-            .unwrap()
-            .contains("raw_body=\"Bad Request\\n\""));
+        assert_eq!(history.data[0].status_code, 400);
+        let saved = history.data[0].error_message.as_deref().unwrap();
+        assert!(saved.contains("kind=text bytes=12"));
+        assert!(!saved.contains("Bad Request"));
+        assert!(!saved.contains("raw_body="));
     }
 
     #[tokio::test]
@@ -938,7 +898,6 @@ mod tests {
             .contains(&format!("response_bytes={}", encoded.len())));
         assert!(entries[1].1.contains("kind=compressed"));
         assert!(!entries[1].1.contains("private compressed"));
-        assert!(entries[1].1.contains("raw_body_base64="));
 
         logger.0.lock().unwrap().clear();
         let diagnostics = make_diagnostics(Arc::new(Database::memory().unwrap()));
@@ -963,7 +922,7 @@ mod tests {
         let entries = logger.0.lock().unwrap().clone();
         assert!(entries[1].1.contains("body_truncated=true"));
         assert!(entries[1].1.contains("kind=truncated"));
-        assert!(entries[1].1.contains("raw_body=\"pppppp"));
+        assert!(!entries[1].1.contains("pppppp"));
     }
 
     #[tokio::test]

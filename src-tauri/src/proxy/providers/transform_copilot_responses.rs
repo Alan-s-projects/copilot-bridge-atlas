@@ -1,4 +1,5 @@
 //! Adapt Codex-only tools to the function-only Responses dialect exposed by xAI.
+use super::codex_responses_sse as sse;
 use super::transform_codex_chat::{
     build_codex_tool_context_from_request, response_tool_call_item_from_chat_name,
     responses_custom_tool_call_to_chat_tool_call, responses_function_call_to_chat_tool_call,
@@ -14,6 +15,7 @@ use crate::proxy::{
 use bytes::Bytes;
 use futures::StreamExt;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 
 pub(crate) fn adapt_request(body: &mut Value) -> Result<(), ProxyError> {
     let context = build_codex_tool_context_from_request(body);
@@ -86,16 +88,23 @@ pub(crate) fn adapt_request(body: &mut Value) -> Result<(), ProxyError> {
     Ok(())
 }
 
-fn restore_item(item: &mut Value, context: &CodexToolContext) {
+struct CompletedFunctionCall {
+    call_id: String,
+    item_id: String,
+    arguments: String,
+}
+
+fn restore_item(item: &mut Value, context: &CodexToolContext) -> Option<CompletedFunctionCall> {
     if item["type"] != "function_call" {
-        return;
+        return None;
     }
     let Some(name) = item.get("name").and_then(Value::as_str) else {
-        return;
+        return None;
     };
     if context.lookup_chat_name(name).is_none() {
-        return;
+        return None;
     }
+    let repair = context.should_buffer_arguments(name);
     *item = response_tool_call_item_from_chat_name(
         item.get("id").and_then(Value::as_str).unwrap_or(""),
         item.get("status")
@@ -107,6 +116,14 @@ fn restore_item(item: &mut Value, context: &CodexToolContext) {
         None,
         context,
     );
+    if !repair || item["type"] != "function_call" {
+        return None;
+    }
+    Some(CompletedFunctionCall {
+        call_id: item.get("call_id")?.as_str()?.to_string(),
+        item_id: item.get("id")?.as_str()?.to_string(),
+        arguments: item.get("arguments")?.as_str()?.to_string(),
+    })
 }
 
 fn restore_output(response: &mut Value, context: &CodexToolContext) {
@@ -117,7 +134,29 @@ fn restore_output(response: &mut Value, context: &CodexToolContext) {
     }
 }
 
-fn restore_block(block: &str, context: &CodexToolContext) -> Option<String> {
+fn argument_events(
+    call: CompletedFunctionCall,
+    output_index: u32,
+    emitted: &mut HashSet<String>,
+) -> String {
+    if !emitted.insert(call.call_id) {
+        return String::new();
+    }
+    let mut events =
+        sse::function_call_arguments_delta(output_index, &call.item_id, &call.arguments).to_vec();
+    events.extend_from_slice(&sse::function_call_arguments_done(
+        output_index,
+        &call.item_id,
+        &call.arguments,
+    ));
+    String::from_utf8(events).expect("SSE JSON events are UTF-8")
+}
+
+fn restore_block(
+    block: &str,
+    context: &CodexToolContext,
+    emitted: &mut HashSet<String>,
+) -> Option<String> {
     let data = block
         .lines()
         .filter_map(|line| strip_sse_field(line, "data"))
@@ -134,11 +173,36 @@ fn restore_block(block: &str, context: &CodexToolContext) -> Option<String> {
     {
         return None;
     }
+    let mut before_item = String::new();
+    let is_item_done = event["type"] == "response.output_item.done";
+    let is_complete = event["type"] == "response.completed";
+    let output_index = event
+        .get("output_index")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
     if let Some(item) = event.get_mut("item") {
-        restore_item(item, context);
+        if let Some(call) = restore_item(item, context) {
+            if is_item_done {
+                if let Some(output_index) = output_index {
+                    before_item = argument_events(call, output_index, emitted);
+                }
+            }
+        }
     }
     if let Some(response) = event.get_mut("response") {
-        restore_output(response, context);
+        if is_complete {
+            if let Some(output) = response.get_mut("output").and_then(Value::as_array_mut) {
+                for (index, item) in output.iter_mut().enumerate() {
+                    if let Some(call) = restore_item(item, context) {
+                        if let Ok(index) = u32::try_from(index) {
+                            before_item.push_str(&argument_events(call, index, emitted));
+                        }
+                    }
+                }
+            }
+        } else {
+            restore_output(response, context);
+        }
     }
     let mut output = String::new();
     for line in block
@@ -149,7 +213,7 @@ fn restore_block(block: &str, context: &CodexToolContext) -> Option<String> {
         output.push('\n');
     }
     output.push_str(&format!("data: {}", event));
-    Some(output)
+    Some(format!("{before_item}{output}"))
 }
 
 pub(crate) async fn adapt_response(
@@ -191,6 +255,7 @@ pub(crate) async fn adapt_response(
     let stream = async_stream::stream! {
         let mut buffer = String::new();
         let mut utf8 = Vec::new();
+        let mut emitted = HashSet::new();
         while let Some(chunk) = upstream.next().await {
             let chunk = match chunk { Ok(chunk) => chunk, Err(e) => { yield Err(e); return; } };
             append_utf8_safe(&mut buffer, &mut utf8, &chunk);
@@ -199,13 +264,13 @@ pub(crate) async fn adapt_response(
                 return;
             }
             while let Some(block) = take_sse_block(&mut buffer) {
-                if let Some(block) = restore_block(&block, &context) {
+                if let Some(block) = restore_block(&block, &context, &mut emitted) {
                     yield Ok(Bytes::from(format!("{block}\n\n")));
                 }
             }
         }
         if !buffer.is_empty() {
-            if let Some(block) = restore_block(&buffer, &context) { yield Ok(Bytes::from(format!("{block}\n\n"))); }
+            if let Some(block) = restore_block(&buffer, &context, &mut emitted) { yield Ok(Bytes::from(format!("{block}\n\n"))); }
         }
     };
     Ok(ProxyResponse::streamed(status, headers, stream))
@@ -353,5 +418,137 @@ mod tests {
         assert!(text.contains("tool_search_call"));
         assert!(!text.contains("functions__lookup"));
         assert!(text.contains("[DONE]"));
+    }
+
+    #[tokio::test]
+    async fn grok_repairs_native_json_and_stream_items_without_conflicting_argument_events() {
+        let request = json!({"tools":[
+            {"type":"namespace","name":"functions","tools":[
+                {"type":"function","name":"write_stdin","parameters":{"type":"object",
+                    "properties":{"session_id":{"type":"integer","format":"int32"}}}}
+            ]},
+            {"type":"custom","name":"apply_patch","format":{"type":"text"}}
+        ]});
+        let mut context = build_codex_tool_context_from_request(&request);
+        context.enable_for_outbound_model(Some("grok-4.7"));
+        let original = json!({
+            "type":"function_call","id":"fc_poll","call_id":"call_poll",
+            "name":"functions__write_stdin","status":"completed",
+            "arguments":r#"{"session_id":4876.0}"#
+        });
+        let custom = json!({
+            "type":"function_call","id":"fc_patch","call_id":"call_patch",
+            "name":"apply_patch","status":"completed",
+            "arguments":r#"{"input":"literal 4876.0"}"#
+        });
+        let upstream = json!({"id":"resp_grok","model":"grok-4.7",
+            "output":[original, custom],"usage":{"input_tokens":5,"output_tokens":2}});
+        let response = ProxyResponse::buffered(
+            StatusCode::OK,
+            HeaderMap::new(),
+            Bytes::from(upstream.to_string()),
+        );
+        let body: Value = serde_json::from_slice(
+            &adapt_response(response, context.clone())
+                .await
+                .unwrap()
+                .bytes_with_limit(10_000)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["output"][0]["arguments"], r#"{"session_id":4876}"#);
+        assert_eq!(body["output"][0]["namespace"], "functions");
+        assert_eq!(body["output"][1]["input"], "literal 4876.0");
+
+        let blocks = [
+            json!({"type":"response.output_item.added","output_index":0,
+                "item":{"type":"function_call","id":"fc_poll","call_id":"call_poll",
+                    "name":"functions__write_stdin","arguments":"","status":"in_progress"}}),
+            json!({"type":"response.function_call_arguments.delta","output_index":0,
+                "item_id":"fc_poll","delta":r#"{"session_id":48"#}),
+            json!({"type":"response.function_call_arguments.done","output_index":0,
+                "item_id":"fc_poll","arguments":r#"{"session_id":4876.0}"#}),
+            json!({"type":"response.output_item.done","output_index":0,
+                "item":upstream["output"][0]}),
+            json!({"type":"response.output_item.done","output_index":1,
+                "item":upstream["output"][1]}),
+            json!({"type":"response.completed","response":upstream}),
+        ];
+        let sse = format!(
+            "{}data: [DONE]\n\n",
+            blocks
+                .iter()
+                .map(|event| format!("data: {event}\n\n"))
+                .collect::<String>()
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "content-type",
+            HeaderValue::from_static("text/event-stream"),
+        );
+        for chunk_size in [1, 11] {
+            let response = ProxyResponse::streamed(
+                StatusCode::OK,
+                headers.clone(),
+                futures::stream::iter(
+                    sse.as_bytes()
+                        .chunks(chunk_size)
+                        .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+                        .collect::<Vec<_>>(),
+                ),
+            );
+            let text = String::from_utf8(
+                adapt_response(response, context.clone())
+                    .await
+                    .unwrap()
+                    .bytes_with_limit(20_000)
+                    .await
+                    .unwrap()
+                    .to_vec(),
+            )
+            .unwrap();
+            let events: Vec<Value> = text
+                .split("\n\n")
+                .filter_map(|block| {
+                    block
+                        .lines()
+                        .find_map(|line| strip_sse_field(line, "data"))
+                        .and_then(|data| serde_json::from_str(data).ok())
+                })
+                .collect();
+            let deltas: Vec<_> = events
+                .iter()
+                .filter(|event| event["type"] == "response.function_call_arguments.delta")
+                .collect();
+            let dones: Vec<_> = events
+                .iter()
+                .filter(|event| event["type"] == "response.function_call_arguments.done")
+                .collect();
+            assert_eq!(deltas.len(), 1);
+            assert_eq!(dones.len(), 1);
+            assert_eq!(deltas[0]["delta"], r#"{"session_id":4876}"#);
+            assert_eq!(dones[0]["arguments"], r#"{"session_id":4876}"#);
+            let done = events
+                .iter()
+                .find(|event| {
+                    event["type"] == "response.output_item.done" && event["output_index"] == 0
+                })
+                .unwrap();
+            assert_eq!(done["item"]["arguments"], r#"{"session_id":4876}"#);
+            let completed = events
+                .iter()
+                .find(|event| event["type"] == "response.completed")
+                .unwrap();
+            assert_eq!(
+                completed["response"]["output"][0]["arguments"],
+                r#"{"session_id":4876}"#
+            );
+            assert_eq!(
+                completed["response"]["output"][1]["input"],
+                "literal 4876.0"
+            );
+            assert!(text.contains("[DONE]"));
+        }
     }
 }

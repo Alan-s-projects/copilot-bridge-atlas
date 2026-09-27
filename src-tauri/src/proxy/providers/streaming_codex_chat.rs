@@ -316,6 +316,7 @@ impl ChatToResponsesState {
         if !args_delta.is_empty()
             && !is_custom_tool
             && !self.tool_context.has_wrapped_arguments(&current_name)
+            && !self.tool_context.should_buffer_arguments(&current_name)
         {
             if let Some(output_index) = output_index {
                 events.push(sse::function_call_arguments_delta(
@@ -374,6 +375,7 @@ impl ChatToResponsesState {
             if !state.arguments.is_empty()
                 && !self.tool_context.is_custom_tool_chat_name(&state.name)
                 && !self.tool_context.has_wrapped_arguments(&state.name)
+                && !self.tool_context.should_buffer_arguments(&state.name)
             {
                 events.push(sse::function_call_arguments_delta(
                     assigned,
@@ -578,7 +580,15 @@ impl ChatToResponsesState {
                 continue;
             };
             let output_index = state.output_index.unwrap_or(0);
-            let arguments = canonicalize_tool_arguments_str(&state.arguments);
+            let arguments = if self.tool_context.should_buffer_arguments(&state.name) {
+                if state.arguments.trim().is_empty() {
+                    "{}".to_string()
+                } else {
+                    state.arguments.clone()
+                }
+            } else {
+                canonicalize_tool_arguments_str(&state.arguments)
+            };
             let is_custom_tool = self.tool_context.is_custom_tool_chat_name(&state.name);
             let item = response_tool_call_item_from_chat_name(
                 &state.item_id,
@@ -607,8 +617,19 @@ impl ChatToResponsesState {
                     &input,
                 ));
             } else {
-                let arguments = self.tool_context.unwrap_arguments(&state.name, &arguments);
-                if self.tool_context.has_wrapped_arguments(&state.name) {
+                let arguments = if self.tool_context.should_buffer_arguments(&state.name) {
+                    item.get("arguments")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| {
+                            self.tool_context.unwrap_arguments(&state.name, &arguments)
+                        })
+                } else {
+                    self.tool_context.unwrap_arguments(&state.name, &arguments)
+                };
+                if self.tool_context.has_wrapped_arguments(&state.name)
+                    || self.tool_context.should_buffer_arguments(&state.name)
+                {
                     events.push(sse::function_call_arguments_delta(
                         output_index,
                         &state.item_id,
@@ -820,6 +841,129 @@ mod tests {
                 serde_json::from_str(data).ok()
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn grok_buffers_interleaved_tool_arguments_until_integer_repair_is_complete() {
+        let request = json!({"tools":[{"type":"namespace","name":"functions","tools":[
+            {"type":"function","name":"write_stdin","parameters":{"type":"object",
+                "properties":{"session_id":{"type":"integer","format":"int32"}}}},
+            {"type":"function","name":"exec_command","parameters":{"type":"object",
+                "properties":{"yield_time_ms":{"type":"integer"}}}}
+        ]}]});
+        let mut context =
+            super::super::transform_codex_chat::build_codex_tool_context_from_request(&request);
+        context.enable_for_outbound_model(Some("grok-4.7"));
+
+        let first = format!(
+            "data: {}\n\n",
+            json!({"id":"chatcmpl_parallel","model":"grok-4.7","choices":[{
+                "delta":{"tool_calls":[
+                    {"index":0,"id":"call_poll","function":{"name":"functions__write_stdin",
+                        "arguments":r#"{"session_id":48"#}},
+                    {"index":1,"id":"call_start","function":{"name":"functions__exec_command",
+                        "arguments":r#"{"yield_time_ms":120"#}}
+                ]}
+            }]})
+        );
+        let second = format!(
+            "data: {}\n\n",
+            json!({"id":"chatcmpl_parallel","model":"grok-4.7","choices":[{
+                "delta":{"tool_calls":[
+                    {"index":1,"function":{"arguments":"000.0}"}},
+                    {"index":0,"function":{"arguments":"76.0}"}}
+                ]},
+                "finish_reason":"tool_calls"
+            }]})
+        );
+        let output = collect_with_context(vec![&first, &second, "data: [DONE]\n\n"], context).await;
+        let events = parse_sse_events(&output);
+        for (index, expected) in [
+            (0, r#"{"session_id":4876}"#),
+            (1, r#"{"yield_time_ms":120000}"#),
+        ] {
+            let for_index = |kind: &str| {
+                events
+                    .iter()
+                    .filter(|event| event["type"] == kind && event["output_index"] == index)
+                    .collect::<Vec<_>>()
+            };
+            let deltas = for_index("response.function_call_arguments.delta");
+            let dones = for_index("response.function_call_arguments.done");
+            let items = for_index("response.output_item.done");
+            assert_eq!(deltas.len(), 1);
+            assert_eq!(dones.len(), 1);
+            assert_eq!(items.len(), 1);
+            assert_eq!(deltas[0]["delta"], expected);
+            assert_eq!(dones[0]["arguments"], expected);
+            assert_eq!(items[0]["item"]["arguments"], expected);
+            assert_eq!(items[0]["item"]["namespace"], "functions");
+        }
+        let completed = events
+            .iter()
+            .find(|event| event["type"] == "response.completed")
+            .unwrap();
+        assert_eq!(
+            completed["response"]["output"][0]["arguments"],
+            r#"{"session_id":4876}"#
+        );
+        assert_eq!(
+            completed["response"]["output"][1]["arguments"],
+            r#"{"yield_time_ms":120000}"#
+        );
+
+        for other_model in ["gpt-6-astra", "gemini-3.8-flash"] {
+            let mut other =
+                super::super::transform_codex_chat::build_codex_tool_context_from_request(&request);
+            other.enable_for_outbound_model(Some(other_model));
+            let output =
+                collect_with_context(vec![&first, &second, "data: [DONE]\n\n"], other).await;
+            let events = parse_sse_events(&output);
+            let done = events
+                .iter()
+                .find(|event| {
+                    event["type"] == "response.function_call_arguments.done"
+                        && event["output_index"] == 0
+                })
+                .unwrap();
+            assert_eq!(done["arguments"], r#"{"session_id":4876.0}"#);
+        }
+    }
+
+    #[tokio::test]
+    async fn interrupted_grok_stream_does_not_publish_partial_tool_arguments() {
+        let request = json!({"tools":[{"type":"function","name":"functions.write_stdin",
+            "parameters":{"type":"object","properties":{"session_id":{"type":"integer"}}}}]});
+        let mut context =
+            super::super::transform_codex_chat::build_codex_tool_context_from_request(&request);
+        context.enable_for_outbound_model(Some("grok-4.7"));
+        let partial = format!(
+            "data: {}\n\n",
+            json!({"id":"chatcmpl_interrupted","model":"grok-4.7",
+            "choices":[{"delta":{"tool_calls":[{
+                "index":0,"id":"call_poll",
+                "function":{"name":"functions.write_stdin",
+                    "arguments":r#"{"session_id":4876."#}
+            }]}}]})
+        );
+        let upstream = stream::iter(vec![
+            Ok(Bytes::from(partial)),
+            Err(std::io::Error::other("connection lost")),
+        ]);
+        let output = create_responses_sse_stream_from_chat_with_context(upstream, context)
+            .map(|event| event.unwrap())
+            .collect::<Vec<_>>()
+            .await;
+        let output = String::from_utf8(output.concat()).unwrap();
+        let events = parse_sse_events(&output);
+        assert!(events
+            .iter()
+            .any(|event| event["type"] == "response.failed"));
+        assert!(!events.iter().any(|event| {
+            event["type"] == "response.function_call_arguments.delta"
+                || event["type"] == "response.function_call_arguments.done"
+                || event["type"] == "response.completed"
+        }));
     }
 
     #[tokio::test]

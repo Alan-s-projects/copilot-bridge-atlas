@@ -27,6 +27,14 @@ pub fn is_valid_model_id(model: &str) -> bool {
     !model.is_empty() && !model.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
+/// Only Grok's resolved outbound identity enables schema-guided tool repair.
+pub(crate) fn is_grok_model(model: &str) -> bool {
+    let model = model.rsplit('/').next().unwrap_or(model);
+    model
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("grok-"))
+}
+
 pub fn is_selectable_model(model: &CopilotModel) -> bool {
     is_valid_model_id(&model.id)
         && model.model_picker_enabled
@@ -158,5 +166,14 @@ mod tests {
             ],
         );
         assert_eq!(transport_for(&model).unwrap().endpoint, "/V1/RESPONSES");
+    }
+
+    #[test]
+    fn scopes_tool_integer_repair_to_grok_model_ids() {
+        assert!(is_grok_model("grok-4.7"));
+        assert!(is_grok_model("xai/GROK-4.7"));
+        assert!(!is_grok_model("gpt-6-astra"));
+        assert!(!is_grok_model("gemini-3.8-flash"));
+        assert!(!is_grok_model("grokish-4.7"));
     }
 }

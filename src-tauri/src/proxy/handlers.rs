@@ -185,7 +185,7 @@ pub async fn handle_responses(
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let codex_tool_context = transform_codex_chat::build_codex_tool_context_from_request(&body);
+    let mut codex_tool_context = transform_codex_chat::build_codex_tool_context_from_request(&body);
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
@@ -209,6 +209,7 @@ pub async fn handle_responses(
     let connection_guard = result.connection_guard.take();
     let codex_upstream_format = result.codex_upstream_format;
     ctx.outbound_model = result.outbound_model.take();
+    codex_tool_context.enable_for_outbound_model(ctx.outbound_model.as_deref());
     let response = result.response;
     let response = if codex_upstream_format
         == Some(super::forwarder::CodexUpstreamFormat::CompatibleResponses)
@@ -364,7 +365,7 @@ pub async fn handle_responses_compact(
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let codex_tool_context = transform_codex_chat::build_codex_tool_context_from_request(&body);
+    let mut codex_tool_context = transform_codex_chat::build_codex_tool_context_from_request(&body);
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
@@ -388,6 +389,7 @@ pub async fn handle_responses_compact(
     let connection_guard = result.connection_guard.take();
     let codex_upstream_format = result.codex_upstream_format;
     ctx.outbound_model = result.outbound_model.take();
+    codex_tool_context.enable_for_outbound_model(ctx.outbound_model.as_deref());
     let response = result.response;
 
     if codex_response_transform(codex_upstream_format) == CodexResponseTransform::ChatCompletions {

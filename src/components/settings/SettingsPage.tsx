@@ -6,8 +6,8 @@ import {
   HardDriveDownload,
   Settings2,
   Network,
-  KeyRound,
-  Github,
+  Users,
+  BrainCircuit,
   SlidersHorizontal,
   Info,
 } from "lucide-react";
@@ -104,10 +104,10 @@ export function SettingsPage() {
               },
               {
                 value: "auth",
-                label: t("settings.tabAuth", { defaultValue: "Copilot" }),
-                icon: KeyRound,
+                label: t("settings.tabAuth", { defaultValue: "Accounts" }),
+                icon: Users,
               },
-              { value: "copilot", label: "Models", icon: Github },
+              { value: "copilot", label: "Models", icon: BrainCircuit },
               {
                 value: "advanced",
                 label: t("settings.tabAdvanced"),

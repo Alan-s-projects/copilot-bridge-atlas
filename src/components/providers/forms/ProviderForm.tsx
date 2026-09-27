@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
-import type { ManagedAuthProvider } from "@/lib/api";
 import type { Provider, ProviderMeta, CodexCatalogModel } from "@/types";
 import { CodexFormFields } from "./CodexFormFields";
 import { useCopilotAuth } from "./hooks/useCopilotAuth";
@@ -87,7 +86,6 @@ export interface ProviderFormProps {
   submitLabel?: string;
   onSubmit: (values: ProviderFormValues) => Promise<void> | void;
   onCancel?: () => void;
-  onManageAuthAccounts?: (target: ManagedAuthProvider) => void;
   initialData?: Partial<Provider>;
 }
 
@@ -103,7 +101,6 @@ export function ProviderForm({
   onCancel,
   submitLabel,
   autoSave = false,
-  onManageAuthAccounts,
 }: ProviderFormProps) {
   const { t } = useTranslation();
   const settings = initialData?.settingsConfig ?? {
@@ -352,7 +349,6 @@ export function ProviderForm({
           setAccountId(id);
           markChanged();
         }}
-        onManageAuthAccounts={onManageAuthAccounts}
         enableUltraReasoning={enableUltraReasoning}
         onEnableUltraReasoningChange={(enabled) => {
           setEnableUltraReasoning(enabled);

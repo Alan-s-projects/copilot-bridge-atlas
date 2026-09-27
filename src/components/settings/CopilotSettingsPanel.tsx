@@ -1,12 +1,11 @@
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import { Loader2 } from "lucide-react";
 import { useProvidersQuery, useUpdateProviderMutation } from "@/lib/query";
-import { providersApi, type ManagedAuthProvider } from "@/lib/api";
+import { providersApi } from "@/lib/api";
 import {
   ProviderForm,
   type ProviderFormValues,
 } from "@/components/providers/forms/ProviderForm";
-import { AuthSettingsPanel } from "@/components/providers/AuthSettingsPanel";
 import { Button } from "@/components/ui/button";
 
 export function CopilotSettingsPanel() {
@@ -14,9 +13,6 @@ export function CopilotSettingsPanel() {
   const { mutateAsync } = useUpdateProviderMutation({
     showSuccessToast: false,
   });
-  const [authTarget, setAuthTarget] = useState<ManagedAuthProvider | null>(
-    null,
-  );
   const provider =
     data?.providers[data.currentProviderId] ??
     Object.values(data?.providers ?? {})[0];
@@ -57,18 +53,11 @@ export function CopilotSettingsPanel() {
   }
 
   return (
-    <>
-      <ProviderForm
-        key={provider.id}
-        initialData={provider}
-        autoSave
-        onManageAuthAccounts={setAuthTarget}
-        onSubmit={handleSubmit}
-      />
-      <AuthSettingsPanel
-        target={authTarget}
-        onClose={() => setAuthTarget(null)}
-      />
-    </>
+    <ProviderForm
+      key={provider.id}
+      initialData={provider}
+      autoSave
+      onSubmit={handleSubmit}
+    />
   );
 }

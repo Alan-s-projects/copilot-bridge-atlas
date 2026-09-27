@@ -25,36 +25,14 @@ vi.mock("@/lib/query", () => ({
   }),
   useUpdateProviderMutation: () => ({ mutateAsync: mocks.update }),
 }));
-vi.mock("@/components/providers/AuthSettingsPanel", () => ({
-  AuthSettingsPanel: ({
-    target,
-    onClose,
-  }: {
-    target: string | null;
-    onClose: () => void;
-  }) =>
-    target ? (
-      <div>
-        account-panel<button onClick={onClose}>close-accounts</button>
-      </div>
-    ) : null,
-}));
 vi.mock("@/components/providers/forms/ProviderForm", () => ({
-  ProviderForm: ({
-    initialData,
-    onSubmit,
-    onManageAuthAccounts,
-    autoSave,
-  }: ProviderFormProps) => (
+  ProviderForm: ({ initialData, onSubmit, autoSave }: ProviderFormProps) => (
     <>
       <output data-testid="auto-save">{String(autoSave)}</output>
       <output data-testid="settings">
         {JSON.stringify(initialData?.settingsConfig)}
       </output>
       <input aria-label="Model draft" defaultValue="gpt-6-astra" />
-      <button onClick={() => onManageAuthAccounts?.("github_copilot")}>
-        accounts
-      </button>
       <button
         onClick={() =>
           onSubmit({
@@ -100,25 +78,5 @@ describe("Copilot provider editing", () => {
     expect(mocks.readLive).not.toHaveBeenCalled();
     expect(mocks.updateTray).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("settings")).toBeVisible();
-  });
-
-  it("keeps draft fields while managing accounts and closes the account panel when leaving the tab", async () => {
-    const { rerender } = render(<CopilotSettingsPanel />);
-    fireEvent.change(screen.getByRole("textbox", { name: "Model draft" }), {
-      target: { value: "draft-model" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "accounts" }));
-    expect(screen.getByText("account-panel")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "close-accounts" }));
-    expect(screen.getByRole("textbox", { name: "Model draft" })).toHaveValue(
-      "draft-model",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "accounts" }));
-    rerender(<></>);
-    await waitFor(() =>
-      expect(screen.queryByText("account-panel")).not.toBeInTheDocument(),
-    );
-    rerender(<CopilotSettingsPanel />);
-    expect(screen.queryByText("account-panel")).not.toBeInTheDocument();
   });
 });

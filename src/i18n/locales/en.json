@@ -24,7 +24,7 @@
   },
   "settings": {
     "tabGeneral": "General",
-    "tabAuth": "Auth",
+    "tabAuth": "Copilot",
     "tabAdvanced": "Advanced",
     "tabProxy": "Routing",
     "authCenter": {
@@ -124,7 +124,6 @@
     "notAuthenticated": "Not authenticated",
     "loginWithGitHub": "Login with GitHub",
     "githubAccount": "GitHub account",
-    "manageAccounts": "Manage accounts",
     "statusLoading": "Loading account status...",
     "statusUnavailable": "Status unavailable",
     "statusLoadFailed": "Failed to load GitHub Copilot account status. Please retry.",

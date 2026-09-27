@@ -15,7 +15,6 @@ import {
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { isValidModelId } from "@/utils/codexModelCatalog";
 import type { CodexCatalogModel } from "@/types";
-import type { ManagedAuthProvider } from "@/lib/api";
 
 export function isCopilotModelSupportedByCodex(model: CopilotModel): boolean {
   if (
@@ -85,7 +84,6 @@ interface CodexFormFieldsProps {
   isCopilotAuthenticated?: boolean;
   selectedGitHubAccountId?: string | null;
   onGitHubAccountSelect?: (id: string | null) => void;
-  onManageAuthAccounts?: (target: ManagedAuthProvider) => void;
   enableUltraReasoning?: boolean;
   onEnableUltraReasoningChange?: (enabled: boolean) => void;
   catalogModels: CodexCatalogModel[];
@@ -98,7 +96,6 @@ export function CodexFormFields({
   isCopilotAuthenticated,
   selectedGitHubAccountId,
   onGitHubAccountSelect,
-  onManageAuthAccounts,
   enableUltraReasoning = false,
   onEnableUltraReasoningChange,
   catalogModels,
@@ -210,11 +207,6 @@ export function CodexFormFields({
         mode="select"
         selectedAccountId={selectedGitHubAccountId}
         onAccountSelect={onGitHubAccountSelect}
-        onManageAccounts={
-          onManageAuthAccounts
-            ? () => onManageAuthAccounts("github_copilot")
-            : undefined
-        }
       />
       <section className="rounded-lg border p-4 space-y-2">
         <div className="flex items-center justify-between gap-4">

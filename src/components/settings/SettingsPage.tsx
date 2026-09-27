@@ -104,10 +104,10 @@ export function SettingsPage() {
               },
               {
                 value: "auth",
-                label: t("settings.tabAuth", { defaultValue: "Auth" }),
+                label: t("settings.tabAuth", { defaultValue: "Copilot" }),
                 icon: KeyRound,
               },
-              { value: "copilot", label: "Copilot", icon: Github },
+              { value: "copilot", label: "Models", icon: Github },
               {
                 value: "advanced",
                 label: t("settings.tabAdvanced"),

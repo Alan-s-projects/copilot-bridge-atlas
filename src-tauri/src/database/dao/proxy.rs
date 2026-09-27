@@ -80,7 +80,6 @@ impl Database {
             .map_err(|error| AppError::Database(error.to_string()))?;
         Ok(())
     }
-
 }
 
 #[cfg(test)]

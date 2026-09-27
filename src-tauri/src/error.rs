@@ -32,18 +32,10 @@ pub enum AppError {
         #[source]
         source: serde_json::Error,
     },
-    #[error("TOML parse error: {path}: {source}")]
-    Toml {
-        path: String,
-        #[source]
-        source: toml::de::Error,
-    },
     #[error("Lock failed: {0}")]
     Lock(String),
     #[error("{0}")]
     Message(String),
-    #[error("HTTP {status}: {body}")]
-    HttpStatus { status: u16, body: String },
     #[error("Database error: {0}")]
     Database(String),
     #[error("No provider is configured")]
@@ -60,13 +52,6 @@ impl AppError {
 
     pub fn json(path: impl AsRef<Path>, source: serde_json::Error) -> Self {
         Self::Json {
-            path: path.as_ref().display().to_string(),
-            source,
-        }
-    }
-
-    pub fn toml(path: impl AsRef<Path>, source: toml::de::Error) -> Self {
-        Self::Toml {
             path: path.as_ref().display().to_string(),
             source,
         }

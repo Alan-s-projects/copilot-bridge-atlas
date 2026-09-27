@@ -23,7 +23,7 @@ vi.mock("react-i18next", () => ({
 }));
 vi.mock("@/hooks/useSettings", () => ({
   useSettings: () => ({
-    settings: { showInTray: true, launchOnStartup: false },
+    settings: { launchOnStartup: false },
     isLoading: false,
     isSaving: false,
     autoSaveSettings: mocks.autoSaveSettings,

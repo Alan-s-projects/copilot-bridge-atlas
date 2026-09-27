@@ -3,7 +3,7 @@ import { normalizeTrendGrouping } from "@/lib/trendGrouping";
 import type { TrendGrouping } from "@/types/usage";
 import { useSavedPreference } from "./useSavedPreference";
 
-export const trendGroupingKey = ["settings", "usageTrendGrouping"] as const;
+const trendGroupingKey = ["settings", "usageTrendGrouping"] as const;
 
 export function useUsageTrendGrouping() {
   const { query, mutation, saving } = useSavedPreference({

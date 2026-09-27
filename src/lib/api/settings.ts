@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Settings } from "@/types";
 import type { TrendGrouping, UsageRangeSelection } from "@/types/usage";
 
-export interface ConfigTransferResult {
+interface ConfigTransferResult {
   success: boolean;
   message: string;
   backupId?: string;
@@ -97,7 +97,7 @@ export interface LogConfig {
   level: "error" | "warn" | "info" | "debug" | "trace";
 }
 
-export interface BackupEntry {
+interface BackupEntry {
   filename: string;
   sizeBytes: number;
   createdAt: string;

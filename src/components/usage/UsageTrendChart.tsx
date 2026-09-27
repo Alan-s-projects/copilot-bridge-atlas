@@ -35,7 +35,7 @@ interface UsageTrendChartProps {
   refreshIntervalMs: number;
 }
 
-export interface UsageTrendStatLike {
+interface UsageTrendStatLike {
   date: string;
   startDate?: number;
   endDate?: number;
@@ -49,7 +49,7 @@ export interface UsageTrendStatLike {
   incomplete?: boolean;
 }
 
-export interface UsageTrendChartPoint {
+interface UsageTrendChartPoint {
   xKey: string;
   rawDate: string;
   label: string;

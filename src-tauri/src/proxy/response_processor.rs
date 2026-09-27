@@ -1045,8 +1045,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_log_usage_uses_response_model_and_preserves_legacy_metadata() -> Result<(), AppError>
-    {
+    async fn test_log_usage_uses_response_model_and_preserves_legacy_metadata(
+    ) -> Result<(), AppError> {
         let db = Arc::new(Database::memory()?);
         let app_type = "codex";
         seed_pricing(&db)?;
@@ -1113,7 +1113,15 @@ mod tests {
                 "SELECT model, request_model, pricing_model, total_cost_usd, cost_multiplier
                  FROM proxy_request_logs WHERE provider_id = 'provider-current'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
         assert_eq!(model, "gpt-response-fixture");

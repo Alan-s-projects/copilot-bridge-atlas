@@ -35,8 +35,6 @@ let stored: Settings;
 beforeEach(() => {
   vi.resetAllMocks();
   stored = {
-    showInTray: true,
-    language: "en",
     launchOnStartup: false,
     backupRetainCount: 10,
     usageDashboardRefreshIntervalMs: 30000,

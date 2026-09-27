@@ -2,23 +2,15 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useRequestLogs } from "@/lib/query/usage";
 import type { LogFilters, UsageRangeSelection } from "@/types/usage";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { UsageDateRangePicker } from "./UsageDateRangePicker";
 import { RequestLogsGrid } from "./RequestLogsGrid";
 
 interface RequestLogTableProps {
   columns?: string[];
   range: UsageRangeSelection;
-  rangeLabel: string;
+  rangeLabel?: string;
   appType?: string;
   providerName?: string;
   model?: string;
@@ -28,18 +20,15 @@ interface RequestLogTableProps {
 
 export function RequestLogTable({
   range,
-  rangeLabel,
   appType: dashboardAppType,
   providerName,
   model,
   refreshIntervalMs,
-  onRangeChange,
   columns,
 }: RequestLogTableProps) {
   const { t } = useTranslation();
 
-  // Model selection is shared with the dashboard; status filtering is local.
-  const [statusCode, setStatusCode] = useState<number | undefined>(undefined);
+  // Model and range selection are shared with the dashboard.
   const [page, setPage] = useState(0);
   const [pageInput, setPageInput] = useState("");
   const pageSize = 20;
@@ -51,7 +40,6 @@ export function RequestLogTable({
         : undefined,
     providerName,
     model,
-    statusCode,
   };
 
   const { data: result, isLoading } = useRequestLogs({
@@ -90,42 +78,6 @@ export function RequestLogTable({
 
   return (
     <div className="space-y-4">
-      <div className="rounded-lg border bg-card/50 p-2 backdrop-blur-sm">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {/* Status code */}
-          <Select
-            value={statusCode?.toString() || "all"}
-            onValueChange={(v) => {
-              const parsed = Number.parseInt(v, 10);
-              setStatusCode(
-                v === "all" || !Number.isFinite(parsed) ? undefined : parsed,
-              );
-              setPage(0);
-            }}
-          >
-            <SelectTrigger className="h-8 w-[100px] bg-background text-xs">
-              <SelectValue placeholder={t("usage.statusCode")} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">{t("common.all")}</SelectItem>
-              <SelectItem value="200">200 OK</SelectItem>
-              <SelectItem value="400">400</SelectItem>
-              <SelectItem value="401">401</SelectItem>
-              <SelectItem value="429">429</SelectItem>
-              <SelectItem value="500">500</SelectItem>
-            </SelectContent>
-          </Select>
-
-          {onRangeChange && (
-            <UsageDateRangePicker
-              selection={range}
-              triggerLabel={rangeLabel}
-              onApply={onRangeChange}
-            />
-          )}
-        </div>
-      </div>
-
       {isLoading ? (
         <div className="h-[400px] animate-pulse rounded bg-gray-100" />
       ) : (

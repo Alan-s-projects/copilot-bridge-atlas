@@ -84,6 +84,9 @@ describe("RequestLogTable", () => {
       screen.getAllByRole("columnheader").map((header) => header.textContent),
     ).toEqual(["usage.time", "usage.cost"]);
     expect(screen.getByRole("cell")).toHaveAttribute("colspan", "2");
+    expect(
+      screen.queryByPlaceholderText("usage.statusCode"),
+    ).not.toBeInTheDocument();
   });
 
   it.each([false, true])(

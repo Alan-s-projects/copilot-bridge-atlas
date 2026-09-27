@@ -1491,6 +1491,53 @@ mod tests {
             }
         }
 
+        async fn mock_strict_tool_selection_upstream() -> MockUpstream {
+            let requests = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+            let capture = requests.clone();
+            let app = axum::Router::new().fallback(move |request: axum::extract::Request| {
+                let capture = capture.clone();
+                async move {
+                    let (parts, body) = request.into_parts();
+                    let bytes = axum::body::to_bytes(body, 1024 * 1024).await.unwrap();
+                    let body: Value = serde_json::from_slice(&bytes).unwrap();
+                    let has_tools = body
+                        .get("tools")
+                        .and_then(Value::as_array)
+                        .is_some_and(|tools| !tools.is_empty());
+                    let invalid = !has_tools
+                        && (body.get("tool_choice").is_some()
+                            || body.get("parallel_tool_calls").is_some());
+                    capture.lock().await.push(CapturedRequest {
+                        uri: parts.uri,
+                        headers: parts.headers,
+                        body,
+                    });
+                    http::Response::builder()
+                        .status(if invalid {
+                            StatusCode::BAD_REQUEST
+                        } else {
+                            StatusCode::OK
+                        })
+                        .body(axum::body::Body::from(if invalid {
+                            "Bad Request\n"
+                        } else {
+                            "{}"
+                        }))
+                        .unwrap()
+                }
+            });
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            MockUpstream {
+                endpoint,
+                requests,
+                task,
+            }
+        }
+
         fn fixture(
             upstream: &MockUpstream,
             protocol: CopilotProtocol,
@@ -1550,6 +1597,77 @@ mod tests {
                     ]}
                 ]
             })
+        }
+
+        #[tokio::test]
+        async fn grok_compaction_reaches_a_strict_upstream_without_tool_selection() {
+            let upstream = mock_strict_tool_selection_upstream().await;
+            let (mut forwarder, provider) = fixture(&upstream, CopilotProtocol::Responses);
+            let model = &mut forwarder.copilot_fixture.as_mut().unwrap().models[0];
+            model.id = "grok-4.7".into();
+            model.vendor = "xAI".into();
+
+            let requests = [
+                json!({
+                    "model":"grok-4.7","stream":true,
+                    "input":[{"role":"user","content":"Synthetic compaction input."}],
+                    "tools":[],"tool_choice":"auto","parallel_tool_calls":true
+                }),
+                json!({
+                    "model":"grok-4.7","stream":true,
+                    "input":[{"role":"user","content":"No tools declared."}],
+                    "tool_choice":"auto","parallel_tool_calls":true
+                }),
+                json!({
+                    "model":"grok-4.7","stream":true,
+                    "input":[{"type":"additional_tools","role":"developer","tools":[
+                        {"type":"function","name":"lookup","parameters":{"type":"object","properties":{}}}
+                    ]}],
+                    "tools":[],"tool_choice":"auto","parallel_tool_calls":true
+                }),
+            ];
+            for request in requests {
+                let result = forwarder
+                    .forward_request(
+                        http::Method::POST,
+                        "/responses",
+                        request,
+                        HeaderMap::new(),
+                        &provider,
+                        &mut ReasoningEffort::default(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    result.codex_upstream_format,
+                    Some(CodexUpstreamFormat::CompatibleResponses)
+                );
+                assert_eq!(
+                    result
+                        .response
+                        .bytes_with_limit(1024)
+                        .await
+                        .unwrap()
+                        .as_ref(),
+                    b"{}"
+                );
+            }
+
+            let captured = upstream.requests.lock().await;
+            assert_eq!(captured.len(), 3);
+            for request in &captured[..2] {
+                assert_eq!(request.uri.path(), "/responses");
+                assert!(request.body.get("tool_choice").is_none());
+                assert!(request.body.get("parallel_tool_calls").is_none());
+                assert!(request
+                    .body
+                    .get("tools")
+                    .and_then(Value::as_array)
+                    .is_none_or(Vec::is_empty));
+            }
+            assert_eq!(captured[2].body["tools"].as_array().unwrap().len(), 1);
+            assert_eq!(captured[2].body["tool_choice"], "auto");
+            assert_eq!(captured[2].body["parallel_tool_calls"], true);
         }
 
         #[tokio::test]

@@ -37,6 +37,10 @@ struct Details {
     outgoing_bytes: usize,
     input_items: usize,
     tools: usize,
+    tools_state: &'static str,
+    requested_tool_choice: &'static str,
+    upstream_tool_choice: &'static str,
+    parallel_tool_calls: &'static str,
     status: Option<u16>,
     declared_bytes: Option<u64>,
     encoding: Option<String>,
@@ -79,6 +83,10 @@ impl RequestDiagnostics {
                 transport: "unresolved",
                 applied_effort: "none".into(),
                 upstream_model: "unresolved".into(),
+                tools_state: "unresolved",
+                requested_tool_choice: "unresolved",
+                upstream_tool_choice: "unresolved",
+                parallel_tool_calls: "unresolved",
                 ..Details::default()
             }),
             response_bytes: AtomicU64::new(0),
@@ -107,6 +115,7 @@ impl RequestDiagnostics {
             .get("tools")
             .and_then(Value::as_array)
             .map_or(0, Vec::len);
+        details.requested_tool_choice = tool_choice_kind(body.get("tool_choice"));
     }
 
     pub fn outgoing(
@@ -139,6 +148,9 @@ impl RequestDiagnostics {
             .get("tools")
             .and_then(Value::as_array)
             .map_or(0, Vec::len);
+        details.tools_state = tools_state(body.get("tools"));
+        details.upstream_tool_choice = tool_choice_kind(body.get("tool_choice"));
+        details.parallel_tool_calls = parallel_tool_calls_kind(body.get("parallel_tool_calls"));
     }
 
     fn response_headers(&self, status: u16, headers: &HeaderMap) {
@@ -206,7 +218,7 @@ impl RequestDiagnostics {
         let details = self.details().clone();
         log::info!(
             target: "atlas_http",
-            "atlas_id={} status={} elapsed_ms={} endpoint={} requested_model={} upstream_model={} transport={} streaming={} applied_effort={} outgoing_bytes={} input_items={} tools={} response_bytes={} declared_bytes={} truncated={} outcome={} upstream_ids={}",
+            "atlas_id={} status={} elapsed_ms={} endpoint={} requested_model={} upstream_model={} transport={} streaming={} applied_effort={} outgoing_bytes={} input_items={} tools={} tools_state={} requested_tool_choice={} upstream_tool_choice={} parallel_tool_calls={} response_bytes={} declared_bytes={} truncated={} outcome={} upstream_ids={}",
             self.id,
             details.status.map_or_else(|| "none".into(), |value| value.to_string()),
             self.started.elapsed().as_millis(),
@@ -219,6 +231,10 @@ impl RequestDiagnostics {
             details.outgoing_bytes,
             details.input_items,
             details.tools,
+            details.tools_state,
+            details.requested_tool_choice,
+            details.upstream_tool_choice,
+            details.parallel_tool_calls,
             self.response_bytes.load(Ordering::Relaxed),
             details.declared_bytes.map_or_else(|| "none".into(), |value| value.to_string()),
             truncated,
@@ -287,7 +303,7 @@ impl RequestDiagnostics {
         };
         log::warn!(
             target: "atlas_http",
-            "atlas_id={} stage={} upstream_status={} history_status={} endpoint={} requested_model={} upstream_model={} transport={} streaming={} outgoing_bytes={} input_items={} tools={} response_bytes={} truncated={} body_truncated={} upstream_ids={} body={}",
+            "atlas_id={} stage={} upstream_status={} history_status={} endpoint={} requested_model={} upstream_model={} transport={} streaming={} outgoing_bytes={} input_items={} tools={} tools_state={} requested_tool_choice={} upstream_tool_choice={} parallel_tool_calls={} response_bytes={} truncated={} body_truncated={} upstream_ids={} body={}",
             self.id,
             stage,
             details.status.map_or_else(|| "none".into(), |value| value.to_string()),
@@ -300,6 +316,10 @@ impl RequestDiagnostics {
             details.outgoing_bytes,
             details.input_items,
             details.tools,
+            details.tools_state,
+            details.requested_tool_choice,
+            details.upstream_tool_choice,
+            details.parallel_tool_calls,
             self.response_bytes.load(Ordering::Relaxed),
             self.response_truncated.load(Ordering::Relaxed),
             details.body_truncated || details.preview.len() >= MAX_ERROR_PREVIEW,
@@ -315,7 +335,15 @@ impl RequestDiagnostics {
                 "codex".into(),
                 self.requested_model.clone(),
                 history_status,
-                format!("Atlas diagnostic {}: {summary}", self.id),
+                format!(
+                    "Atlas diagnostic {}: tools={} tools_state={} requested_tool_choice={} upstream_tool_choice={} parallel_tool_calls={} {summary}",
+                    self.id,
+                    details.tools,
+                    details.tools_state,
+                    details.requested_tool_choice,
+                    details.upstream_tool_choice,
+                    details.parallel_tool_calls,
+                ),
                 self.started.elapsed().as_millis() as u64,
                 details.streaming,
                 Some(self.session_id.clone()),
@@ -384,6 +412,40 @@ fn safe_path(endpoint: &str) -> String {
         return "[invalid-path]".into();
     }
     path.to_owned()
+}
+
+fn tools_state(value: Option<&Value>) -> &'static str {
+    match value {
+        None => "absent",
+        Some(Value::Null) => "null",
+        Some(Value::Array(tools)) if tools.is_empty() => "empty",
+        Some(Value::Array(_)) => "nonempty",
+        Some(_) => "other",
+    }
+}
+
+fn tool_choice_kind(value: Option<&Value>) -> &'static str {
+    match value {
+        None => "absent",
+        Some(Value::String(choice)) => match choice.as_str() {
+            "auto" => "auto",
+            "none" => "none",
+            "required" => "required",
+            _ => "other",
+        },
+        Some(Value::Object(_)) => "object",
+        Some(Value::Null) => "null",
+        Some(_) => "other",
+    }
+}
+
+fn parallel_tool_calls_kind(value: Option<&Value>) -> &'static str {
+    match value {
+        None => "absent",
+        Some(Value::Bool(true)) => "true",
+        Some(Value::Bool(false)) => "false",
+        Some(_) => "other",
+    }
 }
 
 fn safe_identifier(value: &str, limit: usize) -> String {
@@ -755,6 +817,67 @@ mod tests {
         assert!(safe_correlation_id("request-123").is_some());
         assert!(safe_correlation_id("Bearer secret").is_none());
         assert!(safe_correlation_id("gho_secret").is_none());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn tool_selection_diagnostics_show_the_sent_shape_without_values() {
+        let logger = captured_logger();
+        let db = Arc::new(Database::memory().unwrap());
+        let diagnostics = RequestDiagnostics::new(
+            db.clone(),
+            "copilot".into(),
+            "grok-4.7".into(),
+            "test-session".into(),
+            Instant::now(),
+        );
+        diagnostics.request_shape(
+            "/responses",
+            &serde_json::json!({"input":[{"content":"private prompt"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":true}),
+        );
+        diagnostics.outgoing(
+            Some("grok-4.7"),
+            "compatible_responses",
+            true,
+            &ReasoningEffort::default(),
+            100,
+            &serde_json::json!({"input":[{"content":"private prompt"}],"tools":[],"parallel_tool_calls":null}),
+        );
+        let response = diagnostics.observe(ProxyResponse::buffered(
+            StatusCode::BAD_REQUEST,
+            HeaderMap::new(),
+            Bytes::from_static(b"Bad Request\n"),
+        ));
+        let body = response.bytes_with_limit(1024).await.unwrap();
+        diagnostics.error_body(&body, true);
+        diagnostics.proxy_failure(
+            "upstream",
+            &ProxyError::UpstreamError {
+                status: 400,
+                body: Some("Bad Request\n".into()),
+            },
+        );
+        let entries = logger.0.lock().unwrap().clone();
+        for (_, line) in &entries {
+            assert!(line.contains("tools=0 tools_state=empty requested_tool_choice=auto upstream_tool_choice=absent parallel_tool_calls=other"));
+            assert!(!line.contains("private prompt"));
+            assert!(!line.contains("Bad Request"));
+        }
+        let history = db.get_request_logs(&Default::default(), 0, 10).unwrap();
+        let saved = history.data[0].error_message.as_deref().unwrap();
+        assert!(saved.contains("requested_tool_choice=auto upstream_tool_choice=absent"));
+        assert!(!saved.contains("private prompt"));
+        assert!(!saved.contains("Bad Request"));
+
+        assert_eq!(
+            tool_choice_kind(Some(&Value::String("Bearer private".into()))),
+            "other"
+        );
+        assert_eq!(
+            tool_choice_kind(Some(&serde_json::json!({"name":"private"}))),
+            "object"
+        );
+        assert_eq!(tools_state(Some(&serde_json::json!([{}]))), "nonempty");
     }
 
     #[tokio::test]

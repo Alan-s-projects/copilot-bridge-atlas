@@ -1,7 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
 import { settingsApi } from "@/lib/api/settings";
 import type { UsageRangeSelection } from "@/types/usage";
+import { useSavedPreference } from "./useSavedPreference";
 
 const queryKey = ["settings", "usageDateRange"] as const;
 const DEFAULT_RANGE: UsageRangeSelection = { preset: "today" };
@@ -29,40 +28,16 @@ export function normalizeUsageDateRange(value: unknown): UsageRangeSelection {
 }
 
 export function useUsageDateRange() {
-  const client = useQueryClient();
-  const query = useQuery({
+  const { query, mutation } = useSavedPreference({
     queryKey,
-    queryFn: settingsApi.getUsageDateRange,
-    retry: false,
-    staleTime: Infinity,
-  });
-  const save = useMutation({
-    mutationKey: queryKey,
-    scope: { id: "usage-date-range" },
-    mutationFn: settingsApi.setUsageDateRange,
-    onMutate: async (range: UsageRangeSelection) => {
-      await client.cancelQueries({ queryKey });
-      const previous = client.getQueryData(queryKey);
-      client.setQueryData(queryKey, range);
-      return { previous };
-    },
-    onSuccess: (saved) => {
-      if (client.isMutating({ mutationKey: queryKey }) === 1)
-        client.setQueryData(queryKey, saved);
-    },
-    onError: (_error, _range, context) => {
-      if (client.isMutating({ mutationKey: queryKey }) === 1)
-        client.setQueryData(queryKey, context?.previous);
-      toast.error("Could not save the usage date range.");
-    },
-    onSettled: () => {
-      if (client.isMutating({ mutationKey: queryKey }) === 1)
-        return client.invalidateQueries({ queryKey });
-    },
+    load: settingsApi.getUsageDateRange,
+    save: settingsApi.setUsageDateRange,
+    optimisticUpdate: (_previous, next: UsageRangeSelection) => next,
+    errorMessage: "Could not save the usage date range.",
   });
   return {
     range: normalizeUsageDateRange(query.isError ? undefined : query.data),
     isLoading: query.isLoading,
-    change: save.mutate,
+    change: mutation.mutate,
   };
 }

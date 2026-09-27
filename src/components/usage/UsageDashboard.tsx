@@ -339,11 +339,9 @@ export function UsageDashboard({
               <RequestLogTable
                 columns={tableColumns?.requestLogs}
                 range={range}
-                rangeLabel={rangeLabel}
                 appType={appType}
                 model={model}
                 refreshIntervalMs={refreshIntervalMs}
-                onRangeChange={setRange}
               />
             </TabsContent>
             <TabsContent value="models" className="mt-0">

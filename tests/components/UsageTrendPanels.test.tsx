@@ -39,13 +39,11 @@ vi.mock("recharts", () => ({
 
 beforeEach(() => {
   mocks.change.mockReset();
-  mocks.trends
-    .mockReset()
-    .mockReturnValue({
-      data: { buckets: [], hasIncompleteRollupData: false },
-      isLoading: false,
-      isError: false,
-    });
+  mocks.trends.mockReset().mockReturnValue({
+    data: { buckets: [], hasIncompleteRollupData: false },
+    isLoading: false,
+    isError: false,
+  });
   mocks.grouping = { interval: 1, unit: "day" };
 });
 

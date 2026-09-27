@@ -34,7 +34,10 @@ beforeEach(() => {
     mocks.getRange.mockResolvedValue(value);
     return value;
   });
-  mocks.setGrouping.mockReset().mockImplementation(async (value) => value);
+  mocks.setGrouping.mockReset().mockImplementation(async (value) => {
+    mocks.getGrouping.mockResolvedValue(value);
+    return value;
+  });
 });
 
 function setup() {

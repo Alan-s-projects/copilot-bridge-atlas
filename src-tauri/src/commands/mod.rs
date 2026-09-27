@@ -9,7 +9,6 @@ mod misc;
 mod provider;
 mod proxy;
 mod settings;
-mod stream_check;
 pub(crate) mod sync_support;
 
 mod usage;
@@ -23,6 +22,5 @@ pub use misc::*;
 pub use provider::*;
 pub use proxy::*;
 pub use settings::*;
-pub use stream_check::*;
 
 pub use usage::*;

@@ -14,6 +14,8 @@ AGENTS.md
 /.idea
 /.vscode
 vitest-report.json
+__pycache__/
+*.pyc
 nul
 
 .worktrees/

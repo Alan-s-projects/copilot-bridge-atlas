@@ -10,9 +10,7 @@ export interface UseSettingsResult {
   settings: SettingsFormState | null;
   isLoading: boolean;
   isSaving: boolean;
-  autoSaveSettings: (
-    updates: Partial<SettingsFormState>,
-  ) => Promise<boolean>;
+  autoSaveSettings: (updates: Partial<SettingsFormState>) => Promise<boolean>;
 }
 
 export type { SettingsFormState };
@@ -24,11 +22,10 @@ export function useSettings(): UseSettingsResult {
   const { t } = useTranslation();
   const saveMutation = useSaveSettingsMutation();
   const [saveState, setSaveState] = useState({ pending: 0, completed: 0 });
-  const {
-    settings,
-    isLoading,
-    updateSettings,
-  } = useSettingsForm(saveState.pending > 0, saveState.completed);
+  const { settings, isLoading, updateSettings } = useSettingsForm(
+    saveState.pending > 0,
+    saveState.completed,
+  );
 
   const runSave = useCallback(async <T>(save: () => Promise<T>): Promise<T> => {
     setSaveState((state) => ({ ...state, pending: state.pending + 1 }));

@@ -34,18 +34,6 @@ vi.mock("@/components/ui/input", () => ({
   Input: (props: any) => <input {...props} />,
 }));
 
-vi.mock("@/components/ui/select", () => ({
-  Select: ({ children }: any) => <div>{children}</div>,
-  SelectTrigger: ({ children, ...props }: any) => (
-    <button type="button" {...props}>
-      {children}
-    </button>
-  ),
-  SelectValue: ({ placeholder }: any) => <span>{placeholder ?? null}</span>,
-  SelectContent: () => null,
-  SelectItem: () => null,
-}));
-
 vi.mock("@/components/ui/table", () => ({
   Table: ({ children, ...props }: any) => <table {...props}>{children}</table>,
   TableBody: ({ children }: any) => <tbody>{children}</tbody>,
@@ -75,7 +63,6 @@ describe("RequestLogTable", () => {
     render(
       <RequestLogTable
         range={{ preset: "today" }}
-        rangeLabel="Today"
         refreshIntervalMs={0}
         columns={["time", "cost"]}
       />,
@@ -84,9 +71,6 @@ describe("RequestLogTable", () => {
       screen.getAllByRole("columnheader").map((header) => header.textContent),
     ).toEqual(["usage.time", "usage.cost"]);
     expect(screen.getByRole("cell")).toHaveAttribute("colspan", "2");
-    expect(
-      screen.queryByPlaceholderText("usage.statusCode"),
-    ).not.toBeInTheDocument();
   });
 
   it.each([false, true])(
@@ -126,7 +110,6 @@ describe("RequestLogTable", () => {
       render(
         <RequestLogTable
           range={{ preset: "today" }}
-          rangeLabel="Today"
           appType="codex"
           refreshIntervalMs={0}
         />,
@@ -185,7 +168,6 @@ describe("RequestLogTable", () => {
     const { rerender } = render(
       <RequestLogTable
         range={initialRange}
-        rangeLabel="Today"
         appType="codex"
         refreshIntervalMs={0}
       />,
@@ -205,7 +187,6 @@ describe("RequestLogTable", () => {
     rerender(
       <RequestLogTable
         range={nextRange}
-        rangeLabel="Custom"
         appType="codex"
         refreshIntervalMs={0}
       />,
@@ -221,15 +202,72 @@ describe("RequestLogTable", () => {
     });
   });
 
+  it("returns to the last available page when refreshed results shrink", async () => {
+    let total = 120;
+    useRequestLogsMock.mockImplementation(({ page, pageSize }) => ({
+      data: { data: [], total, page, pageSize },
+      isLoading: false,
+    }));
+    const props = {
+      range: { preset: "today" } as UsageRangeSelection,
+      refreshIntervalMs: 0,
+    };
+    const { rerender } = render(<RequestLogTable {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "6" }));
+    await waitFor(() =>
+      expect(useRequestLogsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 5 }),
+      ),
+    );
+    total = 30;
+    rerender(<RequestLogTable {...props} />);
+    await waitFor(() =>
+      expect(useRequestLogsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 1 }),
+      ),
+    );
+    total = 0;
+    rerender(<RequestLogTable {...props} />);
+    await waitFor(() =>
+      expect(useRequestLogsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 0 }),
+      ),
+    );
+  });
+
+  it("resets pagination when the custom range switches to a live end", async () => {
+    const range: UsageRangeSelection = {
+      preset: "custom",
+      customStartDate: 1000,
+      customEndDate: 2000,
+      liveEndTime: false,
+    };
+    const { rerender } = render(
+      <RequestLogTable range={range} refreshIntervalMs={0} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "2" }));
+    await waitFor(() =>
+      expect(useRequestLogsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 1 }),
+      ),
+    );
+    rerender(
+      <RequestLogTable
+        range={{ ...range, liveEndTime: true }}
+        refreshIntervalMs={0}
+      />,
+    );
+    await waitFor(() =>
+      expect(useRequestLogsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 0 }),
+      ),
+    );
+  });
+
   it("resets pagination when the dashboard model filter changes", async () => {
     const range: UsageRangeSelection = { preset: "today" };
     const { rerender } = render(
-      <RequestLogTable
-        range={range}
-        rangeLabel="Today"
-        appType="codex"
-        refreshIntervalMs={0}
-      />,
+      <RequestLogTable range={range} appType="codex" refreshIntervalMs={0} />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "2" }));
@@ -246,7 +284,6 @@ describe("RequestLogTable", () => {
     rerender(
       <RequestLogTable
         range={range}
-        rangeLabel="Today"
         appType="codex"
         model="gpt-6-astra"
         refreshIntervalMs={0}

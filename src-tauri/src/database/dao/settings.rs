@@ -49,14 +49,10 @@ impl Database {
     }
 
     pub fn get_usage_table_columns(&self) -> Result<crate::settings::UsageTableColumns, AppError> {
-        self.get_setting("usage_table_columns")?
-            .map(|json| {
-                serde_json::from_str(&json).map_err(|error| {
-                    AppError::Database(format!("Invalid column settings: {error}"))
-                })
-            })
-            .transpose()
-            .map(|settings| settings.unwrap_or_default())
+        Ok(self
+            .get_setting("usage_table_columns")?
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default())
     }
 
     pub fn set_usage_table_columns(
@@ -74,9 +70,7 @@ impl Database {
             )
             .optional()?;
         let mut settings: crate::settings::UsageTableColumns = saved
-            .map(|json| serde_json::from_str(&json))
-            .transpose()
-            .map_err(|error| AppError::Database(format!("Invalid column settings: {error}")))?
+            .and_then(|json| serde_json::from_str(&json).ok())
             .unwrap_or_default();
         match table {
             "requestLogs" => settings.request_logs = Some(columns),

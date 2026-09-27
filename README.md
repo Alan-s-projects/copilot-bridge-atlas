@@ -6,7 +6,7 @@ read-only Codex configuration previews.
 
 ## Install and connect
 
-Download `Copilot-Bridge-Atlas-4.2.10-Windows-x64.msi` from
+Download the Windows x64 MSI from
 [Releases](https://github.com/Alan-s-projects/copilot-bridge-atlas/releases).
 The installer is per-user and unsigned.
 
@@ -23,15 +23,13 @@ pane and copying of the proposed TOML. File selection sits above aligned Connect
 and Context dropdowns, defaulting to Copilot Bridge and Unchanged. A manual TOML
 location changes the preview only.
 
-Saved reasoning levels and their default survive app restarts and model refresh.
-New models inherit Copilot's advertised reasoning defaults. Live image/parallel-tool
-declarations continue to refresh, and saved context sizes are capped to the reported
-input budget. Atlas forwards unsupported-image errors without retrying with images
-removed.
+Model names, reasoning levels, and context limits follow Copilot's live metadata.
+Model enable switches survive app restarts and refresh. Live image/parallel-tool
+declarations continue to refresh, and Codex's context budget respects the reported
+input limit. Atlas forwards unsupported-image errors without retrying with images removed.
 
-The optional 1M preset proposes a 1,000,000-token context, capped for models with a
-smaller saved limit. It leaves auto-compaction settings unchanged. Changes affect
-the proposal only.
+Connection proposals use the generated per-model catalog for context limits and
+leave auto-compaction settings unchanged. Changes affect the proposal only.
 
 An upstream HTTP 408 is reported separately from Atlas's own timeout. For repeated
 request-body timeouts in a long conversation, reduce the context or continue in a
@@ -40,12 +38,13 @@ or change Codex's compaction settings.
 
 ## Pages
 
-- **Overview:** Provider, Proxy, Today's usage, and Requests cards; endpoint, quota,
-  estimated cost, cache reuse, and the latest five requests. Connection warnings
-  appear above Provider. Health check measures
-  endpoint reachability, without an inference or authentication test.
+- **Overview:** Provider, Today's usage, and Requests cards; proxy status, endpoint,
+  quota ring, estimated cost, cache reuse, active requests, and the latest five
+  requests. Connection warnings appear above Provider.
 - **Usage:** a compact summary of cost, tokens, and requests, with token and
-  request details, history, trends, model statistics, and searchable model pricing.
+  request details, history, grouped cost/rate/token charts, model statistics, and
+  searchable model pricing. Date range, chart grouping, and table column selections
+  auto-save; all three charts share the header's model and date filters.
   Usage-range warnings identify models without a matching bundled or custom
   price and include fresh input, output, cache hits, and cache-hit rate.
   Historical recorded costs are preserved. Imported conversation totals are excluded.
@@ -58,9 +57,8 @@ Home usage updates are coalesced from request events instead of idle SQL polling
 Status and quota polling pause while the window is inactive. Close the window to
 keep the bridge in the tray; use **Quit** to exit.
 
-The compact Usage Total Cost summary rounds to whole USD and omits a separate
-currency label. Overview's estimated daily cost rounds to one decimal place.
-Request logs, stored costs, and editable per-model prices retain precision.
+Overview and Usage share the same summary component. Request logs, stored costs,
+and editable per-model prices retain precision.
 Average latency includes individual requests and weighted daily rollups for the
 selected range.
 
@@ -106,6 +104,9 @@ profile. It does not discover or reuse another application's data directory.
 Database backups can be restored through Settings → Backup & Restore.
 Folder selections saved by older Atlas versions are still honored on startup,
 without restoring the removed directory editor or modifying those selections.
+Database upgrades require a successful safety backup before migration. Existing
+retired tables remain intact and travel with backups; fresh databases create only
+the current bridge tables.
 
 ## Develop and release
 

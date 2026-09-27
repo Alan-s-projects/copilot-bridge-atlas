@@ -24,7 +24,7 @@
   },
   "settings": {
     "tabGeneral": "General",
-    "tabAuth": "Copilot",
+    "tabAuth": "Accounts",
     "tabAdvanced": "Advanced",
     "tabProxy": "Routing",
     "authCenter": {

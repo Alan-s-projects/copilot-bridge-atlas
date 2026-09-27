@@ -136,7 +136,7 @@ describe("SettingsPage", () => {
     );
     expect(content).toHaveAttribute("tabindex", "0");
     content.scrollTop = 300;
-    fireEvent.click(screen.getByRole("button", { name: "Copilot" }));
+    fireEvent.click(screen.getByRole("button", { name: "Accounts" }));
     expect(content.scrollTop).toBe(0);
     expect(content).toHaveTextContent("Auth settings");
     expect(

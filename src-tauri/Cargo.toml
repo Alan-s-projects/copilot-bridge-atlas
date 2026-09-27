@@ -1,6 +1,6 @@
 [package]
 name = "copilot-bridge-atlas"
-version = "5.0.4"
+version = "5.0.5"
 description = "Codex GitHub Copilot bridge with usage dashboard"
 authors = ["Alan's Projects"]
 license = "MIT"

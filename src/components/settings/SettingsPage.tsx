@@ -8,7 +8,6 @@ import {
   Network,
   Users,
   BrainCircuit,
-  SlidersHorizontal,
   Info,
 } from "lucide-react";
 import {
@@ -108,11 +107,6 @@ export function SettingsPage() {
                 icon: Users,
               },
               { value: "copilot", label: "Models", icon: BrainCircuit },
-              {
-                value: "advanced",
-                label: t("settings.tabAdvanced"),
-                icon: SlidersHorizontal,
-              },
               { value: "about", label: "About", icon: Info },
             ].map(({ value, label, icon: Icon }) => (
               <TabsTrigger
@@ -176,7 +170,8 @@ export function SettingsPage() {
                 <CopilotSettingsPanel />
               </TabsContent>
 
-              <TabsContent value="advanced" className="space-y-6 mt-0 pb-4">
+              <TabsContent value="about" className="mt-0 space-y-6 pb-4">
+                <AboutSection />
                 {settings ? (
                   <motion.div
                     initial={{ opacity: 0, y: 10 }}
@@ -195,15 +190,15 @@ export function SettingsPage() {
                       >
                         <AccordionTrigger className="px-6 py-4 hover:no-underline hover:bg-muted/50 data-[state=open]:bg-muted/50">
                           <div className="flex items-center gap-3">
-                            <HardDriveDownload className="h-5 w-5 text-amber-500" />
+                            <HardDriveDownload className="h-5 w-5 text-muted-foreground" />
                             <div className="text-left">
                               <h3 className="text-base font-semibold">
-                                {t("settings.advanced.backup.title", {
+                                {t("settings.about.backup.title", {
                                   defaultValue: "Backup & Restore",
                                 })}
                               </h3>
                               <p className="text-sm text-muted-foreground font-normal">
-                                {t("settings.advanced.backup.description", {
+                                {t("settings.about.backup.description", {
                                   defaultValue:
                                     "Manage automatic backups, view and restore database snapshots",
                                 })}
@@ -228,13 +223,13 @@ export function SettingsPage() {
                       >
                         <AccordionTrigger className="px-6 py-4 hover:no-underline hover:bg-muted/50 data-[state=open]:bg-muted/50">
                           <div className="flex items-center gap-3">
-                            <ScrollText className="h-5 w-5 text-cyan-500" />
+                            <ScrollText className="h-5 w-5 text-muted-foreground" />
                             <div className="text-left">
                               <h3 className="text-base font-semibold">
-                                {t("settings.advanced.logConfig.title")}
+                                {t("settings.about.logConfig.title")}
                               </h3>
                               <p className="text-sm text-muted-foreground font-normal">
-                                {t("settings.advanced.logConfig.description")}
+                                {t("settings.about.logConfig.description")}
                               </p>
                             </div>
                           </div>
@@ -246,10 +241,6 @@ export function SettingsPage() {
                     </Accordion>
                   </motion.div>
                 ) : null}
-              </TabsContent>
-
-              <TabsContent value="about" className="mt-0 pb-4">
-                <AboutSection />
               </TabsContent>
             </div>
           </div>

@@ -27,6 +27,7 @@ INSERT OR IGNORE INTO proxy_config (app_type, listen_port) VALUES ('codex', 1572
 CREATE TABLE IF NOT EXISTS proxy_request_logs (
     request_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, app_type TEXT NOT NULL, model TEXT NOT NULL,
     request_model TEXT, pricing_model TEXT,
+    requested_reasoning_effort TEXT, applied_reasoning_effort TEXT,
     input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
     input_token_semantics INTEGER NOT NULL DEFAULT 0,
@@ -85,6 +86,7 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
         conn.execute_batch("SAVEPOINT atlas_schema;")
             .map_err(|error| AppError::Database(error.to_string()))?;
         let result = Self::create_tables_on_conn(conn)
+            .and_then(|_| Self::add_reasoning_log_columns(conn))
             .and_then(|_| Self::set_user_version(conn, SCHEMA_VERSION));
         match result {
             Ok(()) => conn
@@ -95,6 +97,23 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
                 Err(error)
             }
         }
+    }
+
+    fn add_reasoning_log_columns(conn: &Connection) -> Result<(), AppError> {
+        let mut statement = conn.prepare("PRAGMA table_info(proxy_request_logs)")?;
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<std::collections::HashSet<_>, _>>()?;
+        drop(statement);
+        for column in ["requested_reasoning_effort", "applied_reasoning_effort"] {
+            if !columns.contains(column) {
+                conn.execute(
+                    &format!("ALTER TABLE proxy_request_logs ADD COLUMN {column} TEXT"),
+                    [],
+                )?;
+            }
+        }
+        Ok(())
     }
 
     pub fn ensure_model_pricing_seeded(&self) -> Result<(), AppError> {

@@ -1,5 +1,32 @@
 use serde::{Deserialize, Serialize};
 
+/// Requested effort and the explicit value sent upstream, not inferred model behavior.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReasoningEffort {
+    pub requested: Option<String>,
+    pub applied: Option<String>,
+}
+
+impl ReasoningEffort {
+    pub fn from_request(body: &serde_json::Value) -> Self {
+        Self {
+            requested: Self::explicit_effort(body),
+            applied: None,
+        }
+    }
+
+    pub fn record_applied(&mut self, body: &serde_json::Value) {
+        self.applied = Self::explicit_effort(body);
+    }
+
+    fn explicit_effort(body: &serde_json::Value) -> Option<String> {
+        body.pointer("/reasoning/effort")
+            .or_else(|| body.get("reasoning_effort"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    }
+}
+
 /// 代理服务器配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyConfig {

@@ -7,6 +7,10 @@ import { useGlobalProxyConfig } from "@/lib/query/proxy";
 import type { ProxyStatus } from "@/types/proxy";
 import type { RequestLog } from "@/types/usage";
 import { fmtInt, fmtUsd, formatTokensShort } from "@/components/usage/format";
+import {
+  ReasoningEffortHeading,
+  ReasoningEffortValue,
+} from "@/components/usage/ReasoningEffort";
 
 const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
 const clock = (timestamp: number) =>
@@ -28,6 +32,7 @@ const RecentRequests = memo(function RecentRequests({
             {[
               "Time",
               "Model",
+              "Reasoning",
               "HTTP status",
               "Latency",
               "Tokens in / out",
@@ -37,7 +42,7 @@ const RecentRequests = memo(function RecentRequests({
                 key={heading}
                 className="whitespace-nowrap px-4 py-2 font-medium"
               >
-                {heading}
+                {heading === "Reasoning" ? <ReasoningEffortHeading /> : heading}
               </th>
             ))}
           </tr>
@@ -56,6 +61,9 @@ const RecentRequests = memo(function RecentRequests({
                 title={log.model}
               >
                 {log.model}
+              </td>
+              <td className="whitespace-nowrap px-4 py-2">
+                <ReasoningEffortValue log={log} />
               </td>
               <td
                 className={`px-4 py-2 font-mono text-xs ${log.statusCode >= 200 && log.statusCode < 400 ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}

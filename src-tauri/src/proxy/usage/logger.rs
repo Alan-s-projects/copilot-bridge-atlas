@@ -4,6 +4,7 @@ use super::calculator::{CostBreakdown, CostCalculator, ModelPricing};
 use super::parser::TokenUsage;
 use crate::database::{Database, PRICING_SOURCE_REQUEST, PRICING_SOURCE_RESPONSE};
 use crate::error::AppError;
+use crate::proxy::types::ReasoningEffort;
 use crate::services::sql_helpers::{INPUT_TOKEN_SEMANTICS_FRESH, INPUT_TOKEN_SEMANTICS_TOTAL};
 use crate::services::usage_stats::{find_model_pricing_row, is_placeholder_pricing_model};
 use rusqlite::OptionalExtension;
@@ -67,6 +68,7 @@ pub struct RequestLog {
     pub app_type: String,
     pub model: String,
     pub request_model: String,
+    pub reasoning_effort: ReasoningEffort,
     /// 写入时实际用于计价的模型名（pricing_model_source 解析后的结果）。
     /// 落库供回填使用：缺价行补价后必须按写入时的基准重算，而不是
     /// 用 model/request_model 猜——路由接管下三者可能各不相同。
@@ -173,8 +175,9 @@ impl<'a> UsageLogger<'a> {
                 input_token_semantics,
                 input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
                 latency_ms, first_token_ms, status_code, error_message, session_id,
-                provider_type, is_streaming, cost_multiplier, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)"
+                provider_type, is_streaming, cost_multiplier, created_at,
+                requested_reasoning_effort, applied_reasoning_effort
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)"
         );
         let affected_rows = conn
             .execute(
@@ -205,6 +208,8 @@ impl<'a> UsageLogger<'a> {
                     log.is_streaming as i64,
                     log.cost_multiplier,
                     created_at,
+                    log.reasoning_effort.requested,
+                    log.reasoning_effort.applied,
                 ],
             )
             .map_err(|e| AppError::Database(format!("记录请求日志失败: {e}")))?;
@@ -267,6 +272,7 @@ impl<'a> UsageLogger<'a> {
         is_streaming: bool,
         session_id: Option<String>,
         provider_type: Option<String>,
+        reasoning_effort: ReasoningEffort,
     ) -> Result<(), AppError> {
         let request_model = model.clone();
         let log = RequestLog {
@@ -275,6 +281,7 @@ impl<'a> UsageLogger<'a> {
             app_type,
             model,
             request_model,
+            reasoning_effort,
             // 错误行未经过计价，留空（回填的 has_usage 闸门也不会碰全 0 行）
             pricing_model: String::new(),
             usage: TokenUsage::default(),
@@ -364,6 +371,7 @@ impl<'a> UsageLogger<'a> {
         session_id: Option<String>,
         provider_type: Option<String>,
         is_streaming: bool,
+        reasoning_effort: ReasoningEffort,
     ) -> Result<(), AppError> {
         let pricing = self.get_model_pricing(&pricing_model)?;
 
@@ -389,6 +397,7 @@ impl<'a> UsageLogger<'a> {
             app_type,
             model,
             request_model,
+            reasoning_effort,
             pricing_model,
             usage,
             cost,
@@ -417,6 +426,7 @@ mod tests {
             app_type: "codex".to_string(),
             model: "gpt-5.6".to_string(),
             request_model: "gpt-5.6".to_string(),
+            reasoning_effort: ReasoningEffort::default(),
             pricing_model: "gpt-5.6".to_string(),
             usage: TokenUsage {
                 input_tokens,
@@ -479,6 +489,7 @@ mod tests {
             None,
             Some("claude".to_string()),
             false,
+            ReasoningEffort::default(),
         )?;
 
         // 验证记录已插入
@@ -593,6 +604,46 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_metadata_round_trips_through_logs_api_and_sql_backup() -> Result<(), AppError> {
+        use crate::services::usage_stats::LogFilters;
+
+        let db = Database::memory()?;
+        let logger = UsageLogger::new(&db);
+        for (id, requested, applied) in [
+            ("fallback", Some("ultra"), Some("max")),
+            ("unchanged", Some("high"), Some("high")),
+            ("omitted", Some("ultra"), None),
+            ("historical", None, None),
+        ] {
+            let mut log = request_log(id, 10);
+            log.reasoning_effort = ReasoningEffort {
+                requested: requested.map(str::to_owned),
+                applied: applied.map(str::to_owned),
+            };
+            logger.log_request(&log)?;
+            let logs = db.get_request_logs(&LogFilters::default(), 0, 20)?;
+            let saved = logs.data.iter().find(|row| row.request_id == id).unwrap();
+            assert_eq!(saved.requested_reasoning_effort.as_deref(), requested);
+            assert_eq!(saved.applied_reasoning_effort.as_deref(), applied);
+            let json = serde_json::to_value(saved).unwrap();
+            assert_eq!(json["requestedReasoningEffort"].as_str(), requested);
+            assert_eq!(json["appliedReasoningEffort"].as_str(), applied);
+            // Metadata changes must not double-count the same billable response.
+            log.reasoning_effort = ReasoningEffort::default();
+            logger.log_request(&log)?;
+        }
+        assert_eq!(db.get_request_logs(&LogFilters::default(), 0, 20)?.total, 4);
+        let restored = rusqlite::Connection::open_in_memory()?;
+        restored.execute_batch(&db.export_sql_string()?)?;
+        let pair: (String, String) = restored.query_row(
+            "SELECT requested_reasoning_effort, applied_reasoning_effort FROM proxy_request_logs WHERE request_id = 'fallback'",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(pair, ("ultra".into(), "max".into()));
+        Ok(())
+    }
+
+    #[test]
     fn test_log_error_with_context() -> Result<(), AppError> {
         let db = Database::memory()?;
         let logger = UsageLogger::new(&db);
@@ -608,6 +659,10 @@ mod tests {
             true,
             Some("session-error".to_string()),
             Some("github_copilot".to_string()),
+            ReasoningEffort {
+                requested: Some("ultra".into()),
+                applied: Some("high".into()),
+            },
         )?;
 
         // 验证错误记录已插入
@@ -639,6 +694,13 @@ mod tests {
         assert!(streaming);
         assert_eq!(session.as_deref(), Some("session-error"));
         assert_eq!(provider_type.as_deref(), Some("github_copilot"));
+        let pair: (String, String) = conn.query_row(
+            "SELECT requested_reasoning_effort, applied_reasoning_effort
+             FROM proxy_request_logs WHERE request_id = 'req-error'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(pair, ("ultra".into(), "high".into()));
         Ok(())
     }
 }

@@ -11,7 +11,7 @@ use super::{
         },
         inject_codex_chat_prompt_cache_key, is_codex_responses_endpoint,
     },
-    types::{CopilotOptimizerConfig, ProxyStatus},
+    types::{CopilotOptimizerConfig, ProxyStatus, ReasoningEffort},
     upstream_response::{ProxyResponse, MAX_RESPONSE_BODY_BYTES},
     ProxyError,
 };
@@ -141,7 +141,9 @@ impl RequestForwarder {
         body: Value,
         headers: http::HeaderMap,
         provider: &Provider,
+        reasoning_effort: &mut ReasoningEffort,
     ) -> Result<ForwardResult, ProxyError> {
+        *reasoning_effort = ReasoningEffort::from_request(&body);
         let guard = ActiveConnectionGuard::acquire(self.status.clone()).await;
         {
             let mut status = self.status.write().await;
@@ -151,7 +153,7 @@ impl RequestForwarder {
             status.current_provider_id = Some(provider.id.clone());
         }
         let result = self
-            .forward(provider, method, endpoint, body, &headers)
+            .forward(provider, method, endpoint, body, &headers, reasoning_effort)
             .await;
         let mut status = self.status.write().await;
         match result {
@@ -189,6 +191,7 @@ impl RequestForwarder {
         endpoint: &str,
         mut body: Value,
         headers: &http::HeaderMap,
+        reasoning_effort: &mut ReasoningEffort,
     ) -> Result<(ProxyResponse, Option<String>, Option<CodexUpstreamFormat>), ProxyError> {
         crate::copilot_bridge::require_copilot(provider)
             .map_err(|error| ProxyError::ConfigError(error.to_string()))?;
@@ -283,6 +286,8 @@ impl RequestForwarder {
             request = request.header(name, value);
         }
         let request = request.body(body_bytes);
+        // Retain the sent value even when the upstream returns an error.
+        reasoning_effort.record_applied(&body);
         let response = if streaming {
             let timeout = std::time::Duration::from_secs(600);
             tokio::time::timeout(timeout, request.send())
@@ -1050,6 +1055,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reasoning_metadata_does_not_claim_an_applied_effort_before_forwarding() {
+        let forwarder = test_forwarder();
+        let mut provider = Provider::with_id("copilot".into(), "Copilot".into(), json!({}));
+        provider.meta = Some(crate::ProviderMeta {
+            provider_type: Some("github_copilot".into()),
+            ..Default::default()
+        });
+        let mut reasoning_effort = ReasoningEffort::default();
+        let result = forwarder
+            .forward_request(
+                http::Method::POST,
+                "/responses",
+                json!({"model":"invalid model","reasoning":{"effort":"ultra"}}),
+                HeaderMap::new(),
+                &provider,
+                &mut reasoning_effort,
+            )
+            .await;
+        assert!(matches!(result, Err(ProxyError::InvalidRequest(_))));
+        assert_eq!(reasoning_effort.requested.as_deref(), Some("ultra"));
+        assert_eq!(reasoning_effort.applied, None);
+    }
+
+    #[tokio::test]
     async fn rejects_invalid_model_identifiers_before_authentication_or_forwarding() {
         let forwarder = test_forwarder();
         let mut provider = Provider::with_id("copilot".into(), "Copilot".into(), json!({}));
@@ -1064,6 +1093,7 @@ mod tests {
                 "/responses",
                 json!({"model":"invalid model","input":"hello"}),
                 &HeaderMap::new(),
+                &mut ReasoningEffort::default(),
             )
             .await;
         assert!(matches!(error, Err(ProxyError::InvalidRequest(_))));
@@ -1365,6 +1395,46 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn reasoning_metadata_survives_upstream_errors_in_both_protocols() {
+            for protocol in [CopilotProtocol::Responses, CopilotProtocol::Chat] {
+                for stream in [false, true] {
+                    let upstream = mock_upstream(
+                        StatusCode::BAD_REQUEST,
+                        HeaderMap::new(),
+                        Bytes::from_static(br#"{"error":{"message":"fixture rejection"}}"#),
+                    )
+                    .await;
+                    let (mut forwarder, provider) = fixture(&upstream, protocol);
+                    forwarder.copilot_fixture.as_mut().unwrap().models[0].reasoning_efforts =
+                        Some(vec!["low".into(), "high".into()]);
+                    let mut reasoning_effort = ReasoningEffort::default();
+                    let result = forwarder.forward_request(
+                        http::Method::POST, "/responses",
+                        json!({"model":"gpt-6-astra","input":"Hello","stream":stream,"reasoning":{"effort":"ultra"}}),
+                        HeaderMap::new(), &provider, &mut reasoning_effort,
+                    ).await;
+                    assert!(matches!(
+                        result,
+                        Err(ProxyError::UpstreamError { status: 400, .. })
+                    ));
+                    assert_eq!(reasoning_effort.requested.as_deref(), Some("ultra"));
+                    assert_eq!(reasoning_effort.applied.as_deref(), Some("high"));
+                    let requests = upstream.requests.lock().await;
+                    assert_eq!(requests.len(), 1);
+                    let path = if protocol == CopilotProtocol::Chat {
+                        "/reasoning_effort"
+                    } else {
+                        "/reasoning/effort"
+                    };
+                    assert_eq!(
+                        requests[0].body.pointer(path).and_then(Value::as_str),
+                        Some("high")
+                    );
+                }
+            }
+        }
+
+        #[tokio::test]
         async fn review_native_forwarding_repairs_old_chat_ids_without_changing_history() {
             let upstream =
                 mock_upstream(StatusCode::OK, HeaderMap::new(), Bytes::from_static(b"{}")).await;
@@ -1390,6 +1460,7 @@ mod tests {
                             json!({"model":"gpt-6-astra", "input":input, "stream":stream}),
                             HeaderMap::new(),
                             &provider,
+                            &mut ReasoningEffort::default(),
                         )
                         .await
                         .unwrap();
@@ -1459,10 +1530,11 @@ mod tests {
                     provider.settings_config = json!({"modelCatalog":{"models":[{
                         "model":"GPT-6-ASTRA", "reasoningLevels":selected
                     }]}});
+                    let mut reasoning_effort = ReasoningEffort::default();
                     forwarder.forward_request(
                         http::Method::POST, "/responses",
                         json!({"model":"gpt-6-astra", "input":"Hello", "reasoning":{"effort":requested}}),
-                        HeaderMap::new(), &provider,
+                        HeaderMap::new(), &provider, &mut reasoning_effort,
                     ).await.unwrap();
                     let requests = upstream.requests.lock().await;
                     let body = &requests[0].body;
@@ -1472,6 +1544,8 @@ mod tests {
                     }
                     .and_then(Value::as_str);
                     assert_eq!(effort, expected, "{protocol:?} {supported:?} {selected}");
+                    assert_eq!(reasoning_effort.requested.as_deref(), Some(requested));
+                    assert_eq!(reasoning_effort.applied.as_deref(), expected);
                 }
             }
         }
@@ -1504,6 +1578,7 @@ mod tests {
                         body,
                         client_headers(),
                         &provider,
+                        &mut ReasoningEffort::default(),
                     )
                     .await
                     .unwrap();
@@ -1673,6 +1748,7 @@ mod tests {
                         request.clone(),
                         client_headers(),
                         &provider,
+                        &mut ReasoningEffort::default(),
                     )
                     .await
                 {
@@ -1766,6 +1842,7 @@ mod tests {
                             request.clone(),
                             client_headers(),
                             &provider,
+                            &mut ReasoningEffort::default(),
                         )
                         .await
                     {

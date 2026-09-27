@@ -104,11 +104,58 @@ fn version_19_upgrade_preserves_extra_columns_tables_and_historical_costs() {
 }
 
 #[test]
+fn reasoning_log_migration_preserves_old_rows_and_is_repeatable() {
+    for version in [19, 20] {
+        let conn = Connection::open_in_memory().unwrap();
+        Database::create_tables_on_conn(&conn).unwrap();
+        conn.execute_batch(
+            "ALTER TABLE proxy_request_logs DROP COLUMN requested_reasoning_effort;
+             ALTER TABLE proxy_request_logs DROP COLUMN applied_reasoning_effort;
+             INSERT INTO proxy_request_logs
+                 (request_id, provider_id, app_type, model, latency_ms, status_code, created_at, total_cost_usd)
+             VALUES ('historical', 'copilot', 'codex', 'gpt-6-astra', 100, 200, 1, '12.345600');"
+        ).unwrap();
+        Database::set_user_version(&conn, version).unwrap();
+        for _ in 0..2 {
+            Database::apply_schema_migrations_on_conn(&conn).unwrap();
+        }
+        let row: (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT total_cost_usd, requested_reasoning_effort, applied_reasoning_effort
+             FROM proxy_request_logs WHERE request_id = 'historical'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("12.345600".into(), None, None));
+        assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+        conn.execute(
+            "UPDATE proxy_request_logs SET requested_reasoning_effort = 'ultra', applied_reasoning_effort = 'max'",
+            [],
+        ).unwrap();
+        Database::apply_schema_migrations_on_conn(&conn).unwrap();
+        let applied: String = conn
+            .query_row(
+                "SELECT applied_reasoning_effort FROM proxy_request_logs",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(applied, "max");
+    }
+}
+
+#[test]
 fn unsupported_schema_does_not_modify_tables_or_version() {
     let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch("CREATE TABLE sentinel (value TEXT); INSERT INTO sentinel VALUES ('keep'); PRAGMA user_version = 21;").unwrap();
+    conn.execute_batch("CREATE TABLE sentinel (value TEXT); INSERT INTO sentinel VALUES ('keep');")
+        .unwrap();
+    Database::set_user_version(&conn, SCHEMA_VERSION + 1).unwrap();
     assert!(Database::apply_schema_migrations_on_conn(&conn).is_err());
-    assert_eq!(Database::get_user_version(&conn).unwrap(), 21);
+    assert_eq!(
+        Database::get_user_version(&conn).unwrap(),
+        SCHEMA_VERSION + 1
+    );
     assert!(!Database::table_exists(&conn, "providers").unwrap());
     assert_eq!(
         conn.query_row("SELECT value FROM sentinel", [], |row| row

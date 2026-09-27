@@ -631,6 +631,67 @@ mod tests {
     }
 
     #[test]
+    fn catalog_keeps_input_and_total_context_limits_distinct() {
+        for total_key in ["maxContextWindow", "max_context_window"] {
+            let mut row = json!({"model":"grok-4.7", "contextWindow":372000});
+            row[total_key] = json!(500000);
+            let settings = json!({"modelCatalog":{"models":[row]}});
+            let catalog = codex_model_catalog_from_settings(&settings, "")
+                .unwrap()
+                .unwrap();
+            assert_eq!(catalog["models"][0]["context_window"], 372000);
+            assert_eq!(catalog["models"][0]["max_context_window"], 500000);
+        }
+    }
+
+    #[test]
+    fn ultra_toggle_does_not_replace_saved_choices_or_override_canonical_false() {
+        let models = json!([
+            {"model":"reasoning", "reasoningLevels":["low","high"], "supportedReasoningLevels":["low","high","max"]},
+            {"model":"none-only", "supportedReasoningLevels":["none"]},
+            {"model":"disabled", "enabled":false, "supportedReasoningLevels":["high"]}
+        ]);
+        for enabled in [false, true] {
+            let settings = json!({
+                "enableUltraReasoning":enabled, "enable_ultra_reasoning":true,
+                "modelCatalog":{"models":models}
+            });
+            let before = settings.clone();
+            let catalog = codex_model_catalog_from_settings(&settings, "")
+                .unwrap()
+                .unwrap();
+            let entries = catalog["models"].as_array().unwrap();
+            assert_eq!(entries.len(), 2);
+            let levels: Vec<_> = entries[0]["supported_reasoning_levels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|level| level["effort"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                levels,
+                if enabled {
+                    vec!["low", "high", "ultra"]
+                } else {
+                    vec!["low", "high"]
+                }
+            );
+            assert_eq!(
+                entries[1]["supported_reasoning_levels"][0]["effort"],
+                "none"
+            );
+            assert_eq!(
+                entries[1]["supported_reasoning_levels"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(settings, before);
+        }
+    }
+
+    #[test]
     fn ultra_reasoning_toggle_exposes_ultra_when_enabled() {
         let settings = json!({
             "enableUltraReasoning": true,

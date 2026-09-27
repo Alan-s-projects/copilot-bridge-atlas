@@ -1461,7 +1461,7 @@ fn chat_message_to_response_output_item(message: &Value, response_id: &str) -> O
     }
 
     Some(json!({
-        "id": format!("{response_id}_msg"),
+        "id": message_id_from_response_id(response_id),
         "type": "message",
         "status": "completed",
         "role": "assistant",
@@ -1794,6 +1794,47 @@ pub(crate) fn chat_usage_to_responses_usage(usage: Option<&Value>) -> Value {
     }
 
     result
+}
+
+pub(crate) fn message_id_from_response_id(response_id: &str) -> String {
+    format!("msg_{response_id}")
+}
+
+/// Repair only Atlas's historical Chat message IDs, leaving native items and
+/// opaque tool/reasoning data intact when a conversation switches protocols.
+pub(crate) fn normalize_legacy_chat_message_ids(body: &mut Value) {
+    let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let mut renamed = std::collections::HashMap::new();
+    for item in input.iter_mut() {
+        let is_message = item.get("type").and_then(Value::as_str) == Some("message")
+            || (item.get("type").is_none()
+                && item.get("role").and_then(Value::as_str) == Some("assistant"));
+        if !is_message {
+            continue;
+        }
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(response_id) = id.strip_suffix("_msg").filter(|id| id.starts_with("resp_")) else {
+            continue;
+        };
+        let new_id = message_id_from_response_id(response_id);
+        renamed.insert(id.to_string(), new_id.clone());
+        item["id"] = json!(new_id);
+    }
+    for item in input {
+        if item.get("type").and_then(Value::as_str) == Some("item_reference") {
+            if let Some(new_id) = item
+                .get("id")
+                .and_then(Value::as_str)
+                .and_then(|id| renamed.get(id))
+            {
+                item["id"] = json!(new_id);
+            }
+        }
+    }
 }
 
 pub(crate) fn response_id_from_chat_id(id: Option<&str>) -> String {
@@ -2530,6 +2571,57 @@ mod tests {
         assert!(description.contains("\"type\":\"custom\""));
         assert!(description.contains("\"format\":"));
         assert!(description.contains("\"syntax\":\"lark\""));
+    }
+
+    #[test]
+    fn legacy_message_id_repair_is_idempotent_and_scoped_to_inline_messages() {
+        let mut request = json!({"input":[
+            {"role":"assistant", "id":"resp_old_msg", "content":"old"},
+            {"type":"message", "role":"assistant", "id":"msg_native", "content":"native"},
+            {"type":"message", "role":"assistant", "id":"resp_other", "content":"unrelated"},
+            {"type":"reasoning", "id":"resp_reason_msg", "encrypted_content":"opaque"},
+            {"type":"item_reference", "id":"resp_unresolved_msg"}
+        ]});
+        let before = request.clone();
+        normalize_legacy_chat_message_ids(&mut request);
+        assert_eq!(request["input"][0]["id"], "msg_resp_old");
+        for index in 1..5 {
+            assert_eq!(request["input"][index], before["input"][index]);
+        }
+        let once = request.clone();
+        normalize_legacy_chat_message_ids(&mut request);
+        assert_eq!(request, once);
+        for mut scalar in [json!({"input":"hello"}), json!({}), Value::Null] {
+            let before = scalar.clone();
+            normalize_legacy_chat_message_ids(&mut scalar);
+            assert_eq!(scalar, before);
+        }
+    }
+
+    #[test]
+    fn review_chat_messages_have_replayable_responses_ids() {
+        for id in ["chatcmpl_test", "resp_existing"] {
+            let response = chat_completion_to_response_with_context(
+                json!({
+                    "id": id,
+                    "choices": [{
+                        "message": {"role": "assistant", "content": "Preserve this answer."},
+                        "finish_reason": "stop"
+                    }]
+                }),
+                &CodexToolContext::default(),
+            )
+            .unwrap();
+            assert!(response["id"].as_str().unwrap().starts_with("resp_"));
+            assert!(response["output"][0]["id"]
+                .as_str()
+                .unwrap()
+                .starts_with("msg_"));
+            assert_eq!(
+                response["output"][0]["content"][0]["text"],
+                "Preserve this answer."
+            );
+        }
     }
 
     #[test]

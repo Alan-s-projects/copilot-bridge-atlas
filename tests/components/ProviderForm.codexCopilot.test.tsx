@@ -31,7 +31,11 @@ const models = [
   },
 ];
 
-function renderForm(meta?: ProviderMeta, autoSave = false) {
+function renderForm(
+  meta?: ProviderMeta,
+  autoSave = false,
+  settings: Record<string, unknown> = {},
+) {
   const onSubmit = vi.fn<(values: ProviderFormValues) => void>();
   render(
     <QueryClientProvider client={createTestQueryClient()}>
@@ -42,7 +46,12 @@ function renderForm(meta?: ProviderMeta, autoSave = false) {
         onCancel={vi.fn()}
         initialData={{
           name: "GitHub Copilot",
-          settingsConfig: { auth: {}, config, modelCatalog: { models } },
+          settingsConfig: {
+            auth: {},
+            config,
+            modelCatalog: { models },
+            ...settings,
+          },
           meta: meta ?? { providerType: "github_copilot" },
         }}
       />
@@ -56,6 +65,57 @@ function formatControl() {
 }
 
 describe("Codex Copilot provider form", () => {
+  it.each([
+    [{ enableUltraReasoning: false, enable_ultra_reasoning: true }, false],
+    [{ enableUltraReasoning: true, enable_ultra_reasoning: false }, true],
+    [{ enable_ultra_reasoning: true }, true],
+    [{}, false],
+  ])(
+    "loads and saves Ultra with canonical precedence: %j",
+    async (settings, enabled) => {
+      const onSubmit = renderForm(undefined, true, settings);
+      const toggle = screen.getByRole("switch", {
+        name: "Ultra reasoning effort",
+      });
+      expect(toggle.getAttribute("data-state")).toBe(
+        enabled ? "checked" : "unchecked",
+      );
+      fireEvent.click(toggle);
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      expect(
+        JSON.parse(onSubmit.mock.calls[0][0].settingsConfig)
+          .enableUltraReasoning,
+      ).toBe(!enabled);
+    },
+  );
+
+  it("keeps total context metadata when an unrelated model toggle is saved", async () => {
+    const onSubmit = renderForm(undefined, true, {
+      modelCatalog: {
+        models: [
+          {
+            model: "grok-4.7",
+            contextWindow: 372000,
+            maxContextWindow: 500000,
+          },
+        ],
+      },
+    });
+    expect(screen.getByText(/Total context: 500,000/)).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("switch", { name: /codexConfig.modelAvailableInCodex/ }),
+    );
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(
+      JSON.parse(onSubmit.mock.calls[0][0].settingsConfig).modelCatalog
+        .models[0],
+    ).toMatchObject({
+      enabled: false,
+      contextWindow: 372000,
+      maxContextWindow: 500000,
+    });
+  });
+
   const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
     "scrollIntoView",

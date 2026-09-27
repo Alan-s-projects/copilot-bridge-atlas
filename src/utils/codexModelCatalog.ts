@@ -34,6 +34,12 @@ export const mapCodexCatalogModelForForm = (item: any): CodexCatalogModel => {
       : typeof item?.default_reasoning_level === "string"
         ? item.default_reasoning_level
         : undefined;
+  const maxContextWindow =
+    typeof item?.maxContextWindow === "number"
+      ? item.maxContextWindow
+      : typeof item?.max_context_window === "number"
+        ? item.max_context_window
+        : undefined;
   return {
     model: typeof item?.model === "string" ? item.model : "",
     ...(typeof item?.enabled === "boolean" ? { enabled: item.enabled } : {}),
@@ -41,6 +47,7 @@ export const mapCodexCatalogModelForForm = (item: any): CodexCatalogModel => {
       ? { available: item.available }
       : {}),
     ...(typeof item?.vendor === "string" ? { vendor: item.vendor } : {}),
+    ...(maxContextWindow !== undefined ? { maxContextWindow } : {}),
     ...(typeof item?.maxOutputTokens === "number"
       ? { maxOutputTokens: item.maxOutputTokens }
       : {}),

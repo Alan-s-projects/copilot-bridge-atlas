@@ -88,7 +88,7 @@ export interface UsageSummary {
   cacheHitRate: number;
 }
 
-export interface DailyStats {
+interface DailyStats {
   date: string;
   requestCount: number;
   totalCost: string;
@@ -104,7 +104,7 @@ export interface TrendGrouping {
   interval: number;
   unit: TrendUnit;
 }
-export interface TrendBucket extends DailyStats {
+interface TrendBucket extends DailyStats {
   startDate: number;
   endDate: number;
   readCacheHitRate: number | null;
@@ -209,7 +209,7 @@ export function getReadCacheHitRate(log: CacheNormalizableLog): number | null {
   return totalInput > 0 ? cachedInput / totalInput : null;
 }
 
-export const NON_NEGATIVE_DECIMAL_REGEX = /^\d+(?:\.\d+)?$/;
+const NON_NEGATIVE_DECIMAL_REGEX = /^\d+(?:\.\d+)?$/;
 
 export function isNonNegativeDecimalString(value: string): boolean {
   const trimmed = value.trim();
@@ -228,7 +228,7 @@ type UsageCostLog = Pick<
 > &
   Partial<Pick<RequestLog, "costMultiplier">>;
 
-export function hasUsageTokens(log: UsageCostLog): boolean {
+function hasUsageTokens(log: UsageCostLog): boolean {
   return (
     log.inputTokens > 0 ||
     log.outputTokens > 0 ||

@@ -2,7 +2,7 @@ import type { UsageRangePreset, UsageRangeSelection } from "@/types/usage";
 
 const DAY_SECONDS = 24 * 60 * 60;
 
-export interface ResolvedUsageRange {
+interface ResolvedUsageRange {
   startDate: number;
   endDate: number;
 }

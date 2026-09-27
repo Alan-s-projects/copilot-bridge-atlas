@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type ManagedAuthProvider = "github_copilot";
 
-export interface ManagedAuthAccount {
+interface ManagedAuthAccount {
   id: string;
   provider: ManagedAuthProvider;
   login: string;

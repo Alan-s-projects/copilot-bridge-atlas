@@ -5,7 +5,7 @@ export interface Provider {
   meta?: ProviderMeta;
 }
 
-export interface AuthBinding {
+interface AuthBinding {
   source: "provider_config" | "managed_account";
   authProvider?: string;
   accountId?: string;
@@ -42,10 +42,8 @@ export interface CodexCatalogModel {
 
 // Application preferences belong to ~/.copilot-bridge-atlas/settings.json.
 export interface Settings {
-  showInTray: boolean;
   launchOnStartup?: boolean;
   usageDashboardRefreshIntervalMs?: number;
-  language?: "en";
   currentProviderCodex?: string;
   backupIntervalHours?: number;
   backupRetainCount?: number;

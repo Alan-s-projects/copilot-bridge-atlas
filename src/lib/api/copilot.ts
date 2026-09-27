@@ -59,7 +59,7 @@ export async function copilotOpenModelCatalog(): Promise<void> {
 /**
  * 配额详情
  */
-export interface QuotaDetail {
+interface QuotaDetail {
   entitlement: number;
   remaining: number;
   percent_remaining: number;
@@ -69,7 +69,7 @@ export interface QuotaDetail {
 /**
  * 配额快照
  */
-export interface QuotaSnapshots {
+interface QuotaSnapshots {
   chat: QuotaDetail;
   completions: QuotaDetail;
   premium_interactions: QuotaDetail;
@@ -78,7 +78,7 @@ export interface QuotaSnapshots {
 /**
  * Copilot 使用量响应
  */
-export interface CopilotUsageResponse {
+interface CopilotUsageResponse {
   copilot_plan: string;
   quota_reset_date: string;
   quota_snapshots: QuotaSnapshots;

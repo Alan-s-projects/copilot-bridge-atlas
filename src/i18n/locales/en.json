@@ -11,15 +11,12 @@
     "cancel": "Cancel",
     "confirm": "Confirm",
     "loading": "Loading...",
-    "clear": "Clear",
     "back": "Back",
-    "all": "All",
     "actions": "Actions",
     "deleting": "Deleting..."
   },
   "notifications": {
     "updateSuccess": "Provider updated successfully",
-    "settingsSaved": "Settings saved",
     "settingsSaveFailed": "Failed to save settings: {{error}}"
   },
   "settings": {
@@ -115,9 +112,6 @@
     },
     "saveFailedGeneric": "Save failed, please try again"
   },
-  "apps": {
-    "codex": "Codex"
-  },
   "copilot": {
     "authStatus": "Authentication Status",
     "notAuthenticated": "Not authenticated",
@@ -151,11 +145,6 @@
     "accountRemoved": "Account removed"
   },
   "codexConfig": {
-    "reasoningLevelsNotSet": "Not set",
-    "reasoningLevelsSearch": "Search reasoning levels...",
-    "reasoningLevelsEmpty": "No levels",
-    "defaultReasoningLevelLabel": "Default level",
-    "defaultReasoningLevelPlaceholder": "Auto",
     "catalogEmptySignedIn": "No models are in this catalog yet. Refresh models to load those available to your GitHub Copilot account.",
     "catalogEmptySignedOut": "No models are available while GitHub Copilot is signed out. Sign in to GitHub Copilot, then refresh models to load the models your account can use.",
     "modelAvailableInCodex": "Available in Codex: {{model}}"
@@ -168,13 +157,10 @@
     "preset7d": "7d",
     "preset14d": "14d",
     "preset30d": "30d",
-    "totalRequests": "Total Requests",
     "totalCost": "Total Cost",
     "cost": "Cost",
     "unpriced": "Unpriced",
     "perMillion": "(per million)",
-    "trends": "Usage Trends",
-    "realTotal": "Tokens Processed",
     "freshInput": "Fresh Input",
     "cacheHitRate": "Read Cache Hit Rate",
     "requestLogs": "Request Logs",
@@ -182,10 +168,7 @@
     "costPricing": "Cost Pricing",
     "time": "Time",
     "billingModel": "Billing Model",
-    "inputTokens": "Input",
     "outputTokens": "Output",
-    "cacheReadTokens": "Cached Input",
-    "cacheCreationTokens": "Cache Write",
     "timingInfo": "Duration",
     "status": "Status",
     "noData": "No data",
@@ -193,7 +176,6 @@
     "goToPage": "Go",
     "pageInputPlaceholder": "Page",
     "loadPricingError": "Failed to load pricing data",
-    "modelPricingDesc": "Configure token costs for each model",
     "noPricingData": "No pricing data. Click \"Add\" to add model pricing configuration.",
     "viewBuiltInPricing": "View built-in prices",
     "searchPricing": "Search model prices",
@@ -223,7 +205,6 @@
     "deleteConfirmDesc": "Are you sure you want to delete this model pricing? This action cannot be undone.",
     "modelIdPlaceholder": "e.g., gpt-6-astra",
     "displayNamePlaceholder": "e.g., GPT-6 Astra",
-    "statusCode": "Status Code",
     "allModels": "All Models",
     "filterByModel": "Filter by model",
     "refreshInterval": "Auto-refresh interval",
@@ -238,7 +219,6 @@
     "cacheWrite": "Cache Write",
     "cacheRead": "Cached Input",
     "requests": "Requests",
-    "tokens": "Tokens",
     "avgCost": "Average Cost",
     "avgLatency": "Average Latency",
     "outputSpeed": "Output Speed",

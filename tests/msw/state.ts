@@ -1,7 +1,7 @@
 import type { Provider, Settings } from "@/types";
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 let providers: Record<string, Provider> = {};
-let settings: Settings = { showInTray: true };
+let settings: Settings = {};
 export const resetProviderState = () => {
   providers = {
     copilot: {
@@ -11,10 +11,7 @@ export const resetProviderState = () => {
       meta: { providerType: "github_copilot" },
     },
   };
-  settings = {
-    showInTray: true,
-    language: "en",
-  };
+  settings = {};
 };
 resetProviderState();
 export const getProviders = () => clone(providers);

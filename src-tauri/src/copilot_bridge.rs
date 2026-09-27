@@ -1603,16 +1603,6 @@ command = "keep-me"
              INSERT INTO proxy_live_backup VALUES ('codex', 'old configuration');",
             )
             .unwrap();
-        let mut settings = crate::settings::get_settings();
-        settings.language = Some("ja".into());
-        settings
-            .legacy_options
-            .insert("retiredFeature".into(), serde_json::json!(true));
-        crate::commands::save_settings(settings).await.unwrap();
-        assert_eq!(
-            crate::settings::get_settings().language.as_deref(),
-            Some("en")
-        );
         let mut config = db.get_proxy_config().await.unwrap();
         config.listen_port = 0;
         db.update_proxy_config(config).await.unwrap();

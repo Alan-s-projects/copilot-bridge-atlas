@@ -147,12 +147,7 @@ export function SettingsPage() {
               </TabsContent>
 
               <TabsContent value="proxy" className="space-y-6 mt-0 pb-4">
-                {settings ? (
-                  <ProxyTabContent
-                    settings={settings}
-                    onAutoSave={handleAutoSave}
-                  />
-                ) : null}
+                {settings ? <ProxyTabContent /> : null}
               </TabsContent>
 
               <TabsContent value="auth" className="space-y-6 mt-0 pb-4">

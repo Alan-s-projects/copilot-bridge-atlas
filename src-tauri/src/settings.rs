@@ -66,12 +66,9 @@ impl UsageDateRange {
 pub struct AppSettings {
     #[serde(flatten)]
     pub legacy_options: BTreeMap<String, serde_json::Value>,
-    pub show_in_tray: bool,
     pub launch_on_startup: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage_dashboard_refresh_interval_ms: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub language: Option<String>,
     /// Legacy read-only discovery hint; the connection preview owns selection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_config_dir: Option<String>,
@@ -87,10 +84,8 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             legacy_options: BTreeMap::new(),
-            show_in_tray: true,
             launch_on_startup: false,
             usage_dashboard_refresh_interval_ms: None,
-            language: Some("en".into()),
             codex_config_dir: None,
             current_provider_codex: None,
             backup_interval_hours: None,
@@ -105,7 +100,6 @@ impl AppSettings {
     }
 
     fn normalize(&mut self) {
-        self.language = Some("en".into());
         self.codex_config_dir = self
             .codex_config_dir
             .as_deref()
@@ -236,6 +230,7 @@ mod tests {
     fn inactive_imported_preferences_remain_opaque() {
         let mut settings: AppSettings = serde_json::from_value(json!({
             "launchOnStartup": true,
+            "showInTray": false,
             "language": "ja",
             "retiredFeature": {"keep": true},
             "localMigrations": {"keep": true}
@@ -243,7 +238,8 @@ mod tests {
         .unwrap();
         settings.normalize();
         assert!(settings.launch_on_startup);
-        assert_eq!(settings.language.as_deref(), Some("en"));
+        assert_eq!(settings.legacy_options["showInTray"], json!(false));
+        assert_eq!(settings.legacy_options["language"], json!("ja"));
         assert_eq!(
             settings.legacy_options["retiredFeature"],
             json!({"keep": true})

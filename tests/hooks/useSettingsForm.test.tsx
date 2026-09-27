@@ -12,16 +12,14 @@ beforeEach(() => useSettingsQueryMock.mockReset());
 describe("application settings form", () => {
   it("loads the app preferences and preserves unrelated values when editing", () => {
     useSettingsQueryMock.mockReturnValue({
-      data: { showInTray: true, backupRetainCount: 8 },
+      data: { backupRetainCount: 8 },
       isLoading: false,
     });
     const { result } = renderHook(() => useSettingsForm());
     act(() => result.current.updateSettings({ launchOnStartup: true }));
     expect(result.current.settings).toEqual({
-      showInTray: true,
       backupRetainCount: 8,
       launchOnStartup: true,
-      language: "en",
     });
   });
 });

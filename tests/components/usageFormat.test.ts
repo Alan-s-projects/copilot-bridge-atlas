@@ -75,6 +75,8 @@ describe("usage format helpers", () => {
   it("formats compact English token units", () => {
     expect(formatTokensShort(12_345)).toBe("12.3K");
     expect(formatTokensShort(123_456_789, 2)).toBe("123.46M");
+    expect(formatTokensShort(2_650_000, 1)).toBe("2.7M");
+    expect(formatTokensShort(180_000, 1)).toBe("180.0K");
   });
 
   it("calculates streaming TPS from generation duration after first token", () => {

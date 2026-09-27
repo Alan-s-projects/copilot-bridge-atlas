@@ -69,6 +69,9 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
               {t("usage.timingInfo", "Duration")}
             </TableHead>
             <TableHead className="text-center whitespace-nowrap">
+              Pricing Tier
+            </TableHead>
+            <TableHead className="text-center whitespace-nowrap">
               {t("usage.cost", "Cost")}
             </TableHead>
           </TableRow>
@@ -77,7 +80,7 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
           {logs.length === 0 ? (
             <TableRow>
               <TableCell
-                colSpan={showTokenDetails ? 9 : 6}
+                colSpan={showTokenDetails ? 10 : 7}
                 className="text-center text-muted-foreground"
               >
                 {t("usage.noData", "No data")}
@@ -158,6 +161,22 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
                   )}
                   <TableCell className="text-center whitespace-nowrap text-xs tabular-nums">
                     {(log.latencyMs / 1000).toFixed(1)}s
+                  </TableCell>
+                  <TableCell className="text-center whitespace-nowrap px-1.5">
+                    <span
+                      className="text-xs"
+                      title={
+                        log.pricingTier
+                          ? "Tier recorded when this request was priced"
+                          : "No pricing tier recorded"
+                      }
+                    >
+                      {log.pricingTier === "long_context"
+                        ? "Long context"
+                        : log.pricingTier === "default"
+                          ? "Default"
+                          : "--"}
+                    </span>
                   </TableCell>
                   <TableCell
                     className="text-center px-1.5"

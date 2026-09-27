@@ -210,6 +210,17 @@ pub async fn handle_responses(
     let codex_upstream_format = result.codex_upstream_format;
     ctx.outbound_model = result.outbound_model.take();
     let response = result.response;
+    let response = if codex_upstream_format
+        == Some(super::forwarder::CodexUpstreamFormat::CompatibleResponses)
+    {
+        super::providers::transform_copilot_responses::adapt_response(
+            response,
+            codex_tool_context.clone(),
+        )
+        .await?
+    } else {
+        response
+    };
 
     if codex_response_transform(codex_upstream_format) == CodexResponseTransform::ChatCompletions {
         return handle_codex_chat_to_responses_transform(
@@ -226,7 +237,10 @@ pub async fn handle_responses(
     let response = if ctx.provider.is_github_copilot()
         && matches!(
             codex_upstream_format,
-            Some(super::forwarder::CodexUpstreamFormat::NativeResponses)
+            Some(
+                super::forwarder::CodexUpstreamFormat::NativeResponses
+                    | super::forwarder::CodexUpstreamFormat::CompatibleResponses
+            )
         ) {
         streaming_copilot_responses::normalize_response(
             response,
@@ -411,9 +425,11 @@ fn codex_response_transform(
         Some(super::forwarder::CodexUpstreamFormat::ChatCompletions) => {
             CodexResponseTransform::ChatCompletions
         }
-        Some(super::forwarder::CodexUpstreamFormat::NativeResponses) | None => {
-            CodexResponseTransform::Passthrough
-        }
+        Some(
+            super::forwarder::CodexUpstreamFormat::NativeResponses
+            | super::forwarder::CodexUpstreamFormat::CompatibleResponses,
+        )
+        | None => CodexResponseTransform::Passthrough,
     }
 }
 

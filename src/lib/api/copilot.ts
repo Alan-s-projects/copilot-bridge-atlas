@@ -52,6 +52,10 @@ export async function copilotGetModels(): Promise<CopilotModel[]> {
   return invoke<CopilotModel[]>("copilot_get_models");
 }
 
+export async function copilotOpenModelCatalog(): Promise<void> {
+  return invoke("open_generated_model_catalog");
+}
+
 /**
  * 配额详情
  */

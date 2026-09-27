@@ -6,6 +6,7 @@ import { FullScreenPanel } from "@/components/common/FullScreenPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { useUpdateModelPricing } from "@/lib/query/usage";
 import { isNonNegativeDecimalString, type ModelPricing } from "@/types/usage";
 import { isValidModelId } from "@/utils/codexModelCatalog";
@@ -27,6 +28,7 @@ export function PricingEditModal({
 }: PricingEditModalProps) {
   const { t } = useTranslation();
   const updatePricing = useUpdateModelPricing();
+  const [longContext, setLongContext] = useState(model.longContext);
 
   const [formData, setFormData] = useState({
     modelId: model.modelId,
@@ -49,6 +51,16 @@ export function PricingEditModal({
       toast.error("Model IDs must not contain whitespace.");
       return;
     }
+    if (
+      longContext &&
+      (!Number.isSafeInteger(longContext.thresholdInputTokens) ||
+        longContext.thresholdInputTokens <= 0)
+    ) {
+      toast.error(
+        "Long-context input threshold must be a positive whole number.",
+      );
+      return;
+    }
 
     // 验证非负数
     const values = [
@@ -56,6 +68,14 @@ export function PricingEditModal({
       formData.outputCost,
       formData.cacheReadCost,
       formData.cacheCreationCost,
+      ...(longContext
+        ? [
+            longContext.inputCostPerMillion,
+            longContext.outputCostPerMillion,
+            longContext.cacheReadCostPerMillion,
+            longContext.cacheCreationCostPerMillion,
+          ]
+        : []),
     ];
 
     for (const value of values) {
@@ -73,6 +93,7 @@ export function PricingEditModal({
         outputCost: formData.outputCost,
         cacheReadCost: formData.cacheReadCost,
         cacheCreationCost: formData.cacheCreationCost,
+        longContext,
       });
 
       toast.success(
@@ -230,6 +251,77 @@ export function PricingEditModal({
             required
           />
         </div>
+        <section className="space-y-4 border-t pt-4">
+          <div className="flex items-center justify-between gap-4">
+            <Label htmlFor="long-context-pricing">Long-context pricing</Label>
+            <Switch
+              id="long-context-pricing"
+              checked={!!longContext}
+              onCheckedChange={(enabled) =>
+                setLongContext(
+                  enabled
+                    ? {
+                        thresholdInputTokens: 272000,
+                        inputCostPerMillion: formData.inputCost,
+                        outputCostPerMillion: formData.outputCost,
+                        cacheReadCostPerMillion: formData.cacheReadCost,
+                        cacheCreationCostPerMillion: formData.cacheCreationCost,
+                      }
+                    : undefined,
+                )
+              }
+            />
+          </div>
+          {longContext && (
+            <fieldset className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="long-context-threshold">
+                  Input tokens (strictly above)
+                </Label>
+                <Input
+                  id="long-context-threshold"
+                  type="number"
+                  min="1"
+                  step="1"
+                  required
+                  value={longContext.thresholdInputTokens || ""}
+                  onChange={(event) =>
+                    setLongContext({
+                      ...longContext,
+                      thresholdInputTokens: Number(event.target.value),
+                    })
+                  }
+                />
+              </div>
+              {(
+                [
+                  ["inputCostPerMillion", "Input"],
+                  ["outputCostPerMillion", "Output"],
+                  ["cacheReadCostPerMillion", "Cached input"],
+                  ["cacheCreationCostPerMillion", "Cache write"],
+                ] as const
+              ).map(([key, label]) => (
+                <div key={key} className="space-y-2">
+                  <Label htmlFor={`long-${key}`}>{label} (USD / 1M)</Label>
+                  <Input
+                    id={`long-${key}`}
+                    type="number"
+                    min="0"
+                    step={PRICE_INPUT_STEP}
+                    value={longContext[key]}
+                    required
+                    onChange={(event) =>
+                      setLongContext({
+                        ...longContext,
+                        [key]: event.target.value,
+                      })
+                    }
+                  />
+                </div>
+              ))}
+            </fieldset>
+          )}
+        </section>
       </form>
     </FullScreenPanel>
   );

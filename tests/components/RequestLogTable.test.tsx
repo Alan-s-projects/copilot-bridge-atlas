@@ -83,6 +83,7 @@ describe("RequestLogTable", () => {
                   requestId: "request-1",
                   providerName: "GitHub Copilot",
                   model: "gpt-6-astra",
+                  pricingTier: "default",
                   requestedReasoningEffort: "ultra",
                   appliedReasoningEffort: "max",
                   createdAt: 1790400000,
@@ -113,7 +114,7 @@ describe("RequestLogTable", () => {
         />,
       );
       const headings = screen.getAllByRole("columnheader");
-      expect(headings).toHaveLength(9);
+      expect(headings).toHaveLength(10);
       expect(headings[1]).toHaveTextContent("usage.billingModel");
       expect(headings[2]).toHaveTextContent("Reasoning(requested/applied)");
       expect(headings.slice(3).map((heading) => heading.textContent)).toEqual([
@@ -122,6 +123,7 @@ describe("RequestLogTable", () => {
         "usage.outputTokens",
         "usage.cacheWrite",
         "usage.timingInfo",
+        "Pricing Tier",
         "usage.cost",
       ]);
       expect(
@@ -134,7 +136,7 @@ describe("RequestLogTable", () => {
       expect(screen.queryByText("proxy")).not.toBeInTheDocument();
       if (hasLogs) {
         const cells = screen.getAllByRole("cell");
-        expect(cells).toHaveLength(9);
+        expect(cells).toHaveLength(10);
         expect(cells[2]).toHaveTextContent("ultra / max");
         expect(cells.slice(3).map((cell) => cell.textContent)).toEqual([
           "200",
@@ -142,12 +144,13 @@ describe("RequestLogTable", () => {
           "20/20 tps",
           "100",
           "1.0s",
+          "Default",
           "$0.0100",
         ]);
         expect(screen.getByText("gpt-6-astra")).toBeVisible();
         expect(screen.getByText("$0.0100")).toBeVisible();
       } else {
-        expect(screen.getByRole("cell")).toHaveAttribute("colspan", "9");
+        expect(screen.getByRole("cell")).toHaveAttribute("colspan", "10");
       }
     },
   );

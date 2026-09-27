@@ -518,10 +518,10 @@ mod tests {
             [],
             |row| row.get(0),
         )?;
-        // gpt-5.5 input $5/M × 1M tokens，回填后再汇总
+        // One million input tokens uses the long-context $10/M tier.
         assert!(
-            (total_cost - 5.0).abs() < 1e-6,
-            "expected backfilled cost 5.0, got {total_cost}"
+            (total_cost - 10.0).abs() < 1e-6,
+            "expected backfilled cost 10.0, got {total_cost}"
         );
         Ok(())
     }

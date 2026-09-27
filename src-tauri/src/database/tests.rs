@@ -197,11 +197,11 @@ fn pricing_seeds_all_bundled_models_and_preserves_custom_prices() {
 }
 
 #[test]
-fn bundled_prices_are_unique_valid_cc_switch_estimates_for_multiple_vendors() {
+fn bundled_prices_are_unique_github_copilot_rates_for_only_documented_models() {
     use rust_decimal::Decimal;
     use std::str::FromStr;
     let prices = Database::bundled_model_prices().unwrap();
-    assert_eq!(prices.len(), 219);
+    assert_eq!(prices.len(), 33);
     let mut ids = std::collections::HashSet::new();
     for [id, name, input, output, cache_read, cache_creation] in &prices {
         assert!(ids.insert(id));
@@ -215,15 +215,96 @@ fn bundled_prices_are_unique_valid_cc_switch_estimates_for_multiple_vendors() {
         ("gemini-3.8-flash", "0.75", "3.75", "0.075"),
         ("gemini-3.5-flash", "1.50", "9.00", "0.15"),
         ("grok-4.7", "2", "6", "0.50"),
-        ("grok-4.5", "2", "6", "0.30"),
+        ("grok-4.5", "2", "6", "0.50"),
     ] {
         let row = prices.iter().find(|row| row[0] == id).unwrap();
         assert_eq!((&*row[2], &*row[3], &*row[4]), (input, output, cache));
     }
-    assert!(!ids.contains(&"mai-code-1.1-flash".to_string()));
+    assert!(ids.contains(&"mai-code-1.1-flash".to_string()));
+    for retired in [
+        "gpt-5",
+        "gpt-5.6-cyber",
+        "gpt-5.5-pro",
+        "deepseek-v3",
+        "claude-mythos-5",
+    ] {
+        assert!(!ids.contains(&retired.to_string()));
+    }
     assert!(!ids.contains(&"gpt-5.6-sol-fast".to_string()));
 }
 
+#[test]
+fn copilot_pricing_migration_retires_only_unedited_defaults() {
+    let conn = Connection::open_in_memory().unwrap();
+    Database::create_tables_on_conn(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO proxy_request_logs
+         (request_id,provider_id,app_type,model,input_tokens,total_cost_usd,latency_ms,status_code,created_at)
+         VALUES ('old-flat','copilot','codex','gpt-6-astra',9999999,'7.123456',1,200,1)",
+        [],
+    ).unwrap();
+    let legacy: serde_json::Value =
+        serde_json::from_str(include_str!("../resources/legacy-model-pricing.json")).unwrap();
+    for row in legacy["prices"].as_array().unwrap() {
+        let values: Vec<&str> = row
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        conn.execute(
+            "INSERT INTO model_pricing(model_id,display_name,input_cost_per_million,output_cost_per_million,cache_read_cost_per_million,cache_creation_cost_per_million)
+             VALUES (?1,?2,?3,?4,?5,?6)", rusqlite::params_from_iter(values),
+        ).unwrap();
+    }
+    conn.execute(
+        "UPDATE model_pricing SET input_cost_per_million='99' WHERE model_id='gpt-6-astra'",
+        [],
+    )
+    .unwrap();
+    Database::set_user_version(&conn, 21).unwrap();
+    Database::apply_schema_migrations_on_conn(&conn).unwrap();
+    Database::ensure_model_pricing_seeded_on_conn(&conn).unwrap();
+    assert_eq!(conn.query_row(
+        "SELECT pricing_tier,total_cost_usd FROM proxy_request_logs WHERE request_id='old-flat'",
+        [], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)),
+    ).unwrap(), ("default".into(),"7.123456".into()));
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM model_pricing", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        33
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT input_cost_per_million FROM model_pricing WHERE model_id='gpt-6-astra'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "99"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT cache_read_cost_per_million FROM model_pricing WHERE model_id='grok-4.5'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "0.50"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM model_pricing WHERE long_context IS NOT NULL",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        10
+    );
+    Database::apply_schema_migrations_on_conn(&conn).unwrap();
+    assert_eq!(Database::get_user_version(&conn).unwrap(), 22);
+}
 #[test]
 fn selecting_a_missing_provider_keeps_the_current_entry() {
     let db = Database::memory().unwrap();

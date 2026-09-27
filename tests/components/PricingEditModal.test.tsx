@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { PricingEditModal } from "@/components/usage/PricingEditModal";
@@ -18,9 +18,10 @@ vi.mock("sonner", () => ({
   },
 }));
 
+const updatePrice = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("@/lib/query/usage", () => ({
   useUpdateModelPricing: () => ({
-    mutateAsync: vi.fn(),
+    mutateAsync: updatePrice,
     isPending: false,
   }),
 }));
@@ -57,6 +58,83 @@ const PRICE_FIELDS = [
 ] as const;
 
 describe("PricingEditModal", () => {
+  it.each([false, true])(
+    "allows an optional long-context tier in isNew=%s",
+    async (isNew) => {
+      render(
+        <PricingEditModal
+          open
+          isNew={isNew}
+          model={model}
+          onClose={() => {}}
+        />,
+      );
+      const toggle = screen.getByRole("switch", {
+        name: "Long-context pricing",
+      });
+      expect(toggle).not.toBeChecked();
+      fireEvent.click(toggle);
+      fireEvent.change(screen.getByLabelText("Input tokens (strictly above)"), {
+        target: { value: "200000" },
+      });
+      fireEvent.change(screen.getByLabelText("Input (USD / 1M)"), {
+        target: { value: "4" },
+      });
+      fireEvent.submit(document.getElementById("pricing-form")!);
+      await waitFor(() =>
+        expect(updatePrice).toHaveBeenCalledWith(
+          expect.objectContaining({
+            longContext: expect.objectContaining({
+              thresholdInputTokens: 200000,
+              inputCostPerMillion: "4",
+            }),
+          }),
+        ),
+      );
+      fireEvent.click(toggle);
+      expect(
+        screen.queryByLabelText("Input tokens (strictly above)"),
+      ).not.toBeInTheDocument();
+      fireEvent.submit(document.getElementById("pricing-form")!);
+      await waitFor(() =>
+        expect(updatePrice).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            longContext: undefined,
+          }),
+        ),
+      );
+    },
+  );
+
+  it("preserves the long-context tier when editing a default price", async () => {
+    const longContext = {
+      thresholdInputTokens: 272000,
+      inputCostPerMillion: "20",
+      outputCostPerMillion: "75",
+      cacheReadCostPerMillion: "2",
+      cacheCreationCostPerMillion: "25",
+    };
+    render(
+      <PricingEditModal
+        open
+        model={{ ...model, longContext }}
+        onClose={() => {}}
+      />,
+    );
+    fireEvent.change(document.getElementById("inputCost")!, {
+      target: { value: "11" },
+    });
+    fireEvent.submit(document.getElementById("pricing-form")!);
+    await waitFor(() =>
+      expect(updatePrice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inputCost: "11",
+          longContext,
+        }),
+      ),
+    );
+  });
+
   it("all price inputs have step=0.0001", () => {
     render(<PricingEditModal open model={model} onClose={() => {}} />);
 

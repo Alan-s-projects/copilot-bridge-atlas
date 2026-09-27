@@ -6,7 +6,7 @@ use crate::database::{Database, PRICING_SOURCE_REQUEST, PRICING_SOURCE_RESPONSE}
 use crate::error::AppError;
 use crate::proxy::types::ReasoningEffort;
 use crate::services::sql_helpers::{INPUT_TOKEN_SEMANTICS_FRESH, INPUT_TOKEN_SEMANTICS_TOTAL};
-use crate::services::usage_stats::{find_model_pricing_row, is_placeholder_pricing_model};
+use crate::services::usage_stats::is_placeholder_pricing_model;
 use rusqlite::OptionalExtension;
 use rust_decimal::Decimal;
 use sha2::{Digest, Sha256};
@@ -176,8 +176,8 @@ impl<'a> UsageLogger<'a> {
                 input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
                 latency_ms, first_token_ms, status_code, error_message, session_id,
                 provider_type, is_streaming, cost_multiplier, created_at,
-                requested_reasoning_effort, applied_reasoning_effort
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)"
+                requested_reasoning_effort, applied_reasoning_effort, pricing_tier
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)"
         );
         let affected_rows = conn
             .execute(
@@ -210,6 +210,7 @@ impl<'a> UsageLogger<'a> {
                     created_at,
                     log.reasoning_effort.requested,
                     log.reasoning_effort.applied,
+                    log.cost.as_ref().map(|cost| cost.pricing_tier),
                 ],
             )
             .map_err(|e| AppError::Database(format!("记录请求日志失败: {e}")))?;
@@ -300,15 +301,27 @@ impl<'a> UsageLogger<'a> {
     }
 
     /// 获取模型定价
-    pub fn get_model_pricing(&self, model_id: &str) -> Result<Option<ModelPricing>, AppError> {
+    pub fn get_model_pricing(
+        &self,
+        model_id: &str,
+        total_input: u64,
+    ) -> Result<Option<ModelPricing>, AppError> {
         let conn = crate::database::lock_conn!(self.db.conn);
-        let row = find_model_pricing_row(&conn, model_id)?;
+        let row = crate::services::usage_stats::find_selected_model_pricing(
+            &conn,
+            model_id,
+            total_input,
+        )?;
         match row {
-            Some((input, output, cache_read, cache_creation)) => {
-                ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation)
-                    .map(Some)
-                    .map_err(|e| AppError::Database(format!("解析定价数据失败: {e}")))
-            }
+            Some(crate::services::usage_stats::SelectedPricing {
+                rates: (input, output, cache_read, cache_creation),
+                tier,
+            }) => ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation)
+                .map(|mut pricing| {
+                    pricing.pricing_tier = tier;
+                    Some(pricing)
+                })
+                .map_err(|e| AppError::Database(format!("解析定价数据失败: {e}"))),
             None => Ok(None),
         }
     }
@@ -373,7 +386,14 @@ impl<'a> UsageLogger<'a> {
         is_streaming: bool,
         reasoning_effort: ReasoningEffort,
     ) -> Result<(), AppError> {
-        let pricing = self.get_model_pricing(&pricing_model)?;
+        let total_input = if crate::services::sql_helpers::is_cache_inclusive_app(&app_type) {
+            usage.input_tokens as u64
+        } else {
+            usage.input_tokens as u64
+                + usage.cache_read_tokens as u64
+                + usage.cache_creation_tokens as u64
+        };
+        let pricing = self.get_model_pricing(&pricing_model, total_input)?;
 
         let has_usage = usage.input_tokens > 0
             || usage.output_tokens > 0
@@ -600,6 +620,100 @@ mod tests {
         assert_eq!(session_source, "proxy");
         assert_eq!(codex_input, 1);
         assert_eq!(fallback_count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn live_cost_logging_selects_long_context_using_cached_input_too() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let logger = UsageLogger::new(&db);
+        for (id, total) in [("base", 272000), ("long", 272001), ("zero", 272001)] {
+            logger.log_with_calculation(
+                id.into(),
+                "copilot".into(),
+                "codex".into(),
+                "gpt-6-astra".into(),
+                "gpt-6-astra".into(),
+                "gpt-6-astra".into(),
+                TokenUsage {
+                    input_tokens: total,
+                    output_tokens: 1_000_000,
+                    cache_read_tokens: 270000,
+                    cache_creation_tokens: 1000,
+                    model: None,
+                    message_id: None,
+                },
+                if id == "zero" {
+                    Decimal::ZERO
+                } else {
+                    Decimal::ONE
+                },
+                100,
+                None,
+                200,
+                None,
+                None,
+                false,
+                ReasoningEffort::default(),
+            )?;
+        }
+        let conn = crate::database::lock_conn!(db.conn);
+        for (id, input, output, read, write) in [
+            ("base", "0.010000", "50.000000", "0.270000", "0.012500"),
+            ("long", "0.020020", "75.000000", "0.540000", "0.025000"),
+        ] {
+            let tier: String = conn.query_row(
+                "SELECT pricing_tier FROM proxy_request_logs WHERE request_id=?1",
+                [id],
+                |row| row.get(0),
+            )?;
+            assert_eq!(
+                tier,
+                if id == "base" {
+                    "default"
+                } else {
+                    "long_context"
+                }
+            );
+            let row: (String, String, String, String) = conn.query_row(
+                "SELECT input_cost_usd,output_cost_usd,cache_read_cost_usd,cache_creation_cost_usd
+                 FROM proxy_request_logs WHERE request_id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?;
+            for (actual, expected) in [row.0, row.1, row.2, row.3]
+                .iter()
+                .zip([input, output, read, write])
+            {
+                assert_eq!(
+                    Decimal::from_str(actual).unwrap(),
+                    Decimal::from_str(expected).unwrap()
+                );
+            }
+        }
+        conn.execute(
+            "UPDATE model_pricing SET long_context=NULL WHERE model_id='gpt-6-astra'",
+            [],
+        )?;
+        drop(conn);
+        let logs =
+            db.get_request_logs(&crate::services::usage_stats::LogFilters::default(), 0, 20)?;
+        assert_eq!(
+            logs.data
+                .iter()
+                .find(|log| log.request_id == "long")
+                .unwrap()
+                .pricing_tier
+                .as_deref(),
+            Some("long_context")
+        );
+        let zero = logs
+            .data
+            .iter()
+            .find(|log| log.request_id == "zero")
+            .unwrap();
+        assert_eq!(zero.pricing_tier.as_deref(), Some("long_context"));
+        assert_eq!(zero.total_cost_usd, "0");
         Ok(())
     }
 

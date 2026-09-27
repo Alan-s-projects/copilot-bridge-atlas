@@ -27,18 +27,18 @@ describe("Codex Copilot capabilities", () => {
     },
   );
 
-  it("fills an empty catalog context window without overwriting an explicit value", () => {
+  it("uses the Copilot context window instead of saved overrides", () => {
     expect(resolveCopilotCatalogContextWindow("", 400_000)).toBe(400_000);
     expect(resolveCopilotCatalogContextWindow(undefined, 1_000_000)).toBe(
       1_000_000,
     );
-    expect(resolveCopilotCatalogContextWindow(200_000, 400_000)).toBe(200_000);
+    expect(resolveCopilotCatalogContextWindow(200_000, 400_000)).toBe(400_000);
     expect(resolveCopilotCatalogContextWindow(1_000_000, 872_000)).toBe(
       872_000,
     );
   });
 
-  it("refreshes live capabilities while preserving saved reasoning choices", () => {
+  it("refreshes live capabilities and replaces saved reasoning overrides", () => {
     const saved = {
       model: "gpt-6-luna",
       contextWindow: 1_000_000,
@@ -60,8 +60,8 @@ describe("Codex Copilot capabilities", () => {
       contextWindow: 872_000,
       supportsParallelToolCalls: true,
       inputModalities: ["text", "image"],
-      reasoningLevels: saved.reasoningLevels,
-      defaultReasoningLevel: "ultra",
+      reasoningLevels: live.reasoning_efforts,
+      defaultReasoningLevel: undefined,
     });
     expect(mergeCopilotModelCapabilities(live, refreshed)).toEqual(refreshed);
     expect(
@@ -84,8 +84,8 @@ describe("Codex Copilot capabilities", () => {
     expect(mergeCopilotModelCapabilities(model(), saved)).toMatchObject({
       supportsParallelToolCalls: false,
       inputModalities: ["text"],
-      reasoningLevels: saved.reasoningLevels,
-      defaultReasoningLevel: "ultra",
+      reasoningLevels: [],
+      defaultReasoningLevel: undefined,
     });
   });
 
@@ -120,7 +120,7 @@ describe("Codex Copilot capabilities", () => {
       { ...model(["/responses"]), reasoning_efforts: ["low", "medium"] },
       { model: "gpt-test", reasoningLevels: ["high", "ultra"] },
     );
-    expect(refreshed.reasoningLevels).toEqual(["high", "ultra"]);
+    expect(refreshed.reasoningLevels).toEqual(["low", "medium"]);
     expect(refreshed.defaultReasoningLevel).toBeUndefined();
   });
 
@@ -160,7 +160,7 @@ describe("Codex Copilot capabilities", () => {
     }
   });
 
-  it("keeps live limits separate from editable choices for future models", () => {
+  it("preserves enabled choices but reports only live reasoning for future models", () => {
     const refreshed = mergeCopilotModelCapabilities(
       {
         ...model(["/chat/completions"]),
@@ -182,7 +182,7 @@ describe("Codex Copilot capabilities", () => {
       vendor: "New Vendor",
       maxOutputTokens: 16384,
       supportsToolCalls: false,
-      reasoningLevels: ["low", "ultra"],
+      reasoningLevels: ["low"],
       supportedReasoningLevels: ["low"],
     });
   });

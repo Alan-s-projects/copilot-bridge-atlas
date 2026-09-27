@@ -89,6 +89,10 @@ pub struct ModelStats {
     pub model: String,
     pub request_count: u64,
     pub total_tokens: u64,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_cache_read_tokens: u64,
+    pub total_cache_creation_tokens: u64,
     pub total_cost: String,
     pub avg_cost_per_request: String,
 }
@@ -172,9 +176,11 @@ pub struct RequestLogDetail {
     /// 写入时实际用于计价的模型名。None = v11 前的历史行，"" = 未计价的错误行。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pricing_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_tier: Option<String>,
 }
 
-/// Map the 29-column request-log projection.
+/// Map the 30-column request-log projection.
 ///
 /// The SELECT must return columns in this order:
 /// `request_id, provider_id, provider_name, app_type, model, request_model,
@@ -183,7 +189,7 @@ pub struct RequestLogDetail {
 ///  cache_creation_cost_usd, total_cost_usd, is_streaming, latency_ms,
 ///  first_token_ms, duration_ms, status_code, error_message, created_at,
 ///  data_source, pricing_model, input_token_semantics,
-///  requested_reasoning_effort, applied_reasoning_effort, fresh_input_tokens`
+///  requested_reasoning_effort, applied_reasoning_effort, fresh_input_tokens, pricing_tier`
 ///
 /// 不需要 provider_name 时（如 backfill）SELECT `NULL AS provider_name` 占位即可。
 fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestLogDetail> {
@@ -219,6 +225,7 @@ fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
         requested_reasoning_effort: row.get(26)?,
         applied_reasoning_effort: row.get(27)?,
         fresh_input_tokens: row.get::<_, i64>(28)? as u64,
+        pricing_tier: row.get(29)?,
     })
 }
 
@@ -1146,12 +1153,20 @@ impl Database {
                 model,
                 SUM(request_count) as request_count,
                 SUM(total_tokens) as total_tokens,
-                SUM(total_cost) as total_cost
+                SUM(total_cost) as total_cost,
+                SUM(fresh_input) as fresh_input,
+                SUM(output_tokens) as output_tokens,
+                SUM(cache_read) as cache_read,
+                SUM(cache_write) as cache_write
             FROM (
                 SELECT {detail_model} as model,
                     COUNT(*) as request_count,
                     COALESCE(SUM({fresh_input_detail} + l.output_tokens), 0) as total_tokens,
-                    COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as total_cost
+                    COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0) as total_cost,
+                    COALESCE(SUM({fresh_input_detail}), 0) as fresh_input,
+                    COALESCE(SUM(l.output_tokens), 0) as output_tokens,
+                    COALESCE(SUM(l.cache_read_tokens), 0) as cache_read,
+                    COALESCE(SUM(l.cache_creation_tokens), 0) as cache_write
                 FROM proxy_request_logs l
                 {detail_join}
                 {detail_where}
@@ -1160,7 +1175,11 @@ impl Database {
                 SELECT {rollup_model},
                     COALESCE(SUM(r.request_count), 0),
                     COALESCE(SUM({fresh_input_rollup} + r.output_tokens), 0),
-                    COALESCE(SUM(CAST(r.total_cost_usd AS REAL)), 0)
+                    COALESCE(SUM(CAST(r.total_cost_usd AS REAL)), 0),
+                    COALESCE(SUM({fresh_input_rollup}), 0),
+                    COALESCE(SUM(r.output_tokens), 0),
+                    COALESCE(SUM(r.cache_read_tokens), 0),
+                    COALESCE(SUM(r.cache_creation_tokens), 0)
                 FROM usage_daily_rollups r
                 {rollup_join}
                 {rollup_where}
@@ -1187,6 +1206,10 @@ impl Database {
                 model: row.get(0)?,
                 request_count: request_count as u64,
                 total_tokens: row.get::<_, i64>(2)? as u64,
+                total_input_tokens: row.get::<_, i64>(4)? as u64,
+                total_output_tokens: row.get::<_, i64>(5)? as u64,
+                total_cache_read_tokens: row.get::<_, i64>(6)? as u64,
+                total_cache_creation_tokens: row.get::<_, i64>(7)? as u64,
                 total_cost: format!("{total_cost:.6}"),
                 avg_cost_per_request: format!("{avg_cost:.6}"),
             })
@@ -1423,7 +1446,7 @@ impl Database {
                     l.is_streaming, l.latency_ms, l.first_token_ms, l.duration_ms,
                     l.status_code, l.error_message, l.created_at, l.data_source, l.pricing_model,
                     l.input_token_semantics, l.requested_reasoning_effort, l.applied_reasoning_effort,
-                    {fresh_input} AS fresh_input_tokens
+                    {fresh_input} AS fresh_input_tokens, l.pricing_tier
              FROM proxy_request_logs l
              LEFT JOIN providers p ON l.provider_id = p.id AND l.app_type = p.app_type
              {where_clause}
@@ -1455,6 +1478,7 @@ impl Database {
 
 #[derive(Clone)]
 struct PricingInfo {
+    tier: &'static str,
     input: rust_decimal::Decimal,
     output: rust_decimal::Decimal,
     cache_read: rust_decimal::Decimal,
@@ -1491,10 +1515,11 @@ impl Database {
                         first_token_ms, duration_ms, status_code, error_message, created_at,
                         data_source, pricing_model, input_token_semantics,
                         requested_reasoning_effort, applied_reasoning_effort,
-                        {fresh_input} AS fresh_input_tokens
+                        {fresh_input} AS fresh_input_tokens, pricing_tier
              FROM proxy_request_logs
              WHERE app_type = 'codex' AND COALESCE(data_source, 'proxy') = 'proxy'
                AND CAST(total_cost_usd AS REAL) <= 0
+               AND pricing_tier IS NULL
                AND (input_tokens > 0 OR output_tokens > 0
                     OR cache_read_tokens > 0 OR cache_creation_tokens > 0)"
         );
@@ -1551,7 +1576,7 @@ impl Database {
             || log.cache_read_tokens > 0
             || log.cache_creation_tokens > 0;
 
-        if has_cost || !has_usage {
+        if has_cost || log.pricing_tier.is_some() || !has_usage {
             return Ok(false);
         }
 
@@ -1602,6 +1627,7 @@ impl Database {
         log.cache_read_cost_usd = format!("{cache_read_cost:.6}");
         log.cache_creation_cost_usd = format!("{cache_creation_cost:.6}");
         log.total_cost_usd = format!("{total_cost:.6}");
+        log.pricing_tier = Some(pricing.tier.to_string());
 
         conn.execute(
             "UPDATE proxy_request_logs
@@ -1609,7 +1635,8 @@ impl Database {
                  output_cost_usd = ?2,
                  cache_read_cost_usd = ?3,
                  cache_creation_cost_usd = ?4,
-                 total_cost_usd = ?5
+                 total_cost_usd = ?5,
+                 pricing_tier = ?7
              WHERE request_id = ?6",
             params![
                 log.input_cost_usd,
@@ -1617,7 +1644,8 @@ impl Database {
                 log.cache_read_cost_usd,
                 log.cache_creation_cost_usd,
                 log.total_cost_usd,
-                log.request_id
+                log.request_id,
+                log.pricing_tier
             ],
         )
         .map_err(|e| AppError::Database(format!("更新请求成本失败: {e}")))?;
@@ -1629,17 +1657,24 @@ impl Database {
         conn: &Connection,
         cache: &mut HashMap<String, PricingInfo>,
         model: &str,
+        total_input: u64,
     ) -> Result<Option<PricingInfo>, AppError> {
-        if let Some(info) = cache.get(model) {
+        let key = format!("{model}:{total_input}");
+        if let Some(info) = cache.get(&key) {
             return Ok(Some(info.clone()));
         }
 
-        let row = find_model_pricing_row(conn, model)?;
-        let Some((input, output, cache_read, cache_creation)) = row else {
+        let row = find_selected_model_pricing(conn, model, total_input)?;
+        let Some(SelectedPricing {
+            rates: (input, output, cache_read, cache_creation),
+            tier,
+        }) = row
+        else {
             return Ok(None);
         };
 
         let pricing = PricingInfo {
+            tier,
             input: rust_decimal::Decimal::from_str(&input)
                 .map_err(|e| AppError::Database(format!("解析输入价格失败: {e}")))?,
             output: rust_decimal::Decimal::from_str(&output)
@@ -1650,7 +1685,7 @@ impl Database {
                 .map_err(|e| AppError::Database(format!("解析缓存写入价格失败: {e}")))?,
         };
 
-        cache.insert(model.to_string(), pricing.clone());
+        cache.insert(key, pricing.clone());
         Ok(Some(pricing))
     }
 
@@ -1659,6 +1694,9 @@ impl Database {
         cache: &mut HashMap<String, PricingInfo>,
         log: &RequestLogDetail,
     ) -> Result<Option<PricingInfo>, AppError> {
+        let total_input = log.fresh_input_tokens as u64
+            + log.cache_read_tokens as u64
+            + log.cache_creation_tokens as u64;
         // 写入时的计价基准已落库（v11+）：回填只按它重算，找不到就保持 0 成本
         // 等补价。不能换用 model/request_model 猜——路由接管 + request 计价模式下
         // 三者可能各不相同（model=上游回显、request_model=客户端别名、
@@ -1669,10 +1707,11 @@ impl Database {
             .as_deref()
             .filter(|pm| !is_placeholder_pricing_model(pm))
         {
-            return Self::get_model_pricing_cached(conn, cache, pricing_model);
+            return Self::get_model_pricing_cached(conn, cache, pricing_model, total_input);
         }
 
-        if let Some(pricing) = Self::get_model_pricing_cached(conn, cache, &log.model)? {
+        if let Some(pricing) = Self::get_model_pricing_cached(conn, cache, &log.model, total_input)?
+        {
             return Ok(Some(pricing));
         }
 
@@ -1692,7 +1731,7 @@ impl Database {
             return Ok(None);
         }
 
-        Self::get_model_pricing_cached(conn, cache, request_model)
+        Self::get_model_pricing_cached(conn, cache, request_model, total_input)
     }
 }
 
@@ -1700,6 +1739,27 @@ pub(crate) fn find_model_pricing_row(
     conn: &Connection,
     model_id: &str,
 ) -> Result<Option<(String, String, String, String)>, AppError> {
+    find_model_pricing_for_input(conn, model_id, 0)
+}
+
+pub(crate) fn find_model_pricing_for_input(
+    conn: &Connection,
+    model_id: &str,
+    total_input: u64,
+) -> Result<Option<(String, String, String, String)>, AppError> {
+    Ok(find_selected_model_pricing(conn, model_id, total_input)?.map(|pricing| pricing.rates))
+}
+
+pub(crate) struct SelectedPricing {
+    pub rates: (String, String, String, String),
+    pub tier: &'static str,
+}
+
+pub(crate) fn find_selected_model_pricing(
+    conn: &Connection,
+    model_id: &str,
+    total_input: u64,
+) -> Result<Option<SelectedPricing>, AppError> {
     let candidates = model_pricing_candidates(model_id);
     if candidates.is_empty() {
         return Ok(None);
@@ -1707,7 +1767,32 @@ pub(crate) fn find_model_pricing_row(
 
     for candidate in &candidates {
         if let Some(row) = query_model_pricing_exact(conn, candidate)? {
-            return Ok(Some(row));
+            let tier: Option<String> = conn.query_row(
+                "SELECT long_context FROM model_pricing WHERE model_id = ?1",
+                [candidate],
+                |row| row.get(0),
+            )?;
+            if let Some(tier) = tier {
+                let tier: super::model_pricing::LongContextPricing = serde_json::from_str(&tier)
+                    .map_err(|e| {
+                        AppError::Database(format!("Invalid long-context pricing: {e}"))
+                    })?;
+                if total_input > tier.threshold_input_tokens {
+                    return Ok(Some(SelectedPricing {
+                        tier: super::model_pricing::LONG_CONTEXT_PRICING_TIER,
+                        rates: (
+                            tier.input_cost_per_million,
+                            tier.output_cost_per_million,
+                            tier.cache_read_cost_per_million,
+                            tier.cache_creation_cost_per_million,
+                        ),
+                    }));
+                }
+            }
+            return Ok(Some(SelectedPricing {
+                rates: row,
+                tier: super::model_pricing::DEFAULT_PRICING_TIER,
+            }));
         }
     }
 
@@ -1858,6 +1943,47 @@ fn strip_reasoning_effort_suffix(model_id: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_context_rates_are_strictly_above_the_documented_input_threshold() -> Result<(), AppError>
+    {
+        let db = Database::memory()?;
+        let conn = lock_conn!(db.conn);
+        let tiers = Database::bundled_long_context_prices()?;
+        assert_eq!(tiers.len(), 11);
+        for (model, tier) in tiers {
+            let base = find_model_pricing_row(&conn, &model)?.unwrap();
+            for total in [tier.threshold_input_tokens - 1, tier.threshold_input_tokens] {
+                assert_eq!(
+                    find_model_pricing_for_input(&conn, &model, total)?.unwrap(),
+                    base,
+                    "{model}"
+                );
+            }
+            let long =
+                find_model_pricing_for_input(&conn, &model, tier.threshold_input_tokens + 1)?
+                    .unwrap();
+            assert_eq!(
+                long,
+                (
+                    tier.input_cost_per_million,
+                    tier.output_cost_per_million,
+                    tier.cache_read_cost_per_million,
+                    tier.cache_creation_cost_per_million
+                ),
+                "{model}"
+            );
+        }
+        assert_eq!(
+            find_model_pricing_for_input(&conn, "OpenAI/GPT-6-ASTRA@ULTRA", 272001)?,
+            find_model_pricing_for_input(&conn, "gpt-6-astra", 272001)?,
+        );
+        assert_eq!(
+            find_model_pricing_for_input(&conn, "gemini-3.8-flash", 1_000_000)?,
+            find_model_pricing_row(&conn, "gemini-3.8-flash")?,
+        );
+        Ok(())
+    }
 
     #[test]
     fn atlas_usage_excludes_imported_details_and_rollups_without_erasing_them(
@@ -2035,9 +2161,9 @@ mod tests {
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
-        assert_eq!(input_cost, "5.000000");
-        assert_eq!(output_cost, "30.000000");
-        assert_eq!(total_cost, "35.000000");
+        assert_eq!(input_cost, "10.000000");
+        assert_eq!(output_cost, "45.000000");
+        assert_eq!(total_cost, "55.000000");
 
         Ok(())
     }
@@ -2050,45 +2176,33 @@ mod tests {
                 "OpenAI/GPT-6-SOL@HIGH",
                 "codex",
                 3_000_000,
-                ["2.000000", "10.000000", "0.200000", "2.500000", "14.700000"],
+                ["4.000000", "15.000000", "0.400000", "5.000000", "24.400000"],
             ),
             (
                 "gpt-6-luna",
                 "codex",
                 3_000_000,
-                ["0.100000", "0.500000", "0.010000", "0.125000", "0.735000"],
+                ["0.200000", "0.750000", "0.020000", "0.250000", "1.220000"],
             ),
             (
-                "gpt-5.6-cyber",
+                "gpt-5.3-codex",
                 "codex",
                 3_000_000,
-                [
-                    "12.500000",
-                    "75.000000",
-                    "1.250000",
-                    "15.625000",
-                    "104.375000",
-                ],
+                ["1.750000", "14.000000", "0.175000", "0.000000", "15.925000"],
             ),
-            // Pro 系列无缓存折扣，缓存列记 0
+            // Models without a cache-write price do not gain an invented one.
             (
-                "gpt-5.5-pro",
+                "gpt-5.4-nano",
                 "codex",
                 3_000_000,
-                [
-                    "30.000000",
-                    "180.000000",
-                    "0.000000",
-                    "0.000000",
-                    "210.000000",
-                ],
+                ["0.200000", "1.250000", "0.020000", "0.000000", "1.470000"],
             ),
-            // 剥日期后缀后精确命中 gpt-4o-mini，不会落到更短的 gpt-4o
+            // Date suffixes still resolve only to an explicitly priced model.
             (
-                "gpt-4o-mini-2024-07-18",
+                "gpt-5-mini-2026-07-18",
                 "codex",
                 3_000_000,
-                ["0.150000", "0.600000", "0.075000", "0.000000", "0.825000"],
+                ["0.250000", "2.000000", "0.025000", "0.000000", "2.275000"],
             ),
         ];
         {
@@ -2096,8 +2210,8 @@ mod tests {
             // Simulate an existing database with unpriced usage before the update.
             conn.execute(
                 "DELETE FROM model_pricing WHERE model_id IN
-                 ('gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-cyber',
-                  'gpt-5.5-pro', 'gpt-4o-mini')",
+                 ('gpt-6-sol', 'gpt-6-luna', 'gpt-5.3-codex',
+                  'gpt-5.4-nano', 'gpt-5-mini')",
                 [],
             )?;
             for (model, app, input, _) in &cases {
@@ -2339,9 +2453,9 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                ("fresh-cache-semantics".to_string(), "1.000000".to_string()),
-                ("legacy-cache-semantics".to_string(), "1.000000".to_string()),
-                ("total-cache-semantics".to_string(), "1.000000".to_string()),
+                ("fresh-cache-semantics".to_string(), "2.000000".to_string()),
+                ("legacy-cache-semantics".to_string(), "2.000000".to_string()),
+                ("total-cache-semantics".to_string(), "2.000000".to_string()),
             ]
         );
 
@@ -2386,8 +2500,8 @@ mod tests {
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        assert_eq!(input_cost, "5.000000");
-        assert_eq!(total_cost, "7.500000");
+        assert_eq!(input_cost, "10.000000");
+        assert_eq!(total_cost, "15.000000");
 
         Ok(())
     }
@@ -2423,7 +2537,7 @@ mod tests {
             [],
             |row| row.get(0),
         )?;
-        assert_eq!(total_cost, "5.000000");
+        assert_eq!(total_cost, "10.000000");
 
         Ok(())
     }
@@ -3029,6 +3143,48 @@ mod tests {
     }
 
     #[test]
+    fn model_token_details_combine_normalized_logs_and_rollups_by_billing_model(
+    ) -> Result<(), AppError> {
+        let db = Database::memory()?;
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute(
+                "INSERT INTO proxy_request_logs
+                 (request_id,provider_id,app_type,model,pricing_model,input_tokens,output_tokens,
+                  cache_read_tokens,cache_creation_tokens,input_token_semantics,total_cost_usd,latency_ms,status_code,created_at)
+                 VALUES ('total','copilot','codex','upstream','gpt-6-astra',1000,50,800,100,?1,'1',100,200,1000)",
+                [INPUT_TOKEN_SEMANTICS_TOTAL],
+            )?;
+            conn.execute(
+                "INSERT INTO proxy_request_logs
+                 (request_id,provider_id,app_type,model,pricing_model,input_tokens,output_tokens,
+                  cache_read_tokens,cache_creation_tokens,input_token_semantics,total_cost_usd,latency_ms,status_code,created_at)
+                 VALUES ('fresh','copilot','codex','upstream','gpt-6-astra',200,20,100,0,?1,'1',100,200,1001)",
+                [INPUT_TOKEN_SEMANTICS_FRESH],
+            )?;
+            conn.execute(
+                "INSERT INTO usage_daily_rollups
+                 (date,app_type,provider_id,model,pricing_model,request_count,success_count,
+                  input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,input_token_semantics,total_cost_usd)
+                 VALUES ('2026-09-25','codex','copilot','upstream','gpt-6-astra',3,3,300,30,900,100,?1,'2')",
+                [INPUT_TOKEN_SEMANTICS_FRESH],
+            )?;
+        }
+        let stats = db.get_model_stats(None, None, Some("codex"), None, Some("gpt-6-astra"))?;
+        assert_eq!(stats.len(), 1);
+        let stat = &stats[0];
+        assert_eq!(stat.model, "gpt-6-astra");
+        assert_eq!(stat.request_count, 5);
+        assert_eq!(stat.total_input_tokens, 600);
+        assert_eq!(stat.total_cache_read_tokens, 1800);
+        assert_eq!(stat.total_cache_creation_tokens, 200);
+        assert_eq!(stat.total_output_tokens, 100);
+        assert_eq!(stat.total_cost, "4.000000");
+        assert_eq!(stat.avg_cost_per_request, "0.800000");
+        Ok(())
+    }
+
+    #[test]
     fn test_get_model_stats() -> Result<(), AppError> {
         let db = Database::memory()?;
 
@@ -3220,7 +3376,7 @@ mod tests {
         assert_eq!(unpriced.len(), 1);
         assert_eq!(unpriced[0].model, "new-vendor/agent");
         let conn = lock_conn!(db.conn);
-        for (model, expected) in [("gemini-3.8-flash", "4.500000"), ("grok-4.7", "8.000000")] {
+        for (model, expected) in [("gemini-3.8-flash", "4.500000"), ("grok-4.7", "16.000000")] {
             let cost: String = conn.query_row(
                 "SELECT total_cost_usd FROM proxy_request_logs WHERE request_id = ?1",
                 [model],
@@ -3811,10 +3967,10 @@ mod tests {
         let db = Database::memory()?;
         let conn = lock_conn!(db.conn);
         for (alias, model) in [
-            ("gpt-5.2-codex@low", "gpt-5.2-codex-low"),
+            ("gpt-5.3-codex@low", "gpt-5.3-codex"),
             ("OpenAI/GPT-5.5@HIGH", "gpt-5.5-high"),
             ("OpenAI/GPT-5.5-2026-05-14", "gpt-5.5"),
-            ("gpt-4o-mini-20240718", "gpt-4o-mini"),
+            ("gpt-5-mini-20260718", "gpt-5-mini"),
             ("gpt-6-astra@ultra", "gpt-6-astra"),
             ("gpt-6-luna@max", "gpt-6-luna"),
         ] {
@@ -3842,12 +3998,23 @@ mod tests {
                 ("imported", "codex_session", "0"),
             ] {
                 insert_usage_log(
-                    &conn, id, "codex", "copilot", "gpt-5", source, 1000, 1_000_000, 0, 0, 0, 200,
+                    &conn,
+                    id,
+                    "codex",
+                    "copilot",
+                    "gpt-5-mini",
+                    source,
+                    1000,
+                    1_000_000,
+                    0,
+                    0,
+                    0,
+                    200,
                     cost,
                 )?;
             }
             conn.execute(
-                "UPDATE model_pricing SET input_cost_per_million = '99' WHERE model_id = 'gpt-5'",
+                "UPDATE model_pricing SET input_cost_per_million = '99' WHERE model_id = 'gpt-5-mini'",
                 [],
             )?;
         }

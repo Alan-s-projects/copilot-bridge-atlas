@@ -9,6 +9,7 @@ use std::str::FromStr;
 /// 成本明细
 #[derive(Debug, Clone)]
 pub struct CostBreakdown {
+    pub pricing_tier: &'static str,
     pub input_cost: Decimal,
     pub output_cost: Decimal,
     pub cache_read_cost: Decimal,
@@ -19,6 +20,7 @@ pub struct CostBreakdown {
 /// 模型定价信息
 #[derive(Debug, Clone)]
 pub struct ModelPricing {
+    pub pricing_tier: &'static str,
     pub input_cost_per_million: Decimal,
     pub output_cost_per_million: Decimal,
     pub cache_read_cost_per_million: Decimal,
@@ -83,6 +85,7 @@ impl CostCalculator {
         let total_cost = base_total * cost_multiplier;
 
         CostBreakdown {
+            pricing_tier: pricing.pricing_tier,
             input_cost,
             output_cost,
             cache_read_cost,
@@ -110,6 +113,7 @@ impl ModelPricing {
         cache_creation: &str,
     ) -> Result<Self, rust_decimal::Error> {
         Ok(Self {
+            pricing_tier: crate::services::model_pricing::DEFAULT_PRICING_TIER,
             input_cost_per_million: Decimal::from_str(input)?,
             output_cost_per_million: Decimal::from_str(output)?,
             cache_read_cost_per_million: Decimal::from_str(cache_read)?,

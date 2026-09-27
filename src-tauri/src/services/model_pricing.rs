@@ -13,6 +13,8 @@ use std::sync::{Mutex, OnceLock};
 
 const MODEL_PRICING_FILE_NAME: &str = "model-pricing.json";
 const MODEL_PRICING_FILE_VERSION: u32 = 1;
+pub(crate) const DEFAULT_PRICING_TIER: &str = "default";
+pub(crate) const LONG_CONTEXT_PRICING_TIER: &str = "long_context";
 
 static MODEL_PRICING_FILE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -33,6 +35,47 @@ pub struct ModelPricingInfo {
     pub output_cost_per_million: String,
     pub cache_read_cost_per_million: String,
     pub cache_creation_cost_per_million: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_context: Option<LongContextPricing>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LongContextPricing {
+    pub threshold_input_tokens: u64,
+    pub input_cost_per_million: String,
+    pub output_cost_per_million: String,
+    pub cache_read_cost_per_million: String,
+    pub cache_creation_cost_per_million: String,
+}
+
+impl LongContextPricing {
+    fn normalize(self) -> Result<Self, AppError> {
+        if self.threshold_input_tokens == 0 {
+            return Err(AppError::Config(
+                "Long-context threshold must be positive".into(),
+            ));
+        }
+        Ok(Self {
+            threshold_input_tokens: self.threshold_input_tokens,
+            input_cost_per_million: normalize_decimal(
+                "long_context_input",
+                &self.input_cost_per_million,
+            )?,
+            output_cost_per_million: normalize_decimal(
+                "long_context_output",
+                &self.output_cost_per_million,
+            )?,
+            cache_read_cost_per_million: normalize_decimal(
+                "long_context_read",
+                &self.cache_read_cost_per_million,
+            )?,
+            cache_creation_cost_per_million: normalize_decimal(
+                "long_context_write",
+                &self.cache_creation_cost_per_million,
+            )?,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +133,10 @@ fn normalize_pricing(entry: ModelPricingInfo) -> Result<ModelPricingInfo, AppErr
     }
 
     Ok(ModelPricingInfo {
+        long_context: entry
+            .long_context
+            .map(LongContextPricing::normalize)
+            .transpose()?,
         model_id,
         display_name,
         input_cost_per_million: normalize_decimal("input_cost", &entry.input_cost_per_million)?,
@@ -177,26 +224,34 @@ fn upsert_pricing(
         .execute(
             "INSERT INTO model_pricing (
                 model_id, display_name, input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                cache_read_cost_per_million, cache_creation_cost_per_million, long_context
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             ON CONFLICT(model_id) DO UPDATE SET
                 display_name = excluded.display_name,
                 input_cost_per_million = excluded.input_cost_per_million,
                 output_cost_per_million = excluded.output_cost_per_million,
                 cache_read_cost_per_million = excluded.cache_read_cost_per_million,
-                cache_creation_cost_per_million = excluded.cache_creation_cost_per_million
+                cache_creation_cost_per_million = excluded.cache_creation_cost_per_million,
+                long_context = excluded.long_context
             WHERE display_name <> excluded.display_name
                OR input_cost_per_million <> excluded.input_cost_per_million
                OR output_cost_per_million <> excluded.output_cost_per_million
                OR cache_read_cost_per_million <> excluded.cache_read_cost_per_million
-               OR cache_creation_cost_per_million <> excluded.cache_creation_cost_per_million",
+               OR cache_creation_cost_per_million <> excluded.cache_creation_cost_per_million
+               OR long_context IS NOT excluded.long_context",
             params![
                 entry.model_id,
                 entry.display_name,
                 entry.input_cost_per_million,
                 entry.output_cost_per_million,
                 entry.cache_read_cost_per_million,
-                entry.cache_creation_cost_per_million
+                entry.cache_creation_cost_per_million,
+                entry
+                    .long_context
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|e| AppError::Config(e.to_string()))?
             ],
         )
         .map_err(|error| AppError::Database(format!("更新模型定价失败: {error}")))
@@ -363,6 +418,7 @@ mod tests {
 
     fn sample_pricing() -> ModelPricingInfo {
         ModelPricingInfo {
+            long_context: None,
             model_id: "gpt-custom-model".to_string(),
             display_name: "GPT Custom Model".to_string(),
             input_cost_per_million: "1.25".to_string(),
@@ -370,6 +426,39 @@ mod tests {
             cache_read_cost_per_million: "0.1".to_string(),
             cache_creation_cost_per_million: "1.5".to_string(),
         }
+    }
+
+    #[test]
+    #[serial]
+    fn long_context_override_round_trips_and_rejects_invalid_tiers() {
+        with_test_home(|db, path| {
+            let mut entry = sample_pricing();
+            entry.long_context = Some(LongContextPricing {
+                threshold_input_tokens: 200000,
+                input_cost_per_million: "4".into(),
+                output_cost_per_million: "12".into(),
+                cache_read_cost_per_million: "1".into(),
+                cache_creation_cost_per_million: "0".into(),
+            });
+            update_model_pricing(db, entry.clone()).unwrap();
+            let file: ModelPricingFile = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            assert_eq!(file.models, vec![entry.clone()]);
+            let before = fs::read(path).unwrap();
+            entry.long_context.as_mut().unwrap().threshold_input_tokens = 0;
+            assert!(update_model_pricing(db, entry).is_err());
+            assert_eq!(fs::read(path).unwrap(), before);
+            let conn = db.conn.lock().unwrap();
+            assert_eq!(
+                crate::services::usage_stats::find_model_pricing_for_input(
+                    &conn,
+                    "gpt-custom-model",
+                    200001
+                )
+                .unwrap()
+                .unwrap(),
+                ("4".into(), "12".into(), "1".into(), "0".into()),
+            );
+        });
     }
 
     #[test]
@@ -495,6 +584,7 @@ mod tests {
     fn reset_restores_all_bundled_prices_and_preserves_metadata_and_history() {
         with_test_home(|db, path| {
             let edited_default = ModelPricingInfo {
+                long_context: None,
                 model_id: "gpt-6-astra".into(),
                 display_name: "GPT-6 Astra custom".into(),
                 input_cost_per_million: "99".into(),
@@ -507,6 +597,7 @@ mod tests {
             delete_model_pricing(db, "gpt-6-luna").expect("add GPT tombstone");
 
             let retired_entry = ModelPricingInfo {
+                long_context: None,
                 model_id: "retired-model".into(),
                 display_name: "Retired model".into(),
                 input_cost_per_million: "4.2".into(),

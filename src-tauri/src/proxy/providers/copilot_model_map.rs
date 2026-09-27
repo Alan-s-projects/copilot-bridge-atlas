@@ -14,6 +14,7 @@ pub struct CopilotTransport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedCopilotModel {
     pub id: String,
+    pub vendor: String,
     pub transport: Option<CopilotTransport>,
     pub max_output_tokens: Option<u64>,
     pub supports_tool_calls: Option<bool>,
@@ -43,6 +44,7 @@ pub fn resolve_model(client_id: &str, models: &[CopilotModel]) -> Option<Resolve
     })?;
     Some(ResolvedCopilotModel {
         id: model.id.clone(),
+        vendor: model.vendor.clone(),
         transport: transport_for(model),
         max_output_tokens: model.max_output_tokens,
         supports_tool_calls: model.supports_tool_calls,

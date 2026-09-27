@@ -68,6 +68,7 @@ const snapshot = {
         createdAt: 1790397000,
         model: "gpt-6-astra",
         requestedReasoningEffort: "ultra",
+        pricingTier: "long_context",
         appliedReasoningEffort: "max",
         statusCode: 200,
         latencyMs: 2500,
@@ -134,19 +135,24 @@ describe("read-only bridge overview", () => {
     expect(within(table).getByText("gpt-6-astra")).toBeVisible();
     const headings = within(table).getAllByRole("columnheader");
     expect(headings[1]).toHaveTextContent("Billing Model");
+    expect(headings[5]).toHaveTextContent("Pricing Tier");
     expect(headings[2]).toHaveTextContent("Reasoning(requested/applied)");
     const rows = within(table).getAllByRole("row");
+    expect(within(rows[1]).getAllByRole("cell")[5]).toHaveTextContent(
+      "Long context",
+    );
     expect(within(rows[1]).getAllByRole("cell")[2]).toHaveTextContent(
       "ultra / max",
     );
+    expect(within(rows[2]).getAllByRole("cell")[5]).toHaveTextContent("--");
     expect(within(rows[2]).getAllByRole("cell")[2]).toHaveTextContent(
       "\u2014 / \u2014",
     );
     expect(within(table).getByText("400")).toBeVisible();
     const firstCells = within(rows[1]).getAllByRole("cell");
-    expect(firstCells).toHaveLength(6);
+    expect(firstCells).toHaveLength(7);
     expect(firstCells[3]).toHaveTextContent("200");
-    expect(firstCells[5]).toHaveTextContent("$0.0100");
+    expect(firstCells[6]).toHaveTextContent("$0.0100");
     expect(within(table).getByText("2.5s")).toBeVisible();
     expect(firstCells[4]).toHaveTextContent(/^2\.5s$/);
     expect(headings.map((heading) => heading.textContent)).toEqual([
@@ -155,6 +161,7 @@ describe("read-only bridge overview", () => {
       "Reasoning(requested/applied)",
       "Status",
       "Duration",
+      "Pricing Tier",
       "Cost",
     ]);
     expect(mocks.logs).toHaveBeenCalledWith({ appType: "codex" }, 0, 5);
@@ -267,7 +274,7 @@ describe("read-only bridge overview", () => {
     mocks.logs.mockResolvedValue({ data: [] });
     renderOverview();
     expect(await screen.findByText("No data")).toBeVisible();
-    expect(screen.getByRole("cell")).toHaveAttribute("colspan", "6");
+    expect(screen.getByRole("cell")).toHaveAttribute("colspan", "7");
     for (const label of ["Success today", "Cache reuse today"]) {
       expect(screen.getByText(label).nextElementSibling).toHaveTextContent("—");
     }

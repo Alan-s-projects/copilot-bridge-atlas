@@ -67,17 +67,17 @@ selected range.
 Pricing has no models.dev downloads or automatic sync. Existing local price
 overrides are stored in `%USERPROFILE%\.copilot-bridge-atlas\model-pricing.json`;
 the bundled defaults are in `src-tauri/src/resources/model-pricing.json`.
-They contain 219 entries copied from a pinned cc-switch revision, with provenance
-in that file. Cost Pricing links to the source, filters model IDs and names as
+They contain 33 entries from GitHub's official Copilot pricing table, including
+all 11 published long-context tiers. Cost Pricing links to the source, filters model IDs and names as
 you type, and can reset all overrides to bundled defaults. Resetting removes
 price overrides and deletion tombstones while preserving retired metadata and
 recorded history. Custom models without a bundled default become unpriced.
 Unknown models and distinct vendor variants never borrow another model's price.
 See [pricing provenance and limitations](docs/model-pricing.md).
 Existing retired sync metadata remains inactive.
-New models default to Copilot-advertised reasoning levels; an absent declaration
-does not invent GPT reasoning capabilities. Refreshes preserve saved choices,
-while generated catalogs expose only supported choices. An empty catalog explains when GitHub
+Model names, input/total context limits, and reasoning levels are read-only
+Copilot metadata. Refresh replaces legacy overrides while preserving model
+enable switches. An empty catalog explains when GitHub
 Copilot must be signed in.
 Catalog rows can be disabled to hide them from Codex without deleting their
 settings, pricing, or usage history. Enabled models sort before disabled models,

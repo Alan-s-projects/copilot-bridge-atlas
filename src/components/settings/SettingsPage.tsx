@@ -2,7 +2,6 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Loader2,
-  ScrollText,
   HardDriveDownload,
   Settings2,
   Network,
@@ -22,7 +21,6 @@ import { WindowSettings } from "@/components/settings/WindowSettings";
 import { BackupListSection } from "@/components/settings/BackupListSection";
 import { AboutSection } from "@/components/settings/AboutSection";
 import { ProxyTabContent } from "@/components/settings/ProxyTabContent";
-import { LogConfigPanel } from "@/components/settings/LogConfigPanel";
 import { AuthCenterPanel } from "@/components/settings/AuthCenterPanel";
 import { CopilotSettingsPanel } from "@/components/settings/CopilotSettingsPanel";
 import { useSettings } from "@/hooks/useSettings";
@@ -209,28 +207,6 @@ export function SettingsPage() {
                               handleAutoSave(updates)
                             }
                           />
-                        </AccordionContent>
-                      </AccordionItem>
-
-                      <AccordionItem
-                        value="logConfig"
-                        className="rounded-xl glass-card overflow-hidden"
-                      >
-                        <AccordionTrigger className="px-6 py-4 hover:no-underline hover:bg-muted/50 data-[state=open]:bg-muted/50">
-                          <div className="flex items-center gap-3">
-                            <ScrollText className="h-5 w-5 text-muted-foreground" />
-                            <div className="text-left">
-                              <h3 className="text-base font-semibold">
-                                {t("settings.about.logConfig.title")}
-                              </h3>
-                              <p className="text-sm text-muted-foreground font-normal">
-                                {t("settings.about.logConfig.description")}
-                              </p>
-                            </div>
-                          </div>
-                        </AccordionTrigger>
-                        <AccordionContent className="px-6 pb-6 pt-4 border-t border-border/50">
-                          <LogConfigPanel />
                         </AccordionContent>
                       </AccordionItem>
                     </Accordion>

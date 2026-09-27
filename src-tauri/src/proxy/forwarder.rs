@@ -2,6 +2,7 @@
 use super::{
     body_filter::filter_private_params,
     content_encoding::{decompress_body_with_limit, get_content_encoding},
+    diagnostics::RequestDiagnostics,
     json_canonical::{canonicalize_value, short_value_hash},
     providers::{
         codex_chat_history::CodexChatHistoryStore,
@@ -163,6 +164,7 @@ pub struct RequestForwarder {
     session_id: String,
     session_client_provided: bool,
     copilot_optimizer_config: CopilotOptimizerConfig,
+    diagnostics: Option<Arc<RequestDiagnostics>>,
     #[cfg(test)]
     copilot_fixture: Option<CopilotFixture>,
 }
@@ -175,6 +177,7 @@ impl RequestForwarder {
         session_id: String,
         session_client_provided: bool,
         copilot_optimizer_config: CopilotOptimizerConfig,
+        diagnostics: Option<Arc<RequestDiagnostics>>,
     ) -> Self {
         Self {
             status,
@@ -184,6 +187,7 @@ impl RequestForwarder {
             session_id,
             session_client_provided,
             copilot_optimizer_config,
+            diagnostics,
             #[cfg(test)]
             copilot_fixture: None,
         }
@@ -199,6 +203,9 @@ impl RequestForwarder {
         provider: &Provider,
         reasoning_effort: &mut ReasoningEffort,
     ) -> Result<ForwardResult, ProxyError> {
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.request_shape(endpoint, &body);
+        }
         *reasoning_effort = ReasoningEffort::from_request(&body);
         let guard =
             ActiveConnectionGuard::acquire(self.status.clone(), self.app_handle.clone(), &body)
@@ -345,6 +352,7 @@ impl RequestForwarder {
         } else {
             serde_json::to_vec(&body).map_err(|error| ProxyError::Internal(error.to_string()))?
         };
+        let outgoing_bytes = body_bytes.len();
         // Reuse the pooled transport, including the configured HTTP/SOCKS proxy.
         #[cfg(not(test))]
         let client = super::http_client::get();
@@ -364,6 +372,22 @@ impl RequestForwarder {
         let request = request.body(body_bytes);
         // Retain the sent value even when the upstream returns an error.
         reasoning_effort.record_applied(&body);
+        if let Some(diagnostics) = &self.diagnostics {
+            let transport = match upstream_format {
+                Some(CodexUpstreamFormat::NativeResponses) => "responses",
+                Some(CodexUpstreamFormat::CompatibleResponses) => "compatible_responses",
+                Some(CodexUpstreamFormat::ChatCompletions) => "chat_completions",
+                None => "standalone",
+            };
+            diagnostics.outgoing(
+                outbound_model.as_deref(),
+                transport,
+                streaming,
+                reasoning_effort,
+                outgoing_bytes,
+                &body,
+            );
+        }
         if let Some(active) = active {
             active
                 .update(outbound_model.as_deref(), reasoning_effort)
@@ -384,23 +408,43 @@ impl RequestForwarder {
         }
         .map_err(map_reqwest_send_error)?;
         let response = ProxyResponse::Reqwest(response);
+        let response = if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.observe(response)
+        } else {
+            response
+        };
         if response.status().is_success() {
             Ok((response, outbound_model, upstream_format))
         } else {
             let status = response.status().as_u16();
             let encoding = get_content_encoding(response.headers());
-            let raw = response.bytes_with_limit(MAX_RESPONSE_BODY_BYTES).await?;
-            let decoded = encoding
-                .and_then(|encoding| {
-                    decompress_body_with_limit(&encoding, &raw, MAX_RESPONSE_BODY_BYTES)
-                        .ok()
-                        .flatten()
-                })
-                .unwrap_or_else(|| raw.to_vec());
-            Err(ProxyError::UpstreamError {
+            let raw = match response.bytes_with_limit(MAX_RESPONSE_BODY_BYTES).await {
+                Ok(raw) => raw,
+                Err(error) => {
+                    if let Some(diagnostics) = &self.diagnostics {
+                        diagnostics.proxy_failure("upstream_body", &error);
+                    }
+                    return Err(error);
+                }
+            };
+            let decompressed = encoding.as_deref().and_then(|encoding| {
+                decompress_body_with_limit(&encoding, &raw, MAX_RESPONSE_BODY_BYTES)
+                    .ok()
+                    .flatten()
+            });
+            let was_decoded = decompressed.is_some();
+            let decoded = decompressed.unwrap_or_else(|| raw.to_vec());
+            if let Some(diagnostics) = &self.diagnostics {
+                diagnostics.error_body(&decoded, was_decoded);
+            }
+            let error = ProxyError::UpstreamError {
                 status,
                 body: String::from_utf8(decoded).ok(),
-            })
+            };
+            if let Some(diagnostics) = &self.diagnostics {
+                diagnostics.proxy_failure("upstream", &error);
+            }
+            Err(error)
         }
     }
 
@@ -969,6 +1013,7 @@ mod tests {
             session_id: String::new(),
             session_client_provided: false,
             copilot_optimizer_config: CopilotOptimizerConfig::default(),
+            diagnostics: None,
             copilot_fixture: None,
         }
     }

@@ -5,6 +5,7 @@
 pub mod body_filter;
 pub(crate) mod content_encoding;
 pub mod copilot_optimizer;
+pub(crate) mod diagnostics;
 pub mod error;
 pub mod error_mapper;
 mod forwarder;

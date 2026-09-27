@@ -59,6 +59,8 @@ const decodeOptionValue = (value: string) =>
   value === "all" ? undefined : value.slice(DYNAMIC_OPTION_PREFIX.length);
 
 interface UsageDashboardProps {
+  savedRange?: UsageRangeSelection;
+  onRangeChange?: (range: UsageRangeSelection) => void;
   tableColumns?: UsageTableColumns;
   onTableColumnsChange?: (
     table: UsageTableName,
@@ -75,10 +77,16 @@ export function UsageDashboard({
   tableColumns,
   onTableColumnsChange,
   columnsSaving,
+  savedRange,
+  onRangeChange,
 }: UsageDashboardProps = {}) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const [range, setRange] = useState<UsageRangeSelection>({ preset: "today" });
+  const [localRange, setLocalRange] = useState<UsageRangeSelection>({
+    preset: "today",
+  });
+  const range = savedRange ?? localRange;
+  const setRange = onRangeChange ?? setLocalRange;
   const appType = "codex";
   const [model, setModel] = useState<string | undefined>(undefined);
   const [activeTab, setActiveTab] = useState("logs");
@@ -167,15 +175,13 @@ export function UsageDashboard({
       transition={{ duration: 0.4 }}
       className="space-y-8 pb-8"
     >
-      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-2">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-bold tracking-tight">
-            {t("usage.title")}
-          </h1>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <h1 className="text-2xl font-bold">{t("usage.title")}</h1>
           <p className="text-sm text-muted-foreground">{t("usage.subtitle")}</p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex max-w-full flex-wrap items-center gap-2">
           <Select
             value={model != null ? encodeOptionValue(model) : "all"}
             onValueChange={(v) => setModel(decodeOptionValue(v))}
@@ -201,7 +207,7 @@ export function UsageDashboard({
             </SelectContent>
           </Select>
 
-          <div className="flex items-center gap-2 ml-auto lg:ml-0">
+          <div className="flex items-center gap-2">
             <Select
               value={String(refreshIntervalMs)}
               onValueChange={(v) => changeRefreshInterval(Number(v))}
@@ -276,7 +282,6 @@ export function UsageDashboard({
 
       <UsageTrendChart
         range={range}
-        rangeLabel={rangeLabel}
         appType={appType}
         model={model}
         refreshIntervalMs={refreshIntervalMs}

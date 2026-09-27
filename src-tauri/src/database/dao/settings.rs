@@ -7,6 +7,47 @@ use crate::error::AppError;
 use rusqlite::params;
 
 impl Database {
+    pub fn get_usage_date_range(&self) -> Result<crate::settings::UsageDateRange, AppError> {
+        Ok(self
+            .get_setting("usage_date_range")?
+            .and_then(|json| serde_json::from_str::<crate::settings::UsageDateRange>(&json).ok())
+            .filter(|range| range.validate().is_ok())
+            .unwrap_or_default())
+    }
+
+    pub fn set_usage_date_range(
+        &self,
+        range: crate::settings::UsageDateRange,
+    ) -> Result<(), AppError> {
+        range.validate()?;
+        self.set_setting(
+            "usage_date_range",
+            &serde_json::to_string(&range).map_err(|error| AppError::Config(error.to_string()))?,
+        )
+    }
+
+    pub fn get_usage_trend_grouping(
+        &self,
+    ) -> Result<crate::services::usage_stats::TrendGrouping, AppError> {
+        Ok(self
+            .get_setting("usage_trend_grouping")?
+            .and_then(|value| {
+                serde_json::from_str::<crate::services::usage_stats::TrendGrouping>(&value).ok()
+            })
+            .filter(|value| value.validate().is_ok())
+            .unwrap_or_default())
+    }
+
+    pub fn set_usage_trend_grouping(
+        &self,
+        grouping: crate::services::usage_stats::TrendGrouping,
+    ) -> Result<(), AppError> {
+        grouping.validate()?;
+        let value = serde_json::to_string(&grouping)
+            .map_err(|error| AppError::Config(error.to_string()))?;
+        self.set_setting("usage_trend_grouping", &value)
+    }
+
     pub fn get_usage_table_columns(&self) -> Result<crate::settings::UsageTableColumns, AppError> {
         self.get_setting("usage_table_columns")?
             .map(|json| {

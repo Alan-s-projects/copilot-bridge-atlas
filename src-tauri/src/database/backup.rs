@@ -2049,15 +2049,31 @@ mod tests {
         db.set_usage_table_columns("requestLogs", vec!["time".into(), "cost".into()])?;
         let expected =
             db.set_usage_table_columns("modelStats", vec!["model".into(), "requests".into()])?;
+        let grouping =
+            serde_json::from_value(serde_json::json!({"interval":3,"unit":"hour"})).unwrap();
+        let date_range = crate::settings::UsageDateRange {
+            preset: "7d".into(),
+            ..Default::default()
+        };
+        db.set_usage_trend_grouping(grouping)?;
+        db.set_usage_date_range(date_range.clone())?;
         assert_eq!(expected.request_logs.as_ref().unwrap(), &["time", "cost"]);
         let backup = db.backup_database_file()?.unwrap();
         let exported = db.export_sql_string()?;
         db.set_usage_table_columns("requestLogs", vec!["status".into()])?;
+        db.set_usage_trend_grouping(Default::default())?;
+        db.set_usage_date_range(Default::default())?;
         db.restore_from_backup(backup.file_name().unwrap().to_str().unwrap())?;
         assert_eq!(db.get_usage_table_columns()?, expected);
+        assert_eq!(db.get_usage_trend_grouping()?, grouping);
+        assert_eq!(db.get_usage_date_range()?, date_range);
         db.set_usage_table_columns("modelStats", vec!["cost".into()])?;
+        db.set_usage_trend_grouping(Default::default())?;
+        db.set_usage_date_range(Default::default())?;
         db.import_sql_string(&exported)?;
         assert_eq!(db.get_usage_table_columns()?, expected);
+        assert_eq!(db.get_usage_trend_grouping()?, grouping);
+        assert_eq!(db.get_usage_date_range()?, date_range);
         assert!(db.set_usage_table_columns("unknown", vec![]).is_err());
         assert_eq!(db.get_usage_table_columns()?, expected);
         Ok(())

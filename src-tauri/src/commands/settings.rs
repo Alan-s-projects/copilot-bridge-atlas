@@ -8,6 +8,50 @@ fn merge_settings_for_save(
 }
 
 #[tauri::command]
+pub async fn get_usage_date_range(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::settings::UsageDateRange, String> {
+    state
+        .db
+        .get_usage_date_range()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_usage_date_range(
+    state: tauri::State<'_, crate::AppState>,
+    range: crate::settings::UsageDateRange,
+) -> Result<crate::settings::UsageDateRange, String> {
+    state
+        .db
+        .set_usage_date_range(range.clone())
+        .map_err(|error| error.to_string())?;
+    Ok(range)
+}
+
+#[tauri::command]
+pub async fn get_usage_trend_grouping(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::services::usage_stats::TrendGrouping, String> {
+    state
+        .db
+        .get_usage_trend_grouping()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_usage_trend_grouping(
+    state: tauri::State<'_, crate::AppState>,
+    grouping: crate::services::usage_stats::TrendGrouping,
+) -> Result<crate::services::usage_stats::TrendGrouping, String> {
+    state
+        .db
+        .set_usage_trend_grouping(grouping)
+        .map_err(|error| error.to_string())?;
+    Ok(grouping)
+}
+
+#[tauri::command]
 pub async fn get_usage_table_columns(
     state: tauri::State<'_, crate::AppState>,
 ) -> Result<crate::settings::UsageTableColumns, String> {

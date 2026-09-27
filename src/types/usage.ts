@@ -99,6 +99,27 @@ export interface DailyStats {
   totalCacheReadTokens: number;
 }
 
+export type TrendUnit = "minute" | "hour" | "day" | "week" | "month";
+export interface TrendGrouping {
+  interval: number;
+  unit: TrendUnit;
+}
+export interface TrendBucket extends DailyStats {
+  startDate: number;
+  endDate: number;
+  readCacheHitRate: number | null;
+  successRate: number | null;
+  incomplete: boolean;
+}
+export interface UsageTrends {
+  grouping: TrendGrouping;
+  buckets: TrendBucket[];
+  hasIncompleteRollupData: boolean;
+  totalCost: string | null;
+  startDate: number;
+  endDate: number;
+}
+
 export interface ModelStats {
   model: string;
   requestCount: number;

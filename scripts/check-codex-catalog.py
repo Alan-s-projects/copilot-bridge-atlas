@@ -1,7 +1,8 @@
 """Opt-in installed-Codex catalog check, using an isolated CODEX_HOME."""
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -16,6 +17,37 @@ import time
 import uuid
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from urllib.parse import urlparse
+
+
+def expected_instructions(entry):
+    messages = entry.get("model_messages") or {}
+    text = messages.get("instructions_template")
+    if text is None:
+        text = entry.get("base_instructions")
+    if not isinstance(text, str):
+        raise ValueError(f"Missing instructions for {entry['slug']}")
+    if "base_instructions" in entry and entry["base_instructions"] != text:
+        raise ValueError(f"Conflicting instruction fields for {entry['slug']}")
+    return text
+
+
+def verify_instructions(requests, entries):
+    known_prompts = {expected_instructions(entry) for entry in entries.values()}
+    for request in requests:
+        expected = expected_instructions(entries[request["model"]])
+        if request["instructions"] not in known_prompts:
+            raise AssertionError("Base instructions are not an unchanged catalog prompt")
+        switches = request.get("model_switch_messages", [])
+        # Codex retains the initial thread base and appends the selected model's
+        # literal instructions in a developer message on subsequent model switches.
+        if switches:
+            if expected not in switches[-1]:
+                raise AssertionError(f"Latest model-switch instructions differ for {request['model']}")
+        elif request["instructions"] != expected:
+            raise AssertionError(f"Effective base instructions differ for {request['model']}")
+        request["instruction_delivery"] = "model_switch" if switches else "base"
+        request["effective_instruction_sha256"] = hashlib.sha256(expected.encode("utf-8")).hexdigest()
 
 
 @contextmanager
@@ -67,9 +99,16 @@ class CaptureHandler(BaseHTTPRequestHandler):
             "stream": data.get("stream"),
             "instruction_chars": len(instructions),
             "instruction_words": len(instructions.split()),
+            "instruction_sha256": hashlib.sha256(instructions.encode("utf-8")).hexdigest(),
             "input_chars": len(json.dumps(data.get("input", []))),
             "tool_chars": len(json.dumps(data.get("tools", []))),
             "instructions": instructions,
+            "model_switch_messages": [
+                content.get("text", "") for item in data.get("input", [])
+                if isinstance(item, dict) and item.get("role") == "developer"
+                for content in item.get("content", [])
+                if isinstance(content, dict) and "<model_switch>" in content.get("text", "")
+            ],
             "permission_context": [
                 content.get("text", "") for item in data.get("input", [])
                 if isinstance(item, dict) and item.get("role") == "developer"
@@ -148,11 +187,15 @@ class AppServer:
         self.pending = []
         threading.Thread(target=self._read, daemon=True).start()
         threading.Thread(target=self._read_errors, daemon=True).start()
-        self.request("initialize", {
-            "clientInfo": {"name": "atlas_catalog_check", "version": "1.0"},
-            "capabilities": {"experimentalApi": True},
-        })
-        self.send({"method": "initialized"})
+        try:
+            self.request("initialize", {
+                "clientInfo": {"name": "atlas_catalog_check", "version": "1.0"},
+                "capabilities": {"experimentalApi": True},
+            })
+            self.send({"method": "initialized"})
+        except Exception:
+            self.close()
+            raise
 
     def _read(self):
         for line in self.process.stdout:
@@ -210,7 +253,8 @@ class AppServer:
         return events
 
     def close(self):
-        self.process.stdin.close()
+        with suppress(OSError, ValueError):
+            self.process.stdin.close()
         try:
             self.process.wait(timeout=10)
         except subprocess.TimeoutExpired:
@@ -248,12 +292,23 @@ def main():
                         help="Capture synthetic Responses payloads with a local mock server")
     parser.add_argument("--live", help="Opt-in local Atlas base URL; consumes upstream tokens")
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--models", nargs="+", default=["gpt-6-astra", "gpt-6-luna", "gpt-6-sol"],
+                        help="Models to validate, in same-session switching order")
+    parser.add_argument("--fresh-threads", action="store_true",
+                        help="Also usable to check each model's initial base prompt separately")
     args = parser.parse_args()
     if args.prepare_settings:
         prepare_settings(args.source_catalog, args.prepare_settings)
         return
     if not args.codex or not args.catalog:
         parser.error("--codex and --catalog are required for catalog validation")
+    if args.live:
+        upstream = urlparse(args.live)
+        if upstream.scheme != "http" or upstream.hostname not in ("127.0.0.1", "localhost", "::1") or upstream.username or upstream.password:
+            parser.error("--live must be a credential-free loopback Atlas HTTP URL")
+    entries = {model["slug"]: model for model in json.loads(args.catalog.read_text(encoding="utf-8"))["models"]}
+    for entry in entries.values():
+        expected_instructions(entry)
     with temporary_workspace() as directory:
         root = Path(directory)
         home = root / "home"
@@ -265,11 +320,11 @@ def main():
             server = AppServer(args.codex, args.catalog, home, root, base_url)
             result = server.request("model/list", {"includeHidden": True})
             ids = {model["id"] for model in result["data"]}
-            expected = {model["slug"] for model in json.loads(args.catalog.read_text(encoding="utf-8"))["models"]}
+            expected = set(entries)
             assert expected <= ids, f"Missing catalog models: {sorted(expected - ids)}"
             report = {"catalog_loaded": True, "models": sorted(expected)}
             if capture:
-                models = ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol"]
+                models = args.models
                 assert set(models) <= expected
                 started = server.request("thread/start", {
                     "model": models[0], "cwd": str(root), "ephemeral": True,
@@ -283,6 +338,11 @@ def main():
                     fixture.write_text("value=0\n", encoding="utf-8")
                 report["turns"] = []
                 for index, model in enumerate(models, start=1):
+                    if args.fresh_threads and index > 1:
+                        thread = server.request("thread/start", {
+                            "model": model, "cwd": str(root), "ephemeral": True,
+                            "approvalPolicy": "never", "sandbox": "workspace-write",
+                        })["thread"]["id"]
                     start = len(capture.requests)
                     prompt = (
                         f"This is a synthetic catalog validation in an isolated temporary directory. "
@@ -306,6 +366,11 @@ def main():
                         }
                         assert any(item["type"] == "fileChange" for item in completed_items), completed_items
                         assert any(item["type"] == "commandExecution" for item in completed_items), completed_items
+                        for item in completed_items:
+                            if item["type"] == "commandExecution":
+                                assert item.get("exitCode") == 0, item
+                            if item["type"] in ("commandExecution", "fileChange"):
+                                assert item.get("status") == "completed", item
                         assert f"ATLAS_STEP_{index}" in text, text
                     else:
                         assert "ATLAS_CATALOG_OK" in text, text
@@ -313,15 +378,15 @@ def main():
                         "model": model, "completed": True, "requests": len(calls),
                         "item_types": [item["type"] for item in completed_items],
                         "streamed_deltas": sum(event.get("method") == "item/agentMessage/delta" for event in events),
+                        "context_windows": [
+                            event["params"]["tokenUsage"].get("modelContextWindow")
+                            for event in events if event.get("method") == "thread/tokenUsage/updated"
+                        ],
                     })
-                source = json.loads(args.catalog.read_text(encoding="utf-8"))["models"][0]
-                rendered = source.get("model_messages", {}).get("instructions_template", source["base_instructions"])
-                for key, value in source.get("model_messages", {}).get("instructions_variables", {}).items():
-                    rendered = rendered.replace("{{ " + key + " }}", value or "")
-                if "{{" not in rendered:
-                    assert capture.requests[0]["instructions"] == rendered, "Effective instructions differ from source"
+                verify_instructions(capture.requests, entries)
+                report["thread_mode"] = "fresh" if args.fresh_threads else "switching"
                 report["payloads"] = [{key: value for key, value in request.items()
-                                      if key not in ("instructions", "permission_context")}
+                                      if key not in ("instructions", "permission_context", "model_switch_messages")}
                                       for request in capture.requests]
             if args.report:
                 args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")

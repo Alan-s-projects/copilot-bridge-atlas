@@ -1,3 +1,33 @@
+import {
+  getReadCacheHitRate,
+  type CacheNormalizableLog,
+  type RequestLog,
+} from "@/types/usage";
+
+export function formatReadCacheHitRate(log: CacheNormalizableLog): string {
+  const rate = getReadCacheHitRate(log);
+  return rate == null ? "--" : `${(rate * 100).toFixed(1)}%`;
+}
+
+export function formatCostBreakdown(
+  log: Pick<
+    RequestLog,
+    | "inputCostUsd"
+    | "outputCostUsd"
+    | "cacheReadCostUsd"
+    | "cacheCreationCostUsd"
+    | "costMultiplier"
+  >,
+): string {
+  return [
+    `Fresh input: ${fmtUsd(log.inputCostUsd, 6)}`,
+    `Cached Input: ${fmtUsd(log.cacheReadCostUsd, 6)}`,
+    `Output: ${fmtUsd(log.outputCostUsd, 6)}`,
+    `Cache Write: ${fmtUsd(log.cacheCreationCostUsd, 6)}`,
+    `Cost multiplier: x${log.costMultiplier}`,
+  ].join("; ");
+}
+
 export function parseFiniteNumber(value: unknown): number | null {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : null;

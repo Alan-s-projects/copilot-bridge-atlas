@@ -12,6 +12,18 @@ pub(crate) const INPUT_TOKEN_SEMANTICS_LEGACY: i64 = 0;
 pub(crate) const INPUT_TOKEN_SEMANTICS_TOTAL: i64 = 1;
 pub(crate) const INPUT_TOKEN_SEMANTICS_FRESH: i64 = 2;
 
+/// Match the per-request TPS timing: explicit duration, then latency minus TTFT,
+/// then end-to-end latency. Invalid generation timing remains unknown.
+pub(crate) fn output_generation_ms_sql(alias: &str) -> String {
+    format!(
+        "CASE WHEN {alias}.duration_ms > 0 THEN {alias}.duration_ms \
+         WHEN {alias}.first_token_ms IS NOT NULL THEN \
+           CASE WHEN {alias}.latency_ms > {alias}.first_token_ms \
+                THEN {alias}.latency_ms - {alias}.first_token_ms END \
+         WHEN {alias}.latency_ms > 0 THEN {alias}.latency_ms END"
+    )
+}
+
 /// Build an SQL expression that returns the cache-normalized `input_tokens`
 /// for a single row in `proxy_request_logs` or `usage_daily_rollups`.
 ///

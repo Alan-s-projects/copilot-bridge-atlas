@@ -86,10 +86,11 @@ describe("RequestLogTable", () => {
                   requestedReasoningEffort: "ultra",
                   appliedReasoningEffort: "max",
                   createdAt: 1790400000,
-                  inputTokens: 100,
+                  inputTokens: 1000,
+                  freshInputTokens: 700,
                   outputTokens: 20,
-                  cacheReadTokens: 0,
-                  cacheCreationTokens: 0,
+                  cacheReadTokens: 200,
+                  cacheCreationTokens: 100,
                   latencyMs: 1000,
                   statusCode: 200,
                   totalCostUsd: "0.01",
@@ -112,9 +113,17 @@ describe("RequestLogTable", () => {
         />,
       );
       const headings = screen.getAllByRole("columnheader");
-      expect(headings).toHaveLength(8);
+      expect(headings).toHaveLength(9);
       expect(headings[1]).toHaveTextContent("usage.billingModel");
       expect(headings[2]).toHaveTextContent("Reasoning(requested/applied)");
+      expect(headings.slice(3).map((heading) => heading.textContent)).toEqual([
+        "usage.status",
+        "Input(fresh/cached/hit)",
+        "usage.outputTokens",
+        "usage.cacheWrite",
+        "usage.timingInfo",
+        "usage.cost",
+      ]);
       expect(
         screen.queryByRole("columnheader", { name: "usage.provider" }),
       ).not.toBeInTheDocument();
@@ -124,12 +133,21 @@ describe("RequestLogTable", () => {
       expect(screen.queryByText("GitHub Copilot")).not.toBeInTheDocument();
       expect(screen.queryByText("proxy")).not.toBeInTheDocument();
       if (hasLogs) {
-        expect(screen.getAllByRole("cell")).toHaveLength(8);
-        expect(screen.getAllByRole("cell")[2]).toHaveTextContent("ultra / max");
+        const cells = screen.getAllByRole("cell");
+        expect(cells).toHaveLength(9);
+        expect(cells[2]).toHaveTextContent("ultra / max");
+        expect(cells.slice(3).map((cell) => cell.textContent)).toEqual([
+          "200",
+          "700 / 200 / 20.0%",
+          "20/20 tps",
+          "100",
+          "1.0s",
+          "$0.0100",
+        ]);
         expect(screen.getByText("gpt-6-astra")).toBeVisible();
         expect(screen.getByText("$0.0100")).toBeVisible();
       } else {
-        expect(screen.getByRole("cell")).toHaveAttribute("colspan", "8");
+        expect(screen.getByRole("cell")).toHaveAttribute("colspan", "9");
       }
     },
   );

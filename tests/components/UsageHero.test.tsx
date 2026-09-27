@@ -30,13 +30,15 @@ beforeEach(() => {
     data: {
       totalInputTokens: 200,
       totalOutputTokens: 50,
+      totalCacheCreationTokens: 100,
       totalCacheReadTokens: 800,
-      realTotalTokens: 1050,
-      cacheHitRate: 0.8,
+      realTotalTokens: 1150,
+      cacheHitRate: 800 / 1100,
       totalCost: "1.25",
       totalRequests: 12,
       successRate: 91.7,
       avgLatencyMs: 1250,
+      outputTokensPerSecond: 125.4,
     },
   });
 });
@@ -58,18 +60,28 @@ describe("Usage summary", () => {
     expect(
       screen.queryByRole("img", { name: "Codex" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByTitle((1050).toLocaleString())).toBeVisible();
-    expect(screen.getByText("Tokens Processed")).toBeVisible();
+    expect(screen.queryByText("Tokens Processed")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTitle((1150).toLocaleString()),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("Requests")).toBeVisible();
     expect(screen.getByText("$1")).toBeVisible();
-    expect(screen.getByText("80.0%")).toBeVisible();
+    expect(screen.getByText("72.7%")).toBeVisible();
     expect(screen.getByText("Success Rate")).toBeVisible();
     expect(screen.getByText("91.7%")).toBeVisible();
     expect(screen.getByText("Average Latency")).toBeVisible();
     expect(screen.getByText("1.25s")).toBeVisible();
     expect(screen.queryByText("Creation")).not.toBeInTheDocument();
-    expect(screen.getByText("Hit")).toBeVisible();
-    expect(screen.getByText("800")).toBeVisible();
+    expect(screen.queryByText("Hit")).not.toBeInTheDocument();
+    expect(screen.getByText("(fresh/cached/hit)")).toBeVisible();
+    expect(screen.getByText("Cache Write")).toBeVisible();
+    expect(screen.getByText("100")).toBeVisible();
+    expect(
+      screen.getByTitle(
+        "Fresh Input: 200; Cached Input: 800; Read Cache Hit Rate: 72.7%",
+      ),
+    ).toHaveTextContent("200 / 800 / 72.7%");
+    expect(screen.getByText("125.4 tps")).toBeVisible();
     const summary = screen.getByRole("region", { name: "Usage summary" });
     expect(screen.getAllByRole("region")).toHaveLength(1);
     expect(
@@ -78,13 +90,12 @@ describe("Usage summary", () => {
         .map((term) => term.textContent),
     ).toEqual([
       "Total Cost",
-      "Tokens Processed",
-      "Requests",
-      "Fresh Input",
+      "Input (fresh/cached/hit)",
       "Output",
-      "Hit",
-      "Cache Hit Rate",
+      "Cache Write",
+      "Requests",
       "Average Latency",
+      "Output Speed",
       "Success Rate",
     ]);
     const tokenDetails = within(summary).getByRole("group", {
@@ -95,10 +106,36 @@ describe("Usage summary", () => {
     });
     expect(tokenDetails.querySelector("dl")).toHaveClass(
       "grid-cols-2",
-      "md:grid-cols-4",
+      "sm:grid-cols-[minmax(0,2fr)_repeat(2,minmax(0,1fr))]",
     );
     expect(requestDetails.querySelector("dl")).toHaveClass("grid-cols-2");
-    expect(within(tokenDetails).getByText("80.0%")).toHaveClass(
+    expect(requestDetails.querySelector("dl")?.className).toBe(
+      tokenDetails.querySelector("dl")?.className,
+    );
+    expect(tokenDetails.parentElement?.parentElement).toHaveClass(
+      "md:grid-cols-[9rem_auto_auto_auto]",
+    );
+    expect(screen.getByText("Average Latency").parentElement).toHaveClass(
+      "col-span-2",
+      "sm:col-span-1",
+      "md:[contain:inline-size]",
+    );
+    expect(tokenDetails.parentElement).toContainElement(
+      screen.getByText("Total Cost"),
+    );
+    expect(tokenDetails.parentElement).not.toContainElement(
+      screen.getByText("Requests"),
+    );
+    expect(requestDetails.parentElement).toContainElement(
+      screen.getByText("Requests"),
+    );
+    expect(screen.getByText("Total Cost").nextElementSibling).toHaveClass(
+      "text-2xl",
+    );
+    expect(screen.getByText("Requests").nextElementSibling).toHaveClass(
+      "text-2xl",
+    );
+    expect(within(tokenDetails).getByText("72.7%")).toHaveClass(
       "text-emerald-700",
     );
     expect(within(requestDetails).getByText("91.7%")).toHaveClass(
@@ -110,6 +147,43 @@ describe("Usage summary", () => {
       { refetchInterval: false },
     );
   });
+
+  it("keeps the read hit rate independent of output tokens", () => {
+    const data = {
+      totalInputTokens: 100,
+      totalCacheReadTokens: 800,
+      totalCacheCreationTokens: 100,
+      totalOutputTokens: 9000,
+      cacheHitRate: 0.8,
+    };
+    summaryMock.mockReturnValue({ isLoading: false, data });
+    render(<UsageHero range={{ preset: "today" }} refreshIntervalMs={0} />);
+    expect(
+      screen.getByTitle(
+        "Fresh Input: 100; Cached Input: 800; Read Cache Hit Rate: 80.0%",
+      ),
+    ).toHaveTextContent("80.0%");
+  });
+
+  it.each([undefined, 0, Number.NaN])(
+    "does not guess output TPS when timing is unavailable (%s)",
+    (tps) => {
+      summaryMock.mockReturnValue({
+        isLoading: false,
+        data: {
+          totalRequests: 10,
+          successRate: 100,
+          avgLatencyMs: 200,
+          totalOutputTokens: 1000,
+          outputTokensPerSecond: tps,
+        },
+      });
+      render(<UsageHero range={{ preset: "today" }} refreshIntervalMs={0} />);
+      expect(
+        screen.getByText("Output Speed").nextElementSibling,
+      ).toHaveTextContent("--");
+    },
+  );
 
   it("keeps a compact loading state until the summary is available", () => {
     summaryMock.mockReturnValue({ isLoading: true, data: undefined });
@@ -159,8 +233,8 @@ describe("Usage summary", () => {
     expect(summary.totalCost).toBe(raw);
     expect(within(usageSummary).queryByText("USD")).not.toBeInTheDocument();
     expect(usageSummary.firstElementChild).toHaveClass("p-0");
-    expect(usageSummary.querySelector("dl")).toHaveClass(
-      "grid-cols-[minmax(0,0.9fr)_minmax(0,1.2fr)_minmax(0,0.9fr)]",
+    expect(usageSummary.querySelector("dl")?.parentElement).toHaveClass(
+      "sm:grid-cols-[minmax(0,1fr)_minmax(0,5fr)]",
     );
   });
 });

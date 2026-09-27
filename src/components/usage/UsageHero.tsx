@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useUsageSummary } from "@/lib/query/usage";
 import { Loader2 } from "lucide-react";
 import { fmtUsd, formatTokensShort, parseFiniteNumber } from "./format";
+import { InputUsageHeading, InputUsageValue } from "./InputUsage";
 import type { UsageRangeSelection } from "@/types/usage";
 
 interface UsageHeroProps {
@@ -13,6 +14,10 @@ interface UsageHeroProps {
   model?: string;
   refreshIntervalMs: number;
 }
+
+// Size the shared desktop tracks from token values, not the secondary row's labels.
+const DETAIL_GRID_CLASS_NAME =
+  "grid min-w-0 grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-[minmax(0,2fr)_repeat(2,minmax(0,1fr))] md:col-span-3 md:grid-cols-subgrid";
 
 export function UsageHero({
   range,
@@ -34,16 +39,21 @@ export function UsageHero({
   const input = summary?.totalInputTokens ?? 0;
   const output = summary?.totalOutputTokens ?? 0;
   const cacheRead = summary?.totalCacheReadTokens ?? 0;
-  const realTotal = summary?.realTotalTokens ?? 0;
+  const cacheWrite = summary?.totalCacheCreationTokens ?? 0;
   const hitRate = summary?.cacheHitRate ?? 0;
   const totalCost = parseFiniteNumber(summary?.totalCost);
   const requests = summary?.totalRequests ?? 0;
   const latency = parseFiniteNumber(summary?.avgLatencyMs);
+  const outputTps = parseFiniteNumber(summary?.outputTokensPerSecond);
 
   const successRate =
     requests > 0 && summary ? `${summary.successRate.toFixed(1)}%` : "--";
   const averageLatency =
     requests > 0 && latency != null ? `${(latency / 1000).toFixed(2)}s` : "--";
+  const outputSpeed =
+    requests > 0 && outputTps != null && outputTps > 0
+      ? `${outputTps.toFixed(1)} tps`
+      : "--";
 
   if (isLoading) {
     return (
@@ -59,22 +69,6 @@ export function UsageHero({
 
   const hitPercent = Math.max(0, Math.min(100, hitRate * 100));
   const hitPercentLabel = hitPercent.toFixed(hitPercent >= 99.95 ? 0 : 1);
-  const primaryMetrics: { label: string; value: string; title?: string }[] = [
-    {
-      label: t("usage.totalCost", "Total Cost"),
-      value: fmtUsd(totalCost, 0),
-    },
-    {
-      label: t("usage.realTotal", "Tokens Processed"),
-      value: formatTokensShort(realTotal, 2),
-      title: realTotal.toLocaleString("en-US"),
-    },
-    {
-      label: t("usage.requests", "Requests"),
-      value: requests.toLocaleString("en-US"),
-    },
-  ];
-
   return (
     <motion.div
       initial={{ opacity: 0, y: 5 }}
@@ -89,69 +83,78 @@ export function UsageHero({
       >
         <CardContent className="p-0">
           <h2 className="sr-only">{t("usage.summary", "Usage summary")}</h2>
-          <dl className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.2fr)_minmax(0,0.9fr)] divide-x divide-border border-b border-border px-1.5 py-3 sm:px-3 sm:py-4">
-            {primaryMetrics.map(({ label, value, title }) => (
-              <div key={label} className="min-w-0 px-1.5 sm:px-3">
-                <dt className="mb-1 break-words text-xs leading-4 text-muted-foreground">
-                  {label}
-                </dt>
-                <dd
-                  title={title}
-                  className="whitespace-nowrap text-lg font-medium leading-6 tabular-nums sm:text-2xl sm:leading-8"
-                >
-                  {value}
-                </dd>
+          <div className="divide-y divide-border md:grid md:grid-cols-[9rem_auto_auto_auto] md:gap-x-4">
+            <div className="grid min-w-0 grid-cols-1 items-center gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,5fr)] md:col-span-4 md:grid-cols-subgrid">
+              <dl className="min-w-0">
+                <SummaryRow
+                  label={t("usage.totalCost", "Total Cost")}
+                  value={fmtUsd(totalCost, 0)}
+                  primary
+                />
+              </dl>
+              <div
+                role="group"
+                aria-label={t("usage.tokenDetails", "Token details")}
+                className="min-w-0 sm:border-l sm:border-border sm:pl-4 md:col-span-3 md:grid md:grid-cols-subgrid"
+              >
+                <dl className={DETAIL_GRID_CLASS_NAME}>
+                  <div className="col-span-2 flex min-w-0 flex-col items-start gap-1 sm:col-span-1">
+                    <dt className="w-full text-xs text-muted-foreground md:[contain:inline-size]">
+                      <InputUsageHeading inline />
+                    </dt>
+                    <dd className="text-sm font-medium">
+                      <InputUsageValue
+                        fresh={input}
+                        cached={cacheRead}
+                        hit={`${hitPercentLabel}%`}
+                        compact
+                      />
+                    </dd>
+                  </div>
+                  <SummaryRow
+                    label={t("usage.output", "Output")}
+                    value={formatTokensShort(output)}
+                  />
+                  <SummaryRow
+                    label={t("usage.cacheWrite", "Cache Write")}
+                    value={formatTokensShort(cacheWrite)}
+                  />
+                </dl>
               </div>
-            ))}
-          </dl>
-          <div className="grid min-w-0 grid-cols-1 gap-3 p-3 sm:p-4 md:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)] md:gap-4">
-            <div
-              role="group"
-              aria-label={t("usage.tokenDetails", "Token details")}
-              className="min-w-0"
-            >
-              <h3 className="mb-2 text-xs font-medium text-muted-foreground">
-                {t("usage.tokenDetails", "Token details")}
-              </h3>
-              <dl className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 md:grid-cols-4 md:gap-x-4">
-                <SummaryRow
-                  label={t("usage.freshInput", "Fresh Input")}
-                  value={formatTokensShort(input)}
-                />
-                <SummaryRow
-                  label={t("usage.output", "Output")}
-                  value={formatTokensShort(output)}
-                />
-                <SummaryRow
-                  label={t("usage.cacheRead", "Hit")}
-                  value={formatTokensShort(cacheRead)}
-                />
-                <SummaryRow
-                  label={t("usage.cacheHitRate", "Cache Hit Rate")}
-                  value={`${hitPercentLabel}%`}
-                  percentage
-                />
-              </dl>
             </div>
-            <div
-              role="group"
-              aria-label={t("usage.requestDetails", "Request details")}
-              className="min-w-0 border-t border-border pt-3 md:border-l md:border-t-0 md:pl-4 md:pt-0"
-            >
-              <h3 className="mb-2 text-xs font-medium text-muted-foreground">
-                {t("usage.requestDetails", "Request details")}
-              </h3>
-              <dl className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2">
+            <div className="grid min-w-0 grid-cols-1 items-center gap-4 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,5fr)] md:col-span-4 md:grid-cols-subgrid">
+              <dl className="min-w-0">
                 <SummaryRow
-                  label={t("usage.avgLatency", "Average Latency")}
-                  value={averageLatency}
-                />
-                <SummaryRow
-                  label={t("usage.successRate", "Success Rate")}
-                  value={successRate}
-                  percentage
+                  label={t("usage.requests", "Requests")}
+                  value={requests.toLocaleString("en-US")}
+                  primary
                 />
               </dl>
+              <div
+                role="group"
+                aria-label={t("usage.requestDetails", "Request details")}
+                className="min-w-0 sm:border-l sm:border-border sm:pl-4 md:col-span-3 md:grid md:grid-cols-subgrid"
+              >
+                <dl className={DETAIL_GRID_CLASS_NAME}>
+                  <SummaryRow
+                    label={t("usage.avgLatency", "Average Latency")}
+                    value={averageLatency}
+                    className="col-span-2 sm:col-span-1 md:[contain:inline-size]"
+                  />
+                  <SummaryRow
+                    label={t("usage.outputSpeed", "Output Speed")}
+                    value={outputSpeed}
+                    className="md:[contain:inline-size]"
+                    title="Output tokens / generation time. Excludes first-token delay when available; older rollups use request latency."
+                  />
+                  <SummaryRow
+                    label={t("usage.successRate", "Success Rate")}
+                    value={successRate}
+                    className="md:[contain:inline-size]"
+                    percentage
+                  />
+                </dl>
+              </div>
             </div>
           </div>
         </CardContent>
@@ -164,14 +167,27 @@ interface SummaryRowProps {
   label: string;
   value: string;
   percentage?: boolean;
+  title?: string;
+  primary?: boolean;
+  className?: string;
 }
 
-function SummaryRow({ label, value, percentage = false }: SummaryRowProps) {
+function SummaryRow({
+  label,
+  value,
+  percentage = false,
+  title,
+  primary = false,
+  className = "",
+}: SummaryRowProps) {
   return (
-    <div className="flex min-w-0 flex-col items-start gap-1">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
+    <div className={`flex min-w-0 flex-col items-start gap-1 ${className}`}>
+      <dt className="w-full text-xs text-muted-foreground md:[contain:inline-size]">
+        {label}
+      </dt>
       <dd
-        className={`text-sm font-medium tabular-nums ${
+        title={title}
+        className={`tabular-nums ${primary ? "break-all text-2xl font-semibold leading-8" : "text-sm font-medium"} ${
           percentage && value !== "--"
             ? "text-emerald-700 dark:text-emerald-400"
             : ""

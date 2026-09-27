@@ -473,13 +473,25 @@ fn safe_param_path(value: &str) -> Option<String> {
     valid.then(|| value.to_owned())
 }
 
+fn diagnostic_number_name(path: &str) -> bool {
+    let name = path.rsplit('.').next().unwrap_or(path);
+    let name = name.split('[').next().unwrap_or(name);
+    matches!(
+        name,
+        "count"
+            | "limit"
+            | "prompt_tokens"
+            | "input_tokens"
+            | "output_tokens"
+            | "max_tokens"
+            | "max_prompt_tokens"
+            | "max_output_tokens"
+    )
+}
+
 fn collect_numbers(value: &Value, path: &str, output: &mut Vec<String>) {
     match value {
-        Value::Number(number)
-            if path
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.')) =>
-        {
+        Value::Number(number) if diagnostic_number_name(path) => {
             output.push(format!("{path}={number}"));
         }
         Value::Array(items) => {
@@ -502,6 +514,20 @@ fn collect_numbers(value: &Value, path: &str, output: &mut Vec<String>) {
         _ => {}
     }
     output.truncate(12);
+}
+
+fn grok_prompt_limit(message: &str) -> Option<(u64, u64)> {
+    let words: Vec<_> = message.split_whitespace().collect();
+    let prompt = words.windows(4).position(|phrase| phrase == ["prompt", "token", "count", "of"])?;
+    let count = words.get(prompt + 4)?.parse().ok()?;
+    if words.get(prompt + 5..prompt + 8) != Some(&["exceeds", "the", "limit"]) {
+        return None;
+    }
+    if words.get(prompt + 8) != Some(&"of") {
+        return None;
+    }
+    let limit = words.get(prompt + 9)?.trim_end_matches('.').parse().ok()?;
+    Some((count, limit))
 }
 
 fn collect_structure(value: &Value, path: &str, output: &mut Vec<String>) {
@@ -539,6 +565,7 @@ fn summarize_error_value(value: &Value) -> String {
     let code = error
         .get("code")
         .and_then(Value::as_str)
+        .filter(|value| !looks_sensitive(value))
         .and_then(|value| safe_token(value, 96))
         .unwrap_or_else(|| "none".into());
     let kind = error
@@ -553,6 +580,16 @@ fn summarize_error_value(value: &Value) -> String {
         .unwrap_or_else(|| "none".into());
     let mut numbers = Vec::new();
     collect_numbers(error, "", &mut numbers);
+    if numbers.is_empty() {
+        if let Some((count, limit)) = error
+            .get("message")
+            .and_then(Value::as_str)
+            .and_then(grok_prompt_limit)
+        {
+            numbers.push(format!("prompt_tokens={count}"));
+            numbers.push(format!("limit={limit}"));
+        }
+    }
     let mut structure = Vec::new();
     collect_structure(error, "", &mut structure);
     format!(
@@ -661,16 +698,24 @@ mod tests {
 
     #[test]
     fn structured_failure_summaries_keep_codes_and_counts_without_freeform_text() {
-        let summary = summarize_body(br#"{"error":{"message":"prompt contains secret prompt","code":"model_max_prompt_tokens_exceeded","type":"invalid_request_error","param":"input","prompt_tokens":390003,"limit":372000,"unexpected":{"reason":"secret tool output","count":2}}}"#, false, false);
+        let summary = summarize_body(br#"{"error":{"message":"prompt contains secret prompt","code":"model_max_prompt_tokens_exceeded","type":"invalid_request_error","param":"input","prompt_tokens":390003,"limit":372000,"unexpected":{"reason":"secret tool output","count":2},"otp":123456}}"#, false, false);
         assert!(summary.contains("code=model_max_prompt_tokens_exceeded"));
         assert!(summary.contains("type=invalid_request_error"));
         assert!(summary.contains("param=input"));
         assert!(summary.contains("prompt_tokens=390003"));
         assert!(summary.contains("limit=372000"));
         assert!(summary.contains("unexpected.count=2"));
+        assert!(summary.contains("otp:number"));
+        assert!(!summary.contains("otp=123456"));
         assert!(summary.contains("unexpected:object"));
         assert!(!summary.contains("secret prompt"));
         assert!(!summary.contains("secret tool output"));
+
+        let observed = summarize_body(br#"{"error":{"message":"prompt token count of 390003 exceeds the limit of 372000","code":"model_max_prompt_tokens_exceeded","type":"invalid_request_error","param":null}}"#, false, false);
+        assert!(observed.contains("code=model_max_prompt_tokens_exceeded"));
+        assert!(observed.contains("prompt_tokens=390003"));
+        assert!(observed.contains("limit=372000"));
+        assert!(!observed.contains("prompt token count"));
 
         assert_eq!(
             summarize_body(b"Bad Request\nsecret prompt", false, false),

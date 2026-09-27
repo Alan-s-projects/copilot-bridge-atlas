@@ -1,6 +1,7 @@
 //! Per-request state for the selected Codex Copilot provider.
 use crate::provider::Provider;
 use crate::proxy::{
+    diagnostics::RequestDiagnostics,
     extract_session_id,
     forwarder::RequestForwarder,
     server::ProxyState,
@@ -8,6 +9,7 @@ use crate::proxy::{
     ProxyError,
 };
 use axum::http::HeaderMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 pub struct RequestContext {
@@ -22,6 +24,7 @@ pub struct RequestContext {
     pub session_id: String,
     pub session_client_provided: bool,
     pub copilot_optimizer_config: CopilotOptimizerConfig,
+    pub diagnostics: Arc<RequestDiagnostics>,
 }
 
 impl RequestContext {
@@ -57,6 +60,13 @@ impl RequestContext {
             session.source,
             session.client_provided
         );
+        let diagnostics = RequestDiagnostics::new(
+            state.db.clone(),
+            provider.id.clone(),
+            request_model.clone(),
+            session.session_id.clone(),
+            start_time,
+        );
         Ok(Self {
             start_time,
             provider,
@@ -68,6 +78,7 @@ impl RequestContext {
             session_id: session.session_id,
             session_client_provided: session.client_provided,
             copilot_optimizer_config,
+            diagnostics,
         })
     }
 
@@ -80,6 +91,7 @@ impl RequestContext {
             self.session_id.clone(),
             self.session_client_provided,
             self.copilot_optimizer_config.clone(),
+            Some(self.diagnostics.clone()),
         )
     }
 

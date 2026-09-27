@@ -30,29 +30,6 @@
       "backup": {
         "title": "Backup & Restore",
         "description": "Manage automatic backups, view and restore database snapshots"
-      },
-      "logConfig": {
-        "title": "Application Diagnostic Logs",
-        "description": "Control the output level for application diagnostic logs",
-        "enabled": "Enable Diagnostic Logs",
-        "enabledDescription": "Controls copilot-bridge-atlas.log; request usage records and crash.log are unaffected",
-        "level": "Log Level",
-        "levelDescription": "Set the minimum log level to output",
-        "levels": {
-          "error": "Error",
-          "warn": "Warning",
-          "info": "Info",
-          "debug": "Debug",
-          "trace": "Trace"
-        },
-        "levelHint": "Log level descriptions:",
-        "levelDesc": {
-          "error": "Critical errors only",
-          "warn": "Errors + warnings",
-          "info": "General operation info (default)",
-          "debug": "Detailed info including SSE stream and request/response",
-          "trace": "All logs, most verbose"
-        }
       }
     },
     "theme": "Theme",

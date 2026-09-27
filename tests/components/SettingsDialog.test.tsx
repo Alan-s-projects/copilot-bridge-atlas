@@ -59,9 +59,6 @@ vi.mock("@/components/settings/BackupListSection", () => ({
     </div>
   ),
 }));
-vi.mock("@/components/settings/LogConfigPanel", () => ({
-  LogConfigPanel: () => <div>Log settings</div>,
-}));
 vi.mock("@/components/settings/AuthCenterPanel", () => ({
   AuthCenterPanel: () => <div>Auth settings</div>,
 }));
@@ -190,23 +187,17 @@ describe("SettingsPage", () => {
     const backupTrigger = screen.getByRole("button", {
       name: /Backup & Restore/,
     });
-    const logTrigger = screen.getByRole("button", {
-      name: /settings\.about\.logConfig\.title/,
-    });
     expect(
       about.compareDocumentPosition(backupTrigger) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(
-      backupTrigger.compareDocumentPosition(logTrigger) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     await user.click(backupTrigger);
     expect(
       await screen.findByRole("heading", { name: "Backup & Restore" }),
     ).toBeVisible();
-    await user.click(logTrigger);
-    expect(screen.getByText("Log settings")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /Application Diagnostic Logs/ }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "common.save" }),
     ).not.toBeInTheDocument();

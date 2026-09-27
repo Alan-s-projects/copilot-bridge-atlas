@@ -75,14 +75,6 @@ export const settingsApi = {
   async setAutoLaunch(enabled: boolean): Promise<boolean> {
     return await invoke("set_auto_launch", { enabled });
   },
-
-  async getLogConfig(): Promise<LogConfig> {
-    return await invoke("get_log_config");
-  },
-
-  async setLogConfig(config: LogConfig): Promise<boolean> {
-    return await invoke("set_log_config", { config });
-  },
 };
 
 export interface UsageTableColumns {
@@ -91,11 +83,6 @@ export interface UsageTableColumns {
 }
 
 export type UsageTableName = keyof UsageTableColumns;
-
-export interface LogConfig {
-  enabled: boolean;
-  level: "error" | "warn" | "info" | "debug" | "trace";
-}
 
 interface BackupEntry {
   filename: string;

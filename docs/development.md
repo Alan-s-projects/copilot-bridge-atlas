@@ -19,9 +19,19 @@ An upstream HTTP 408 is reported separately from Atlas's own timeout. For repeat
 - **Overview:** Provider, Today's usage, and Requests cards; proxy status, endpoint, quota ring, estimated cost, cache reuse, active requests, and the latest five requests. Connection warnings appear above Provider.
 - **Usage:** a compact summary of cost, tokens, and requests, with token and request details, history, grouped cost/rate/token charts, model statistics, and searchable model pricing. Date range, chart grouping, and table column selections auto-save; all three charts share the header's model and date filters. Usage-range warnings identify models without a matching bundled or custom price and include fresh input, output, cache hits, and cache-hit rate. Historical recorded costs are preserved. Imported conversation totals are excluded. Token costs are estimates, not a Copilot subscription bill.
 - **Connect:** configuration detection, comparison, copying, and a context-window option.
-- **Settings:** appearance/startup, outbound networking, GitHub authentication, unified model catalog, logs, local backups, and About.
+- **Settings:** appearance/startup, outbound networking, GitHub authentication, unified model catalog, local backups, and About.
 
 Home usage updates are coalesced from request events instead of idle SQL polling. Status and quota polling pause while the window is inactive. Close the window to keep the bridge in the tray; use **Quit** to exit.
+
+The application log is always enabled at Info level and rotates locally. Each
+upstream HTTP request records an `atlas_id`, status, elapsed time, endpoint path,
+requested/upstream models, transport, streaming and reasoning metadata, request
+shape counts, response size, and allowlisted upstream correlation IDs. Failures
+also record a bounded, redacted body summary at Warn level. The same `atlas_id`
+identifies the failed request in Usage history. Old `log_config` database rows
+remain untouched but no longer control logging. Prompts, tool output, credentials,
+and arbitrary headers are excluded. A bare upstream “Bad Request” cannot identify
+which field the provider rejected.
 
 Overview and Usage share the same summary component. Request logs, stored costs, and editable per-model prices retain precision. Average latency includes individual requests and weighted daily rollups for the selected range.
 

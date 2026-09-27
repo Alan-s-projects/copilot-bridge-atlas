@@ -22,7 +22,7 @@ use super::{
         streaming_copilot_responses, transform_codex_chat,
     },
     response_processor::{
-        create_logged_passthrough_stream, process_response, read_decoded_body,
+        create_logged_passthrough_stream_with_diagnostics, process_response, read_decoded_body,
         strip_entity_headers_for_rebuilt_body, strip_hop_by_hop_response_headers,
         SseUsageCollector,
     },
@@ -129,7 +129,7 @@ fn decode_codex_request_body(
             return Err(ProxyError::RequestBodyTooLarge(max_bytes));
         }
         Err(DecompressError::Io(e)) => {
-            log::warn!("[Codex] 请求体解压失败 ({encoding}): {e}");
+            log::warn!("[Codex] Request body decompression failed (detail omitted)");
             return Err(ProxyError::InvalidRequest(format!(
                 "Failed to decompress request body ({encoding}): {e}"
             )));
@@ -201,7 +201,7 @@ pub async fn handle_responses(
     {
         Ok(result) => result,
         Err(err) => {
-            log_forward_error(&state, &ctx, is_stream, &err);
+            log_forward_error(&ctx, &err);
             return build_codex_proxy_error_response(&ctx, &endpoint, &err);
         }
     };
@@ -218,7 +218,11 @@ pub async fn handle_responses(
             response,
             codex_tool_context.clone(),
         )
-        .await?
+        .await
+        .map_err(|error| {
+            ctx.diagnostics.proxy_failure("adapt_response", &error);
+            error
+        })?
     } else {
         response
     };
@@ -232,7 +236,11 @@ pub async fn handle_responses(
             connection_guard,
             codex_tool_context,
         )
-        .await;
+        .await
+        .map_err(|error| {
+            ctx.diagnostics.proxy_failure("chat_conversion", &error);
+            error
+        });
     }
 
     let response = if ctx.provider.is_github_copilot()
@@ -264,6 +272,10 @@ pub async fn handle_responses(
         connection_guard,
     )
     .await
+    .map_err(|error| {
+        ctx.diagnostics.proxy_failure("response_processing", &error);
+        error
+    })
 }
 
 /// Handle Codex's standalone Alpha Search protocol as a semantic passthrough.
@@ -329,7 +341,7 @@ async fn handle_codex_standalone_passthrough(
     {
         Ok(result) => result,
         Err(err) => {
-            log_forward_error(&state, &ctx, false, &err);
+            log_forward_error(&ctx, &err);
             return build_codex_proxy_error_response(&ctx, &endpoint, &err);
         }
     };
@@ -345,6 +357,10 @@ async fn handle_codex_standalone_passthrough(
         connection_guard,
     )
     .await
+    .map_err(|error| {
+        ctx.diagnostics.proxy_failure("response_processing", &error);
+        error
+    })
 }
 
 pub async fn handle_responses_compact(
@@ -381,7 +397,7 @@ pub async fn handle_responses_compact(
     {
         Ok(result) => result,
         Err(err) => {
-            log_forward_error(&state, &ctx, is_stream, &err);
+            log_forward_error(&ctx, &err);
             return build_codex_proxy_error_response(&ctx, &endpoint, &err);
         }
     };
@@ -401,7 +417,11 @@ pub async fn handle_responses_compact(
             connection_guard,
             codex_tool_context,
         )
-        .await;
+        .await
+        .map_err(|error| {
+            ctx.diagnostics.proxy_failure("chat_conversion", &error);
+            error
+        });
     }
 
     process_response(
@@ -412,6 +432,10 @@ pub async fn handle_responses_compact(
         connection_guard,
     )
     .await
+    .map_err(|error| {
+        ctx.diagnostics.proxy_failure("response_processing", &error);
+        error
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -522,11 +546,12 @@ async fn handle_codex_chat_to_responses_transform(
             ))
         };
 
-        let logged_stream = create_logged_passthrough_stream(
+        let logged_stream = create_logged_passthrough_stream_with_diagnostics(
             sse_stream,
             ctx.tag,
             usage_collector,
             connection_guard,
+            Some(ctx.diagnostics.clone()),
         );
 
         let mut headers = axum::http::HeaderMap::new();
@@ -555,7 +580,8 @@ async fn handle_codex_chat_to_responses_transform(
             // 聚合也失败时：服务端日志只记录长度，并给客户端错误附带现场诊断（C7）
             chat_sse_to_response_value(&body_str).map_err(|e| {
                 log::error!(
-                    "[Codex] SSE 聚合兜底失败: {e}, body_bytes={}",
+                    "[Codex] SSE aggregation failed: atlas_id={}, body_bytes={}",
+                    ctx.diagnostics.id,
                     body_bytes.len()
                 );
                 aggregate_fallback_error(e, &response_headers, &body_str)
@@ -563,7 +589,8 @@ async fn handle_codex_chat_to_responses_transform(
         }
         Err(e) => {
             log::error!(
-                "[Codex] 解析 Chat 上游响应失败: {e}, body_bytes={}",
+                "[Codex] Chat response parsing failed: atlas_id={}, body_bytes={}",
+                ctx.diagnostics.id,
                 body_bytes.len()
             );
             return Err(upstream_body_parse_error(
@@ -579,7 +606,10 @@ async fn handle_codex_chat_to_responses_transform(
         &tool_context,
     )
     .map_err(|e| {
-        log::error!("[Codex] Chat → Responses 响应转换失败: {e}");
+        log::error!(
+            "[Codex] Chat response conversion failed: atlas_id={}",
+            ctx.diagnostics.id
+        );
         e
     })?;
     state
@@ -673,6 +703,14 @@ async fn handle_codex_chat_error_response(
     status: axum::http::StatusCode,
 ) -> Result<axum::response::Response, ProxyError> {
     let (mut response_headers, _status, body_bytes) = read_decoded_body(response, ctx.tag).await?;
+    ctx.diagnostics.error_body(&body_bytes, true);
+    ctx.diagnostics.proxy_failure(
+        "chat_error_response",
+        &ProxyError::UpstreamError {
+            status: status.as_u16(),
+            body: None,
+        },
+    );
 
     // 非 JSON 上游错误体（Cloudflare HTML、纯文本 "Unauthorized" 等）若丢成 None，
     // 客户端就看不到原始诊断信息；包成 Value::String 走转换函数的字符串分支。
@@ -1385,34 +1423,8 @@ fn merge_tool_call_delta(
 // Usage logging for the Codex Chat bridge.
 // ============================================================================
 
-fn log_forward_error(
-    state: &ProxyState,
-    ctx: &RequestContext,
-    is_streaming: bool,
-    error: &ProxyError,
-) {
-    use super::usage::logger::UsageLogger;
-
-    let logger = UsageLogger::new(&state.db);
-    let status_code = map_proxy_error_to_status(error);
-    let error_message = get_error_message(error);
-    let request_id = uuid::Uuid::new_v4().to_string();
-
-    if let Err(e) = logger.log_error_with_context(
-        request_id,
-        ctx.provider.id.clone(),
-        ctx.app_type_str.to_string(),
-        ctx.request_model.clone(),
-        status_code,
-        error_message,
-        ctx.latency_ms(),
-        is_streaming,
-        Some(ctx.session_id.clone()),
-        None,
-        ctx.reasoning_effort.clone(),
-    ) {
-        log::warn!("记录失败请求日志失败: {e}");
-    }
+fn log_forward_error(ctx: &RequestContext, error: &ProxyError) {
+    ctx.diagnostics.proxy_failure("forward", error);
 }
 
 /// 记录请求使用量
@@ -1525,6 +1537,13 @@ mod tests {
                     session_id: "reasoning-fixture".into(),
                     session_client_provided: true,
                     copilot_optimizer_config: CopilotOptimizerConfig::default(),
+                    diagnostics: crate::proxy::diagnostics::RequestDiagnostics::new(
+                        db.clone(),
+                        "fixture".into(),
+                        "gpt-6-astra".into(),
+                        "test-session".into(),
+                        Instant::now(),
+                    ),
                 };
                 let body = if chat {
                     let mut choice = json!({"finish_reason":"stop"});

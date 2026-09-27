@@ -18,14 +18,6 @@ pub(crate) fn run_post_restore_sync(app_state: &AppState) -> Result<(), AppError
         failures.push(format!("settings cache: {error}"));
     }
 
-    match app_state.db.get_log_config() {
-        Ok(log_config) => log::set_max_level(log_config.to_level_filter()),
-        Err(error) => {
-            log::set_max_level(log::LevelFilter::Info);
-            failures.push(format!("runtime log level: {error}"));
-        }
-    }
-
     if failures.is_empty() {
         Ok(())
     } else {

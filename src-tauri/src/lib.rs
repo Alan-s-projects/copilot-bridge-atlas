@@ -92,8 +92,8 @@ pub(crate) fn redact_url_for_log(url_str: &str) -> String {
     }
 }
 
-fn runtime_log_level_allows(level: log::Level, max_level: log::LevelFilter) -> bool {
-    max_level.to_level().is_some_and(|maximum| level <= maximum)
+fn runtime_log_level_allows(level: log::Level) -> bool {
+    level <= log::Level::Info
 }
 
 /// 更新托盘菜单的Tauri命令
@@ -185,14 +185,10 @@ pub fn run() {
 
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
-                        // 底层保留 Trace 能力，便于加载用户配置后动态调高级别。
-                        // 插件注册后会立即把全局级别收紧到 Info，避免启动阶段全量 Trace。
-                        .level(log::LevelFilter::Trace)
-                        // plugin-log 的前端 command 会直达 logger，绕过 log 宏的全局
-                        // max_level；在分发层补一次过滤，确保动态总开关同样约束前端日志。
-                        .filter(|metadata| {
-                            runtime_log_level_allows(metadata.level(), log::max_level())
-                        })
+                        .level(log::LevelFilter::Info)
+                        // The frontend logging command reaches the plugin directly.
+                        // Keep the same fixed Info ceiling there as in Rust.
+                        .filter(|metadata| runtime_log_level_allows(metadata.level()))
                         .targets([
                             Target::new(TargetKind::Stdout),
                             Target::new(TargetKind::Folder {
@@ -208,7 +204,6 @@ pub fn run() {
                         .build(),
                 )?;
 
-                // 用户配置存在数据库中，数据库尚未打开时使用保守的 Info 级别。
                 log::set_max_level(log::LevelFilter::Info);
                 log::info!("=== Copilot Bridge Atlas v{} started ===", env!("CARGO_PKG_VERSION"));
             }
@@ -268,23 +263,6 @@ pub fn run() {
                     }
                 }
             };
-
-            // 数据库可用后立即应用持久化日志级别，避免后续服务初始化
-            // 继续使用启动阶段的 Info 回退。损坏配置显式 fail-closed 到 Info。
-            match db.get_log_config() {
-                Ok(log_config) => {
-                    log::set_max_level(log_config.to_level_filter());
-                    log::info!(
-                        "Loaded log settings: enabled={}, level={}",
-                        log_config.enabled,
-                        log_config.level
-                    );
-                }
-                Err(e) => {
-                    log::set_max_level(log::LevelFilter::Info);
-                    log::warn!("Could not read log settings; using info level: {e}");
-                }
-            }
 
             let app_state = AppState::new(db);
 
@@ -425,8 +403,6 @@ pub fn run() {
             commands::set_usage_trend_grouping,
             commands::set_usage_table_columns,
             commands::save_settings,
-            commands::get_log_config,
-            commands::set_log_config,
             commands::check_for_updates,
             commands::get_available_release_version,
             commands::copy_text_to_clipboard,
@@ -662,22 +638,10 @@ mod tests {
 
     #[test]
     fn runtime_log_filter_honors_dynamic_max_level() {
-        assert!(!runtime_log_level_allows(
-            log::Level::Error,
-            log::LevelFilter::Off
-        ));
-        assert!(runtime_log_level_allows(
-            log::Level::Error,
-            log::LevelFilter::Info
-        ));
-        assert!(runtime_log_level_allows(
-            log::Level::Info,
-            log::LevelFilter::Info
-        ));
-        assert!(!runtime_log_level_allows(
-            log::Level::Debug,
-            log::LevelFilter::Info
-        ));
+        assert!(runtime_log_level_allows(log::Level::Error));
+        assert!(runtime_log_level_allows(log::Level::Warn));
+        assert!(runtime_log_level_allows(log::Level::Info));
+        assert!(!runtime_log_level_allows(log::Level::Debug));
     }
 
     #[test]

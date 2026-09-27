@@ -97,26 +97,6 @@ pub async fn set_auto_launch(enabled: bool) -> Result<bool, String> {
     Ok(true)
 }
 
-#[tauri::command]
-pub async fn get_log_config(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::proxy::types::LogConfig, String> {
-    state.db.get_log_config().map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub async fn set_log_config(
-    state: tauri::State<'_, crate::AppState>,
-    config: crate::proxy::types::LogConfig,
-) -> Result<bool, String> {
-    state
-        .db
-        .set_log_config(&config)
-        .map_err(|error| error.to_string())?;
-    log::set_max_level(config.to_level_filter());
-    Ok(true)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

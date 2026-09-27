@@ -4,6 +4,7 @@
 
 use super::{
     content_encoding::{decompress_body_with_limit, get_content_encoding, DecompressError},
+    diagnostics::RequestDiagnostics,
     forwarder::ActiveConnectionGuard,
     handler_config::{StreamUsageEventFilter, UsageParserConfig},
     handler_context::RequestContext,
@@ -106,8 +107,8 @@ pub(crate) async fn read_decoded_body(
             Err(DecompressError::TooLarge { .. }) => {
                 return Err(ProxyError::ResponseBodyTooLarge(MAX_RESPONSE_BODY_BYTES));
             }
-            Err(DecompressError::Io(e)) => {
-                log::warn!("[{tag}] 解压失败 ({encoding}): {e}，使用原始数据");
+            Err(DecompressError::Io(_)) => {
+                log::warn!("[{tag}] Upstream body decompression failed; forwarding original bytes");
             }
         }
     }
@@ -145,10 +146,9 @@ pub async fn handle_streaming(
         format_headers(response.headers())
     );
     // 检查流式响应是否被压缩（SSE 通常不压缩，如果压缩则 SSE 解析会失败）
-    if let Some(encoding) = get_content_encoding(response.headers()) {
+    if get_content_encoding(response.headers()).is_some() {
         log::warn!(
-            "[{}] 流式响应含 content-encoding={encoding}，SSE 解析可能失败。\
-             上游在 accept-encoding 透传后压缩了 SSE 流。",
+            "[{}] Upstream SSE is compressed; event parsing may fail (encoding omitted)",
             ctx.tag
         );
     }
@@ -170,8 +170,13 @@ pub async fn handle_streaming(
     let usage_collector = create_usage_collector(ctx, state, status.as_u16(), parser_config);
 
     // 创建带日志的透传流
-    let logged_stream =
-        create_logged_passthrough_stream(stream, ctx.tag, usage_collector, connection_guard);
+    let logged_stream = create_logged_passthrough_stream_with_diagnostics(
+        stream,
+        ctx.tag,
+        usage_collector,
+        connection_guard,
+        Some(ctx.diagnostics.clone()),
+    );
 
     let body = axum::body::Body::from_stream(logged_stream);
     match builder.body(body) {
@@ -613,11 +618,28 @@ async fn log_usage_internal(
 }
 
 /// Forward a stream with usage logging and no local idle deadline.
+#[cfg(test)]
 pub fn create_logged_passthrough_stream(
     stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
     tag: &'static str,
     usage_collector: Option<SseUsageCollector>,
     connection_guard: Option<ActiveConnectionGuard>,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
+    create_logged_passthrough_stream_with_diagnostics(
+        stream,
+        tag,
+        usage_collector,
+        connection_guard,
+        None,
+    )
+}
+
+pub(crate) fn create_logged_passthrough_stream_with_diagnostics(
+    stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+    tag: &'static str,
+    usage_collector: Option<SseUsageCollector>,
+    connection_guard: Option<ActiveConnectionGuard>,
+    diagnostics: Option<Arc<RequestDiagnostics>>,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
     async_stream::stream! {
         let _conn_guard = connection_guard;
@@ -626,7 +648,7 @@ pub fn create_logged_passthrough_stream(
         let mut collector = usage_collector;
         let mut finish_guard = collector.clone().map(SseUsageFinishGuard::new);
         let inspect_sse_events =
-            collector.is_some() || log::log_enabled!(log::Level::Debug);
+            collector.is_some() || diagnostics.is_some() || log::log_enabled!(log::Level::Debug);
         let mut is_first_chunk = true;
 
         tokio::pin!(stream);
@@ -663,6 +685,31 @@ pub fn create_logged_passthrough_stream(
                                     joined.push_str(field);
                                 }
                                 if data.trim() != "[DONE]" {
+                                    if let Some(diagnostics) = &diagnostics {
+                                        let named_failure = event_text.lines().any(|line| {
+                                            strip_sse_field(line, "event")
+                                                .is_some_and(|event| event.trim() == "response.failed")
+                                        });
+                                        if data.len() <= 8192 {
+                                            match serde_json::from_str::<Value>(&data) {
+                                                Ok(event)
+                                                    if named_failure
+                                                        || event.get("type").and_then(Value::as_str)
+                                                            == Some("response.failed") =>
+                                                {
+                                                    diagnostics.failed_event(&event);
+                                                }
+                                                _ if named_failure => diagnostics.failed_event(
+                                                    &serde_json::json!({"type":"response.failed"}),
+                                                ),
+                                                _ => {}
+                                            }
+                                        } else if named_failure {
+                                            diagnostics.failed_event(
+                                                &serde_json::json!({"type":"response.failed"}),
+                                            );
+                                        }
+                                    }
                                     let collected = match &collector {
                                         Some(c) if c.should_collect(&data) => {
                                             match serde_json::from_str::<Value>(&data) {
@@ -689,7 +736,11 @@ pub fn create_logged_passthrough_stream(
                     yield Ok(bytes);
                 }
                 Some(Err(e)) => {
-                    log::error!("[{tag}] 流错误: {e}");
+                    if let Some(diagnostics) = &diagnostics {
+                        diagnostics.stream_failure();
+                    } else {
+                        log::error!("[{tag}] stream read failed (detail omitted)");
+                    }
                     yield Err(std::io::Error::other(e.to_string()));
                     break;
                 }

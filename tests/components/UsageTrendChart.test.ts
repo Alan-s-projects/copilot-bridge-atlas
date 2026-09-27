@@ -4,6 +4,7 @@ import {
   createUsageTrendTokenTickFormatter,
   formatUsageTrendTokenTickLabel,
   formatUsageTrendTickLabel,
+  formatUsageTrendCostTickLabel,
 } from "@/components/usage/UsageTrendChart";
 
 const day = (isoDate: string) =>
@@ -17,6 +18,43 @@ const day = (isoDate: string) =>
   }) as const;
 
 describe("buildUsageTrendChartData (#6302)", () => {
+  it("includes the year when a calendar bucket begins before the selected year", () => {
+    const points = buildUsageTrendChartData([day("2025-01-01")], {
+      isHourly: false,
+      dateLocale: "en-US",
+      startDate: Date.parse("2026-09-01") / 1000,
+      endDate: Date.parse("2026-09-27") / 1000,
+    });
+    expect(points[0].label).toMatch(/25|2025/);
+  });
+
+  it("keeps unavailable percentages and archived intervals as gaps", () => {
+    const points = buildUsageTrendChartData(
+      [
+        { ...day("2026-09-01"), readCacheHitRate: null, successRate: null },
+        {
+          ...day("2026-09-02"),
+          readCacheHitRate: 0.9,
+          successRate: 1,
+          incomplete: true,
+        },
+        { ...day("2026-09-03"), readCacheHitRate: 0.8, successRate: 0.5 },
+      ],
+      {
+        isHourly: false,
+        dateLocale: "en-US",
+        startDate: 0,
+        endDate: Date.now() / 1000,
+      },
+    );
+    expect(points[0].successRate).toBeNull();
+    expect(points[1].cost).toBeNull();
+    expect(points[1].inputTokens).toBeNull();
+    expect(points[1].cacheHitRate).toBeNull();
+    expect(points[2].cacheHitRate).toBe(80);
+    expect(points[2].successRate).toBe(50);
+  });
+
   it("keeps unique x-axis keys when the same MM/DD appears in multiple years", () => {
     // 2025-04-27 and 2026-04-27 share the same MM/DD tick text in single-year
     // formatting. Using that text as the Recharts category key made activeDots
@@ -119,22 +157,27 @@ describe("formatUsageTrendTickLabel", () => {
 });
 
 describe("formatUsageTrendTokenTickLabel", () => {
+  it("keeps distinct currency ticks distinct instead of rounding both to the same dollar", () => {
+    expect(formatUsageTrendCostTickLabel(1.65)).toBe("$1.65");
+    expect(formatUsageTrendCostTickLabel(2.2)).toBe("$2.2");
+    expect(formatUsageTrendCostTickLabel(0.000012)).toBe("$0.000012");
+  });
   it("uses localized compact units for large token axis ticks", () => {
     const zhFormatter = createUsageTrendTokenTickFormatter("zh-CN");
     const zhTwFormatter = createUsageTrendTokenTickFormatter("zh-TW");
     const enFormatter = createUsageTrendTokenTickFormatter("en-US");
 
     expect(formatUsageTrendTokenTickLabel(600_000_000, zhFormatter)).toBe(
-      "6亿",
+      "6.0亿",
     );
     expect(formatUsageTrendTokenTickLabel(1_950_000_000, zhFormatter)).toBe(
       "19.5亿",
     );
     expect(formatUsageTrendTokenTickLabel(65_000_000, zhTwFormatter)).toBe(
-      "6500萬",
+      "6500.0萬",
     );
     expect(formatUsageTrendTokenTickLabel(600_000_000, enFormatter)).toBe(
-      "600M",
+      "600.0M",
     );
   });
 

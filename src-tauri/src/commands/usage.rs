@@ -35,14 +35,16 @@ pub fn get_usage_trends(
     app_type: Option<String>,
     provider_name: Option<String>,
     model: Option<String>,
-) -> Result<Vec<DailyStats>, AppError> {
+    grouping: Option<TrendGrouping>,
+) -> Result<UsageTrends, AppError> {
     crate::copilot_bridge::require_codex(app_type.as_deref().unwrap_or("codex"))?;
-    state.db.get_daily_trends(
+    state.db.get_grouped_usage_trends(
         start_date,
         end_date,
         Some("codex"),
         provider_name.as_deref(),
         model.as_deref(),
+        grouping.unwrap_or_default(),
     )
 }
 

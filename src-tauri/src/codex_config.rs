@@ -9,7 +9,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[cfg(not(test))]
-static CODEX_MODEL_CATALOG_TEMPLATE_CACHE: OnceCell<Value> = OnceCell::new();
+static CODEX_MODEL_CATALOG_TEMPLATE_CACHE: OnceCell<CodexCatalogTemplate> = OnceCell::new();
+
+#[derive(Clone, Debug, PartialEq)]
+struct CodexCatalogTemplate {
+    compatibility: Value,
+    instructions: serde_json::Map<String, Value>,
+}
+
+const OPENAI_INSTRUCTION_PROFILES: [&str; 3] = ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol"];
+const OPENAI_FALLBACK_PROFILE: &str = "gpt-6-astra";
 
 /// 获取 Codex 配置目录路径
 pub fn get_codex_config_dir() -> PathBuf {
@@ -140,15 +149,26 @@ fn apply_codex_reasoning_level_override(
 }
 
 fn codex_catalog_model_entry(
-    template: &Value,
+    template: &CodexCatalogTemplate,
     spec: &CodexCatalogModelSpec,
     priority: usize,
     default_context_window: u64,
 ) -> Value {
-    let mut entry = template.clone();
-    let Some(entry_obj) = entry.as_object_mut() else {
-        return json!({});
-    };
+    let mut entry = template.compatibility.clone();
+    let entry_obj = entry
+        .as_object_mut()
+        .expect("validated compatibility object");
+    let profile = template
+        .instructions
+        .get(&spec.model.to_ascii_lowercase())
+        .unwrap_or(&template.instructions[OPENAI_FALLBACK_PROFILE]);
+    let messages = &profile["modelMessages"];
+    // Mirror the upstream literal template for older Codex clients, without rendering or trimming.
+    entry_obj.insert(
+        "base_instructions".into(),
+        messages["instructions_template"].clone(),
+    );
+    entry_obj.insert("model_messages".into(), messages.clone());
 
     let display_name = spec.display_name.as_deref().unwrap_or(&spec.model);
     let context_window = spec.context_window.unwrap_or(default_context_window);
@@ -183,6 +203,7 @@ fn codex_catalog_model_entry(
 
     // Reasoning efforts come from the model, not the compatibility template.
     let template_default = template
+        .compatibility
         .get("default_reasoning_level")
         .and_then(|value| value.as_str());
     apply_codex_reasoning_level_override(entry_obj, template_default, spec);
@@ -347,43 +368,57 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
     specs
 }
 
-fn load_codex_model_catalog_template_uncached() -> Result<Value, AppError> {
-    let mut template: Value =
+fn load_codex_model_catalog_template_uncached() -> Result<CodexCatalogTemplate, AppError> {
+    let compatibility: Value =
         serde_json::from_str(include_str!("resources/codex-model-template.json"))
             .map_err(|error| AppError::Config(format!("Invalid Atlas Codex template: {error}")))?;
-    let object = template
-        .as_object_mut()
-        .ok_or_else(|| AppError::Config("Atlas Codex template must be an object".into()))?;
-    let instructions = include_str!("resources/codex-agent-instructions.md").trim();
-    // Older clients use base_instructions; newer clients render model_messages.
-    // Neither path depends on a model cache or contains a second prompt source.
-    object.insert("base_instructions".into(), json!(instructions));
-    object.insert(
-        "model_messages".into(),
-        json!({
-            "instructions_template": instructions,
-            "instructions_variables": {
-                "personality_default": "",
-                "personality_friendly": "",
-                "personality_pragmatic": ""
-            }
-        }),
-    );
-    Ok(template)
+    if !compatibility.is_object()
+        || compatibility.get("base_instructions").is_some()
+        || compatibility.get("model_messages").is_some()
+    {
+        return Err(AppError::Config(
+            "Compatibility profile must not contain instruction overrides".into(),
+        ));
+    }
+    let snapshot: Value = serde_json::from_str(include_str!(
+        "resources/openai-codex-instructions.json"
+    ))
+    .map_err(|error| AppError::Config(format!("Invalid OpenAI instruction snapshot: {error}")))?;
+    let instructions = snapshot
+        .get("models")
+        .and_then(Value::as_object)
+        .ok_or_else(|| AppError::Config("OpenAI instruction profiles are missing".into()))?
+        .clone();
+    for profile in OPENAI_INSTRUCTION_PROFILES {
+        if instructions
+            .get(profile)
+            .and_then(|profile| profile.pointer("/modelMessages/instructions_template"))
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            return Err(AppError::Config(format!(
+                "OpenAI instruction profile {profile} is missing its template"
+            )));
+        }
+    }
+    Ok(CodexCatalogTemplate {
+        compatibility,
+        instructions,
+    })
 }
 
 fn get_or_load_codex_model_catalog_template<F>(
-    cache: &OnceCell<Value>,
+    cache: &OnceCell<CodexCatalogTemplate>,
     loader: F,
-) -> Result<Value, AppError>
+) -> Result<CodexCatalogTemplate, AppError>
 where
-    F: FnOnce() -> Result<Value, AppError>,
+    F: FnOnce() -> Result<CodexCatalogTemplate, AppError>,
 {
     cache.get_or_try_init(loader).cloned()
 }
 
 #[cfg(not(test))]
-fn load_codex_model_catalog_template() -> Result<Value, AppError> {
+fn load_codex_model_catalog_template() -> Result<CodexCatalogTemplate, AppError> {
     get_or_load_codex_model_catalog_template(
         &CODEX_MODEL_CATALOG_TEMPLATE_CACHE,
         load_codex_model_catalog_template_uncached,
@@ -391,7 +426,7 @@ fn load_codex_model_catalog_template() -> Result<Value, AppError> {
 }
 
 #[cfg(test)]
-fn load_codex_model_catalog_template() -> Result<Value, AppError> {
+fn load_codex_model_catalog_template() -> Result<CodexCatalogTemplate, AppError> {
     load_codex_model_catalog_template_uncached()
 }
 
@@ -566,6 +601,7 @@ mod tests {
                 .unwrap();
             assert_eq!(catalog["models"][0]["context_window"], 372000);
             assert_eq!(catalog["models"][0]["max_context_window"], 500000);
+            assert_eq!(catalog["models"][0]["effective_context_window_percent"], 95);
         }
     }
 
@@ -655,7 +691,7 @@ mod tests {
             )))
             .is_err()
         );
-        let template = json!({"shell_type": "shell_command"});
+        let template = load_codex_model_catalog_template_uncached().unwrap();
         assert_eq!(
             get_or_load_codex_model_catalog_template(&cache, || Ok(template.clone())).unwrap(),
             template
@@ -670,26 +706,80 @@ mod tests {
     }
 
     #[test]
-    fn template_instructions_have_one_model_neutral_source() {
+    fn upstream_instruction_objects_are_unchanged_for_every_generated_model() {
         let template = load_codex_model_catalog_template_uncached().unwrap();
-        let instructions = include_str!("resources/codex-agent-instructions.md").trim();
-        assert!((400..=700).contains(&instructions.split_whitespace().count()));
-        assert_eq!(template["base_instructions"], instructions);
-        assert_eq!(
-            template["model_messages"]["instructions_template"],
-            instructions
-        );
-        assert!(!instructions.contains("{{"));
-        assert!(!instructions.contains("GPT-"));
-        assert!(instructions.contains("until the user requests it"));
-        assert!(template.get("slug").is_none());
+        for (model, profile) in [
+            ("gpt-6-astra", "gpt-6-astra"),
+            ("GPT-6-LUNA", "gpt-6-luna"),
+            ("gpt-6-sol", "gpt-6-sol"),
+            ("gemini-3.8-flash", "gpt-6-astra"),
+            ("grok-4.7", "gpt-6-astra"),
+            ("gpt-5.5", "gpt-6-astra"),
+            ("future-provider/model", "gpt-6-astra"),
+        ] {
+            let settings = json!({"modelCatalog":{"models":[{
+                "model":model, "contextWindow":123456, "baseInstructions":"ignored legacy override",
+                "inputModalities":["text"], "supportsParallelToolCalls":false
+            }]}});
+            let entry = &codex_model_catalog_from_settings(&settings, "")
+                .unwrap()
+                .unwrap()["models"][0];
+            let upstream = &template.instructions[profile]["modelMessages"];
+            assert_eq!(&entry["model_messages"], upstream, "{model}");
+            assert_eq!(
+                entry["base_instructions"], upstream["instructions_template"],
+                "{model}"
+            );
+            assert!(entry["base_instructions"].as_str().unwrap().ends_with('\n'));
+            assert_eq!(entry["slug"], model);
+            assert_eq!(entry["context_window"], 123456);
+            assert_eq!(entry["input_modalities"], json!(["text"]));
+        }
+        assert!(template.compatibility.get("slug").is_none());
         for flag in [
             "supports_reasoning_summaries",
             "support_verbosity",
             "supports_image_detail_original",
             "supports_search_tool",
         ] {
-            assert_eq!(template[flag], false, "{flag}");
+            assert_eq!(template.compatibility[flag], false, "{flag}");
+        }
+    }
+
+    #[test]
+    fn pinned_openai_instruction_hashes_and_provenance_match() {
+        use sha2::{Digest, Sha256};
+        let snapshot: Value =
+            serde_json::from_str(include_str!("resources/openai-codex-instructions.json")).unwrap();
+        assert_eq!(
+            snapshot["source"]["commit"],
+            "d8ec479c34895214b44c062f060d97224c191a50"
+        );
+        assert_eq!(snapshot["fallbackModel"], OPENAI_FALLBACK_PROFILE);
+        for (slug, expected) in [
+            (
+                "gpt-6-astra",
+                "35bd51b5f577cb7b24cd5f4629e49e37cb724ab57754ce6f8f202001635bab8a",
+            ),
+            (
+                "gpt-6-luna",
+                "b707476816bfe5e571a1bd2179f130fff2b132da5ab8e61063acdb7fd24daf12",
+            ),
+            (
+                "gpt-6-sol",
+                "b1dd8718c037906c53a305c5cbccb4a4be35ccbb7837461ec349bfc495412f0d",
+            ),
+        ] {
+            let profile = &snapshot["models"][slug];
+            let text = profile["modelMessages"]["instructions_template"]
+                .as_str()
+                .unwrap();
+            assert_eq!(format!("{:x}", Sha256::digest(text.as_bytes())), expected);
+            assert_eq!(profile["instructionsSha256"], expected);
+            let canonical =
+                crate::proxy::json_canonical::canonical_json_string(&profile["modelMessages"]);
+            let digest = format!("{:x}", Sha256::digest(canonical.as_bytes()));
+            assert_eq!(profile["modelMessagesSha256"], digest);
         }
     }
 

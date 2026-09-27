@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Settings } from "@/types";
+import type { TrendGrouping, UsageRangeSelection } from "@/types/usage";
 
 export interface ConfigTransferResult {
   success: boolean;
@@ -9,6 +10,24 @@ export interface ConfigTransferResult {
 }
 
 export const settingsApi = {
+  async getUsageDateRange(): Promise<UsageRangeSelection> {
+    return await invoke("get_usage_date_range");
+  },
+
+  async setUsageDateRange(
+    range: UsageRangeSelection,
+  ): Promise<UsageRangeSelection> {
+    return await invoke("set_usage_date_range", { range });
+  },
+
+  async getUsageTrendGrouping(): Promise<TrendGrouping> {
+    return await invoke("get_usage_trend_grouping");
+  },
+
+  async setUsageTrendGrouping(grouping: TrendGrouping): Promise<TrendGrouping> {
+    return await invoke("set_usage_trend_grouping", { grouping });
+  },
+
   async getUsageTableColumns(): Promise<UsageTableColumns> {
     return await invoke("get_usage_table_columns");
   },

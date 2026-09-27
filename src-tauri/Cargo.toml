@@ -1,6 +1,6 @@
 [package]
 name = "copilot-bridge-atlas"
-version = "4.2.13"
+version = "4.2.14"
 description = "Codex GitHub Copilot bridge with usage dashboard"
 authors = ["Alan's Projects"]
 license = "MIT"
@@ -77,5 +77,6 @@ panic = "unwind"
 strip = "symbols"
 
 [dev-dependencies]
+chrono-tz = "0.10"
 serial_test = "3"
 base64 = "0.22"

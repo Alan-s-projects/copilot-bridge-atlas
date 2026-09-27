@@ -8,11 +8,16 @@ use crate::services::sql_helpers::{
     fresh_input_sql, output_generation_ms_sql, INPUT_TOKEN_SEMANTICS_FRESH,
     INPUT_TOKEN_SEMANTICS_TOTAL,
 };
-use chrono::{Local, NaiveDate, TimeZone, Timelike};
+#[cfg(test)]
+use chrono::NaiveDate;
+use chrono::{Local, TimeZone, Timelike};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
+
+mod trends;
+pub use trends::{TrendGrouping, UsageTrends};
 
 /// 使用量汇总
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -383,6 +388,7 @@ fn push_rollup_date_filters(
     }
 }
 
+#[cfg(test)]
 fn local_day_start_rfc3339(day: NaiveDate) -> String {
     let local_midnight = day
         .and_hms_opt(0, 0, 0)
@@ -580,7 +586,8 @@ impl Database {
         Ok(result)
     }
 
-    /// 获取每日趋势（滑动窗口，<=24h 按小时，>24h 按天，窗口与汇总一致）
+    /// Legacy aggregation retained as a regression oracle for recorded totals.
+    #[cfg(test)]
     pub fn get_daily_trends(
         &self,
         start_date: Option<i64>,

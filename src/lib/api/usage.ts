@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   UsageSummary,
-  DailyStats,
+  UsageTrends,
+  TrendGrouping,
   ModelStats,
   UnpricedModelUsage,
   LogFilters,
@@ -33,13 +34,15 @@ export const usageApi = {
     appType?: string,
     providerName?: string,
     model?: string,
-  ): Promise<DailyStats[]> => {
+    grouping?: TrendGrouping,
+  ): Promise<UsageTrends> => {
     return invoke("get_usage_trends", {
       startDate,
       endDate,
       appType,
       providerName,
       model,
+      grouping,
     });
   },
 

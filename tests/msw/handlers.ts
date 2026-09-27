@@ -25,6 +25,10 @@ export const handlers = [
   }),
   http.post(`${root}/get_settings`, () => success(getSettings())),
   http.post(`${root}/get_usage_table_columns`, () => success({})),
+  http.post(`${root}/get_usage_date_range`, () => success({ preset: "today" })),
+  http.post(`${root}/get_usage_trend_grouping`, () =>
+    success({ interval: 1, unit: "day" }),
+  ),
   http.post(`${root}/save_settings`, async ({ request }) => {
     setSettings((await body<{ settings: Settings }>(request)).settings);
     return success(true);

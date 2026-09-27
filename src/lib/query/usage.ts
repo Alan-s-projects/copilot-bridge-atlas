@@ -5,7 +5,9 @@ import type {
   LogFilters,
   UsageRangeSelection,
   UsageScopeFilters,
+  TrendGrouping,
 } from "@/types/usage";
+import { DEFAULT_TREND_GROUPING } from "@/lib/trendGrouping";
 
 const DEFAULT_REFETCH_INTERVAL_MS = 30000;
 
@@ -60,6 +62,7 @@ export const usageKeys = {
     customEndDate: number | undefined,
     filters?: UsageScopeFilters,
     liveEndTime?: boolean,
+    grouping: TrendGrouping = DEFAULT_TREND_GROUPING,
   ) =>
     [
       ...usageKeys.all,
@@ -71,6 +74,8 @@ export const usageKeys = {
       filters?.appType ?? null,
       filters?.providerName ?? null,
       filters?.model ?? null,
+      grouping.interval,
+      grouping.unit,
     ] as const,
   modelStats: (
     preset: UsageRangeSelection["preset"],
@@ -168,7 +173,8 @@ export function useUsageSummary(
 export function useUsageTrends(
   range: UsageRangeSelection,
   filters?: UsageScopeFilters,
-  options?: UsageQueryOptions,
+  options?: UsageQueryOptions & { enabled?: boolean },
+  grouping: TrendGrouping = DEFAULT_TREND_GROUPING,
 ) {
   const effective = normalizeScopeFilters(filters);
   return useQuery({
@@ -178,6 +184,7 @@ export function useUsageTrends(
       range.customEndDate,
       effective,
       range.liveEndTime,
+      grouping,
     ),
     queryFn: () => {
       const { startDate, endDate } = resolveUsageRange(range);
@@ -187,8 +194,10 @@ export function useUsageTrends(
         effective.appType,
         effective.providerName,
         effective.model,
+        grouping,
       );
     },
+    enabled: options?.enabled ?? true,
     refetchInterval: options?.refetchInterval ?? DEFAULT_REFETCH_INTERVAL_MS,
     refetchIntervalInBackground: options?.refetchIntervalInBackground ?? false,
   });

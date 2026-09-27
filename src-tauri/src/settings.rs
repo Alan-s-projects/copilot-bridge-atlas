@@ -16,6 +16,49 @@ pub struct UsageTableColumns {
     pub model_stats: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UsageDateRange {
+    pub preset: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_start_date: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_end_date: Option<i64>,
+    pub live_end_time: bool,
+}
+
+impl Default for UsageDateRange {
+    fn default() -> Self {
+        Self {
+            preset: "today".into(),
+            custom_start_date: None,
+            custom_end_date: None,
+            live_end_time: false,
+        }
+    }
+}
+
+impl UsageDateRange {
+    pub fn validate(&self) -> Result<(), AppError> {
+        let valid = match self.preset.as_str() {
+            "today" | "1d" | "7d" | "14d" | "30d" => true,
+            "custom" => self.custom_start_date.is_some_and(|start| {
+                chrono::DateTime::from_timestamp(start, 0).is_some()
+                    && (self.live_end_time
+                        || self.custom_end_date.is_some_and(|end| {
+                            end >= start && chrono::DateTime::from_timestamp(end, 0).is_some()
+                        }))
+            }),
+            _ => false,
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(AppError::Config("Invalid usage date range".into()))
+        }
+    }
+}
+
 /// Device preferences live alongside Atlas's database. Unknown imported
 /// preferences remain opaque, so editing current settings does not erase them.
 #[derive(Debug, Clone, Serialize, Deserialize)]

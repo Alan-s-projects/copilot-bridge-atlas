@@ -66,6 +66,7 @@ pub(crate) fn adapt_request(body: &mut Value) -> Result<(), ProxyError> {
             }
             match kind {
                 Some("additional_tools" | "reasoning") => continue,
+                Some("agent_message") => converted.push(agent_message_to_responses_message(item)?),
                 Some("compaction" | "item_reference") => return Err(ProxyError::InvalidRequest(
                     "This model cannot replay an opaque item from another model. Start a new chat or switch back to the previous model.".into())),
                 Some("custom_tool_call_output" | "tool_search_output") => {
@@ -86,6 +87,61 @@ pub(crate) fn adapt_request(body: &mut Value) -> Result<(), ProxyError> {
         *input = converted;
     }
     Ok(())
+}
+
+fn agent_message_to_responses_message(item: &Value) -> Result<Value, ProxyError> {
+    let content = item.get("content").filter(|value| !value.is_null());
+    let parts = match content {
+        Some(Value::String(text)) if !text.is_empty() => {
+            vec![json!({"type":"input_text","text":text})]
+        }
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .map(agent_message_part)
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => {
+            return Err(ProxyError::InvalidRequest(
+                "agent_message content cannot be represented for this model".into(),
+            ))
+        }
+    };
+    if parts.is_empty() {
+        return Err(ProxyError::InvalidRequest(
+            "agent_message content cannot be represented for this model".into(),
+        ));
+    }
+    let mut message = json!({"type":"message","role":"user","content":parts});
+    if let Some(id) = item.get("id").filter(|value| !value.is_null()) {
+        message["id"] = id.clone();
+    }
+    Ok(message)
+}
+
+fn agent_message_part(part: &Value) -> Result<Value, ProxyError> {
+    let kind = part.get("type").and_then(Value::as_str).unwrap_or("");
+    let text = match kind {
+        "input_text" | "output_text" | "text" => part.get("text").and_then(Value::as_str),
+        "encrypted_content" => part
+            .get("encrypted_content")
+            .or_else(|| part.get("text"))
+            .and_then(Value::as_str),
+        "refusal" => part.get("refusal").and_then(Value::as_str),
+        _ => None,
+    };
+    if let Some(text) = text.filter(|text| !text.is_empty()) {
+        return Ok(json!({"type":"input_text","text":text}));
+    }
+    if kind == "input_image" && part.get("image_url").is_some() {
+        let mut image = json!({"type":"input_image"});
+        image["image_url"] = part["image_url"].clone();
+        if let Some(detail) = part.get("detail") {
+            image["detail"] = detail.clone();
+        }
+        return Ok(image);
+    }
+    Err(ProxyError::InvalidRequest(
+        "agent_message content cannot be represented for this model".into(),
+    ))
 }
 
 struct CompletedFunctionCall {
@@ -343,6 +399,46 @@ mod tests {
         assert_eq!(request["input"][5]["type"], "function_call_output");
         assert_eq!(request["input"][6]["name"], "tool_search");
         assert_eq!(request["input"][7]["type"], "function_call_output");
+    }
+
+    #[test]
+    fn agent_message_text_is_preserved_and_unrepresentable_content_is_rejected() {
+        let mut body = json!({"input":[
+            {"type":"message","role":"user","content":"start"},
+            {"type":"agent_message","id":"agent_1","role":"assistant","name":"reviewer",
+             "content":[{"type":"output_text","text":"Review this change."},
+                        {"type":"encrypted_content","encrypted_content":"secret task"}]},
+            {"type":"agent_message","content":"plain task"},
+            {"type":"agent_message","content":[{"type":"input_image","image_url":"data:image/png;base64,abc"}]},
+            {"nested":{"type":"agent_message","content":[{"type":"input_text","text":"nested"}]}}
+        ]});
+        adapt_request(&mut body).unwrap();
+        assert_eq!(body["input"][1]["type"], "message");
+        assert_eq!(body["input"][1]["role"], "user");
+        assert_eq!(body["input"][1]["id"], "agent_1");
+        assert_eq!(
+            body["input"][1]["content"][0]["text"],
+            "Review this change."
+        );
+        assert_eq!(body["input"][1]["content"][1]["text"], "secret task");
+        assert!(body["input"][1].get("name").is_none());
+        assert_eq!(body["input"][2]["content"][0]["text"], "plain task");
+        assert_eq!(
+            body["input"][3]["content"][0]["image_url"],
+            "data:image/png;base64,abc"
+        );
+        assert_eq!(body["input"][4]["nested"]["type"], "agent_message");
+
+        for content in [
+            Value::Null,
+            json!([{"type":"unknown_part","payload":"keep?"}]),
+        ] {
+            let mut invalid = json!({"input":[{"type":"agent_message","content":content}]});
+            assert!(matches!(
+                adapt_request(&mut invalid),
+                Err(ProxyError::InvalidRequest(_))
+            ));
+        }
     }
 
     #[test]

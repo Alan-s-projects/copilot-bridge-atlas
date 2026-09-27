@@ -35,3 +35,24 @@ variables. It sends synthetic greetings and a harmless lookup tool definition,
 not private conversation history. It never executes the returned tool.
 The patched forwarder passed both streaming and non-streaming calls for Gemini
 3.8 Flash and Grok 4.7, including a namespace tool with a root-union schema.
+
+## Codex Reasoning Accounting
+
+For native Responses `gpt-6-astra` and `gpt-6-luna`, Atlas retains Copilot's
+reported usage and encrypted reasoning items and supplies the response header
+`x-reasoning-included: true` when Copilot omits it. This tells Codex that the
+reported input usage already includes replayed encrypted reasoning; it is not a
+request header sent to Copilot.
+
+Codex Desktop's bundled CLI `0.158.0-alpha.2.1` can still compact prematurely
+before a subsequent turn, including after resume, because that Codex version
+clears the prior response's reasoning-accounting state before its pre-turn
+compaction check. The same behavior occurs when the header is omitted, so
+removing it is not a workaround. This is tracked upstream in
+[openai/codex#32483](https://github.com/openai/codex/issues/32483).
+
+Atlas cannot repair the installed Codex runtime. Do not change Atlas usage,
+remove encrypted reasoning, or increase a model's prompt limit to hide this
+Codex accounting issue. Keep the accounting header and actual model context
+budget unchanged; update Codex only after an upstream runtime fix has been
+verified for warm turns, resume, and fork behavior.

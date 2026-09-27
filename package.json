@@ -1,6 +1,6 @@
 {
   "name": "copilot-bridge-atlas",
-  "version": "5.0.8",
+  "version": "5.0.9",
   "description": "Codex GitHub Copilot bridge with usage dashboard",
   "type": "module",
   "scripts": {

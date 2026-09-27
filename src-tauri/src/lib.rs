@@ -456,7 +456,6 @@ pub fn run() {
             commands::update_model_pricing,
             commands::delete_model_pricing,
             commands::reset_model_pricing_to_defaults,
-            commands::stream_check_provider,
             commands::get_global_proxy_url,
             commands::set_global_proxy_url,
             commands::test_proxy_url,

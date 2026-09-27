@@ -22,7 +22,6 @@ fn fresh_database_creates_only_bridge_tables() {
             "proxy_config",
             "proxy_request_logs",
             "settings",
-            "stream_check_logs",
             "usage_daily_rollups"
         ]
     );
@@ -42,6 +41,27 @@ fn fresh_database_creates_only_bridge_tables() {
             .unwrap(),
         1
     );
+}
+
+#[test]
+fn invalid_column_settings_can_be_replaced_without_changing_other_preferences() {
+    let db = Database::memory().unwrap();
+    for invalid in ["not json", r#"{"requestLogs":false}"#, "null"] {
+        db.set_setting("usage_table_columns", invalid).unwrap();
+        db.set_setting("unrelated", "keep").unwrap();
+        assert_eq!(db.get_usage_table_columns().unwrap(), Default::default());
+        let saved = db
+            .set_usage_table_columns("requestLogs", vec!["time".into()])
+            .unwrap();
+        assert_eq!(saved.request_logs, Some(vec!["time".into()]));
+        assert_eq!(db.get_usage_table_columns().unwrap(), saved);
+        assert_eq!(
+            db.get_setting("unrelated").unwrap().as_deref(),
+            Some("keep")
+        );
+        assert!(db.set_usage_table_columns("unknown", vec![]).is_err());
+        assert_eq!(db.get_usage_table_columns().unwrap(), saved);
+    }
 }
 
 #[test]
@@ -303,7 +323,7 @@ fn copilot_pricing_migration_retires_only_unedited_defaults() {
         10
     );
     Database::apply_schema_migrations_on_conn(&conn).unwrap();
-    assert_eq!(Database::get_user_version(&conn).unwrap(), 22);
+    assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
 }
 #[test]
 fn selecting_a_missing_provider_keeps_the_current_entry() {

@@ -50,9 +50,13 @@ describe("Saved usage columns", () => {
     await waitFor(() =>
       expect(result.current.data.requestLogs).toEqual(["time", "cost"]),
     );
-    mocks.set.mockResolvedValue({
-      requestLogs: ["model"],
-      modelStats: ["model", "cost"],
+    mocks.set.mockImplementation(async () => {
+      const saved = {
+        requestLogs: ["model"],
+        modelStats: ["model", "cost"],
+      };
+      mocks.get.mockResolvedValue(saved);
+      return saved;
     });
     await act(() => result.current.change("requestLogs", ["model"]));
     expect(mocks.set).toHaveBeenCalledWith("requestLogs", ["model"]);

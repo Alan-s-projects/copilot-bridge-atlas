@@ -1,6 +1,6 @@
 {
   "name": "copilot-bridge-atlas",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "description": "Codex GitHub Copilot bridge with usage dashboard",
   "type": "module",
   "scripts": {
@@ -55,7 +55,6 @@
     "@tauri-apps/plugin-process": "^2.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "cmdk": "^1.1.1",
     "framer-motion": "^12.23.25",
     "i18next": "^25.5.2",
     "lucide-react": "^0.542.0",

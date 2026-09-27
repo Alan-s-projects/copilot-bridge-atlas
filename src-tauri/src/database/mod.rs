@@ -19,7 +19,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 22;
+pub(crate) const SCHEMA_VERSION: i32 = 23;
 
 /// 安全地获取 Mutex 锁，避免 unwrap panic
 macro_rules! lock_conn {
@@ -78,9 +78,15 @@ impl Database {
                 log::info!(
                     "Creating pre-migration database backup (v{version} → v{SCHEMA_VERSION})"
                 );
-                if let Err(e) = db.backup_database_file() {
-                    log::warn!("Pre-migration backup failed, continuing migration: {e}");
-                }
+                db.backup_database_file()
+                    .map_err(|error| {
+                        AppError::Database(format!(
+                            "Cannot upgrade database until its safety backup succeeds: {error}"
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        AppError::Database("Pre-migration safety backup was not created".into())
+                    })?;
             }
         }
 
@@ -94,9 +100,6 @@ impl Database {
         }
 
         // Startup cleanup: prune old logs and reclaim space
-        if let Err(e) = db.cleanup_old_stream_check_logs(7) {
-            log::warn!("Startup stream_check_logs cleanup failed: {e}");
-        }
         if let Err(e) = db.rollup_and_prune(30) {
             log::warn!("Startup rollup_and_prune failed: {e}");
         }

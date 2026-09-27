@@ -10,12 +10,10 @@ import { RequestLogsGrid } from "./RequestLogsGrid";
 interface RequestLogTableProps {
   columns?: string[];
   range: UsageRangeSelection;
-  rangeLabel?: string;
   appType?: string;
   providerName?: string;
   model?: string;
   refreshIntervalMs: number;
-  onRangeChange?: (range: UsageRangeSelection) => void;
 }
 
 export function RequestLogTable({
@@ -64,14 +62,21 @@ export function RequestLogTable({
     model,
     range.customEndDate,
     range.customStartDate,
+    range.liveEndTime,
     range.preset,
   ]);
+
+  useEffect(() => {
+    if (result)
+      setPage((current) => Math.min(current, Math.max(0, totalPages - 1)));
+  }, [result, totalPages]);
 
   const handleGoToPage = () => {
     const trimmed = pageInput.trim();
     if (!/^\d+$/.test(trimmed)) return;
     const parsed = Number(trimmed);
-    if (parsed < 1 || parsed > totalPages) return;
+    if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > totalPages)
+      return;
     setPage(parsed - 1);
     setPageInput("");
   };

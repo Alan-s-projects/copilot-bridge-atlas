@@ -52,13 +52,6 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0',
     long_context TEXT
 );
-CREATE TABLE IF NOT EXISTS stream_check_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, provider_id TEXT NOT NULL, provider_name TEXT NOT NULL,
-    app_type TEXT NOT NULL, status TEXT NOT NULL, success INTEGER NOT NULL, message TEXT NOT NULL,
-    response_time_ms INTEGER, http_status INTEGER, model_used TEXT,
-    retry_count INTEGER DEFAULT 0, tested_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_stream_check_logs_provider ON stream_check_logs(app_type, provider_id, tested_at DESC);
 CREATE TABLE IF NOT EXISTS usage_daily_rollups (
     date TEXT NOT NULL, app_type TEXT NOT NULL, provider_id TEXT NOT NULL, model TEXT NOT NULL,
     request_model TEXT NOT NULL DEFAULT '', pricing_model TEXT NOT NULL DEFAULT '',

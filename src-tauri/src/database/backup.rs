@@ -292,14 +292,6 @@ impl Database {
 
         // Periodic maintenance is always enabled, regardless of auto-backup settings.
         let mut reclaimed_rows = 0u64;
-        match self.cleanup_old_stream_check_logs(7) {
-            Ok(deleted) => {
-                reclaimed_rows += deleted;
-            }
-            Err(e) => {
-                log::warn!("Periodic stream_check_logs cleanup failed: {e}");
-            }
-        }
         match self.rollup_and_prune(30) {
             Ok(deleted) => {
                 reclaimed_rows += deleted;
@@ -525,7 +517,6 @@ impl Database {
             "proxy_request_logs",
             "usage_daily_rollups",
             "model_pricing",
-            "stream_check_logs",
         ];
 
         let mut missing = Vec::new();
@@ -1219,19 +1210,102 @@ mod tests {
 
     #[test]
     #[serial]
-    fn import_accepts_genuine_export_without_providers_or_health_logs() -> Result<(), AppError> {
+    fn startup_does_not_migrate_when_the_safety_backup_fails() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let directory = crate::config::get_app_config_dir();
+        let path = directory.join("copilot-bridge-atlas.db");
+        {
+            let conn = Connection::open(&path)?;
+            Database::create_tables_on_conn(&conn)?;
+            conn.execute("INSERT INTO settings VALUES ('sentinel', 'keep')", [])?;
+            Database::set_user_version(&conn, 22)?;
+        }
+        std::fs::write(directory.join("backups"), "block directory creation")
+            .map_err(|error| AppError::io(&directory, error))?;
+        let error = match Database::init() {
+            Ok(_) => panic!("startup must stop when its safety backup fails"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("safety backup succeeds"));
+        let conn = Connection::open(&path)?;
+        assert_eq!(Database::get_user_version(&conn)?, 22);
+        assert_eq!(
+            conn.query_row(
+                "SELECT value FROM settings WHERE key='sentinel'",
+                [],
+                |row| row.get::<_, String>(0)
+            )?,
+            "keep"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn retired_health_logs_survive_upgrade_maintenance_and_backups() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        update_settings(AppSettings {
+            backup_interval_hours: Some(0),
+            ..Default::default()
+        })?;
+        let source = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(source.conn);
+            conn.execute_batch(
+                "CREATE TABLE stream_check_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, provider_id TEXT NOT NULL,
+                    provider_name TEXT NOT NULL, app_type TEXT NOT NULL, status TEXT NOT NULL,
+                    success INTEGER NOT NULL, message TEXT NOT NULL, response_time_ms INTEGER,
+                    http_status INTEGER, model_used TEXT, retry_count INTEGER DEFAULT 0,
+                    tested_at INTEGER NOT NULL
+                 );
+                 CREATE INDEX idx_stream_check_logs_provider
+                    ON stream_check_logs(app_type, provider_id, tested_at DESC);
+                 INSERT INTO stream_check_logs
+                    (provider_id, provider_name, app_type, status, success, message, tested_at)
+                    VALUES ('p1', 'Copilot', 'codex', 'operational', 1, 'historical result', 1);
+                 PRAGMA user_version = 22;",
+            )?;
+        }
+        source.apply_schema_migrations()?;
+        source.periodic_backup_if_needed()?;
+        let target = Database::memory()?;
+        target.import_sql_string(&source.export_sql_string()?)?;
+        let backup = source.backup_database_file()?.expect("backup exists");
+        let backup_conn = Connection::open(&backup)?;
+        let target_conn = crate::database::lock_conn!(target.conn);
+        for conn in [&backup_conn, &*target_conn] {
+            assert_eq!(
+                Database::get_user_version(conn)?,
+                crate::database::SCHEMA_VERSION
+            );
+            assert_eq!(
+                conn.query_row(
+                    "SELECT message FROM stream_check_logs WHERE id=1",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )?,
+                "historical result"
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='idx_stream_check_logs_provider'", [], |row| row.get::<_, i64>(0))?,
+                1
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn import_accepts_genuine_export_without_providers_or_retired_tables() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let source = Database::memory()?;
         {
             let conn = crate::database::lock_conn!(source.conn);
-            let counts: (i64, i64) = conn.query_row(
-                "SELECT
-                    (SELECT COUNT(*) FROM providers),
-                    (SELECT COUNT(*) FROM stream_check_logs)",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?;
-            assert_eq!(counts, (0, 0));
+            let count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM providers", [], |row| row.get(0))?;
+            assert_eq!(count, 0);
+            assert!(!Database::table_exists(&conn, "stream_check_logs")?);
             conn.execute(
                 "INSERT INTO settings (key, value) VALUES ('empty-export-marker', 'kept')",
                 [],
@@ -1251,14 +1325,9 @@ mod tests {
         target.import_sql_string(&sql)?;
 
         let conn = crate::database::lock_conn!(target.conn);
-        let counts: (i64, i64) = conn.query_row(
-            "SELECT
-                (SELECT COUNT(*) FROM providers),
-                (SELECT COUNT(*) FROM stream_check_logs)",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        assert_eq!(counts, (0, 0));
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM providers", [], |row| row.get(0))?;
+        assert_eq!(count, 0);
+        assert!(!Database::table_exists(&conn, "stream_check_logs")?);
         let marker: String = conn.query_row(
             "SELECT value FROM settings WHERE key = 'empty-export-marker'",
             [],
@@ -2419,7 +2488,6 @@ mod tests {
         let db = Database::memory()?;
         let now = chrono::Utc::now().timestamp();
         let old_ts = now - 40 * 86400;
-        let old_stream_ts = now - 8 * 86400;
 
         {
             let conn = crate::database::lock_conn!(db.conn);
@@ -2431,41 +2499,26 @@ mod tests {
                 ) VALUES ('old-req', 'p1', 'codex', 'gpt-6-astra', 100, 50, '0.01', 100, 200, ?1)",
                 [old_ts],
             )?;
-            conn.execute(
-                "INSERT INTO stream_check_logs (
-                    provider_id, provider_name, app_type, status, success, message,
-                    response_time_ms, http_status, model_used, retry_count, tested_at
-                ) VALUES ('p1', 'Provider 1', 'codex', 'operational', 1, 'ok', 42, 200, 'gpt-6-astra', 0, ?1)",
-                [old_stream_ts],
-            )?;
         }
 
         db.periodic_backup_if_needed()?;
 
-        let (remaining_request_logs, stream_logs, rollups): (i64, i64, i64) = {
+        let (remaining_request_logs, rollups): (i64, i64) = {
             let conn = crate::database::lock_conn!(db.conn);
             let remaining_request_logs =
                 conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
-                    row.get(0)
-                })?;
-            let stream_logs =
-                conn.query_row("SELECT COUNT(*) FROM stream_check_logs", [], |row| {
                     row.get(0)
                 })?;
             let rollups =
                 conn.query_row("SELECT COUNT(*) FROM usage_daily_rollups", [], |row| {
                     row.get(0)
                 })?;
-            (remaining_request_logs, stream_logs, rollups)
+            (remaining_request_logs, rollups)
         };
 
         assert_eq!(
             remaining_request_logs, 0,
             "old request logs should still be pruned when auto backup is disabled"
-        );
-        assert_eq!(
-            stream_logs, 0,
-            "old stream check logs should still be pruned when auto backup is disabled"
         );
         assert_eq!(rollups, 1, "old request logs should be rolled up");
 
@@ -2483,17 +2536,11 @@ mod tests {
         use std::time::Instant;
 
         const LOG_ROWS: usize = 20_000;
-        const STREAM_ROWS: usize = 5_000;
         const ROLLUP_ROWS: usize = 1_000;
 
         let _test_home = TestHomeGuard::new();
 
-        fn populate(
-            db: &Database,
-            log_rows: usize,
-            stream_rows: usize,
-            rollup_rows: usize,
-        ) -> Result<(), AppError> {
+        fn populate(db: &Database, log_rows: usize, rollup_rows: usize) -> Result<(), AppError> {
             let mut conn = crate::database::lock_conn!(db.conn);
             let tx = conn.transaction()?;
             for i in 0..50 {
@@ -2511,15 +2558,6 @@ mod tests {
                         latency_ms, status_code, created_at
                     ) VALUES (?1, 'p1', 'codex', 'gpt-6-astra', 100, 50, '0.01', 120, 200, 1000)",
                     [format!("req-{i}")],
-                )?;
-            }
-            for i in 0..stream_rows {
-                tx.execute(
-                    "INSERT INTO stream_check_logs (
-                        provider_id, provider_name, app_type, status, success, message,
-                        response_time_ms, http_status, model_used, retry_count, tested_at
-                    ) VALUES ('p1', 'Provider 1', 'codex', 'operational', 1, 'ok', 42, 200, 'gpt-6-astra', 0, ?1)",
-                    [1000i64 + i as i64],
                 )?;
             }
             for i in 0..rollup_rows {
@@ -2545,7 +2583,7 @@ mod tests {
         }
 
         let source = Database::memory()?;
-        populate(&source, LOG_ROWS, STREAM_ROWS, ROLLUP_ROWS)?;
+        populate(&source, LOG_ROWS, ROLLUP_ROWS)?;
 
         let t = Instant::now();
         let full_sql = source.export_sql_string()?;
@@ -2561,19 +2599,15 @@ mod tests {
         println!("import_sql_string (local file path): {:?}", t.elapsed());
         {
             let conn = crate::database::lock_conn!(import_target.conn);
-            let counts: (i64, i64, i64, i64) = conn.query_row(
+            let counts: (i64, i64, i64) = conn.query_row(
                 "SELECT
                     (SELECT COUNT(*) FROM providers),
                     (SELECT COUNT(*) FROM proxy_request_logs),
-                    (SELECT COUNT(*) FROM stream_check_logs),
                     (SELECT COUNT(*) FROM usage_daily_rollups)",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
-            assert_eq!(
-                counts,
-                (50, LOG_ROWS as i64, STREAM_ROWS as i64, ROLLUP_ROWS as i64)
-            );
+            assert_eq!(counts, (50, LOG_ROWS as i64, ROLLUP_ROWS as i64));
         }
 
         Ok(())

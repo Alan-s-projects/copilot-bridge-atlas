@@ -5,5 +5,4 @@
 pub mod providers;
 pub mod proxy;
 pub mod settings;
-pub mod stream_check;
 pub mod usage_rollup;

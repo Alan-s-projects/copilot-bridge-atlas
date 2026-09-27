@@ -34,8 +34,6 @@ pub struct ProxyConfig {
     pub listen_address: String,
     /// 监听端口
     pub listen_port: u16,
-    /// 是否启用日志
-    pub enable_logging: bool,
 }
 
 impl Default for ProxyConfig {
@@ -43,7 +41,6 @@ impl Default for ProxyConfig {
         Self {
             listen_address: "127.0.0.1".to_string(),
             listen_port: 15722, // 使用较少占用的高位端口
-            enable_logging: true,
         }
     }
 }
@@ -108,8 +105,6 @@ pub struct GlobalProxyConfig {
     pub listen_address: String,
     /// 监听端口
     pub listen_port: u16,
-    /// 是否启用日志
-    pub enable_logging: bool,
 }
 
 fn default_true() -> bool {

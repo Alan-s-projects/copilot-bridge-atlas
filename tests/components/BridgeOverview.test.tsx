@@ -132,6 +132,7 @@ describe("read-only bridge overview", () => {
     const table = requests.getByRole("table", {
       name: "Latest 5 completed requests",
     });
+    expect(table).toHaveClass("[&_td]:py-2", "[&_th]:h-10");
     expect(within(table).getByText("gpt-6-astra")).toBeVisible();
     const headings = within(table).getAllByRole("columnheader");
     expect(headings[1]).toHaveTextContent("Billing Model");

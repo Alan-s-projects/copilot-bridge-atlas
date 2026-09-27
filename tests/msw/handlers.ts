@@ -51,7 +51,6 @@ export const handlers = [
       proxyEnabled: false,
       listenAddress: "127.0.0.1",
       listenPort: 15722,
-      enableLogging: true,
     }),
   ),
   ...["update_tray_menu", "set_auto_launch"].map((command) =>

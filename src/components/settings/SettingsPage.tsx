@@ -58,10 +58,10 @@ export function SettingsPage() {
   const isBusy = isLoading && !settings;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 pt-4">
-      <div className="mb-6 flex shrink-0 items-center justify-between gap-4">
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden px-4 pt-4 sm:px-6">
+      <div className="mb-4 flex shrink-0 items-center justify-between gap-4">
         <div className="flex min-w-0 flex-col gap-1">
-          <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+          <h1 className="text-2xl font-bold">Settings</h1>
           <p className="text-sm text-muted-foreground">
             Manage appearance, GitHub Copilot, and proxy settings
           </p>
@@ -85,11 +85,11 @@ export function SettingsPage() {
           value={activeTab}
           onValueChange={setActiveTab}
           orientation="vertical"
-          className="flex min-h-0 flex-1 gap-5 overflow-hidden pb-4"
+          className="flex min-h-0 flex-1 gap-3 overflow-hidden sm:gap-5"
         >
           <TabsList
             aria-label="Settings sections"
-            className="flex w-44 shrink-0 flex-col items-stretch justify-start gap-1 self-start rounded-xl border border-border/60 bg-muted/30 p-2"
+            className="flex w-36 shrink-0 flex-col items-stretch justify-start gap-1 self-start rounded-lg border border-border/60 bg-muted/30 p-2 sm:w-44"
           >
             {[
               {
@@ -127,9 +127,13 @@ export function SettingsPage() {
           </TabsList>
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {/* Contain Radix's absolute form inputs inside the scrolling panel. */}
             <div
               ref={tabScrollContainerRef}
-              className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden pr-2"
+              role="region"
+              aria-label="Settings content"
+              tabIndex={0}
+              className="relative min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain pb-4 pr-2"
             >
               <TabsContent value="general" className="space-y-6 mt-0">
                 {settings ? (

@@ -8,23 +8,11 @@ export default function CopilotQuotaFooter({ meta }: { meta?: ProviderMeta }) {
   const { data, error, isFetching } = useCopilotQuota(accountId);
   const used = Math.max(0, Math.min(100, data?.utilization ?? 0));
   return (
-    <div className="space-y-3 border-t pt-4 text-sm">
-      <div className="flex items-center justify-between gap-3">
+    <div className="space-y-1.5 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
         <span className="font-medium">Copilot premium requests</span>
-      </div>
-      {error ? (
-        <p role="alert" className="text-destructive">
-          {extractErrorMessage(error)}
-        </p>
-      ) : data ? (
-        <>
-          <div className="h-2 overflow-hidden rounded-full bg-muted">
-            <div
-              className={`h-full ${used >= 90 ? "bg-red-500" : used >= 70 ? "bg-amber-500" : "bg-emerald-500"}`}
-              style={{ width: `${used}%` }}
-            />
-          </div>
-          <div className="flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
+        {!error && data && (
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground">
             <span>
               {used.toFixed(1)}% used · {data.plan}
             </span>
@@ -34,7 +22,19 @@ export default function CopilotQuotaFooter({ meta }: { meta?: ProviderMeta }) {
               </span>
             )}
           </div>
-        </>
+        )}
+      </div>
+      {error ? (
+        <p role="alert" className="text-destructive">
+          {extractErrorMessage(error)}
+        </p>
+      ) : data ? (
+        <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+          <div
+            className={`h-full ${used >= 90 ? "bg-red-500" : used >= 70 ? "bg-amber-500" : "bg-emerald-500"}`}
+            style={{ width: `${used}%` }}
+          />
+        </div>
       ) : (
         <p className="text-muted-foreground">
           {isFetching

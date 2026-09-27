@@ -23,6 +23,7 @@ const RecentRequests = memo(function RecentRequests({
       logs={logs.slice(0, OVERVIEW_REQUEST_LIMIT)}
       caption={`Latest ${OVERVIEW_REQUEST_LIMIT} completed requests`}
       showTokenDetails={false}
+      compact
     />
   );
 });
@@ -56,40 +57,38 @@ export function BridgeOverview({ status }: { status?: ProxyStatus }) {
     ],
   ];
   return (
-    <section className="space-y-5" aria-label="Bridge overview">
+    <section className="space-y-3" aria-label="Bridge overview">
       <section
-        className="space-y-5 rounded-xl border border-border bg-card p-6 shadow-sm"
+        className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border pb-3"
         aria-labelledby="bridge-proxy-title"
       >
-        <h2 id="bridge-proxy-title" className="text-base font-semibold">
+        <h2 id="bridge-proxy-title" className="sr-only">
           Proxy
         </h2>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-sm font-medium">
-              {status
-                ? status.running
-                  ? "Proxy running"
-                  : "Proxy stopped"
-                : "Checking proxy"}
-            </p>
-            <p className="mt-1 break-all font-mono text-sm text-muted-foreground">
-              {endpoint}
-            </p>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Active requests:{" "}
-            <span className="font-medium text-foreground">
-              {status?.active_connections ?? "—"}
-            </span>
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1">
+          <p className="text-sm font-medium">
+            {status
+              ? status.running
+                ? "Proxy running"
+                : "Proxy stopped"
+              : "Checking proxy"}
+          </p>
+          <p className="break-all font-mono text-xs text-muted-foreground">
+            {endpoint}
           </p>
         </div>
+        <p className="text-sm text-muted-foreground">
+          Active requests:{" "}
+          <span className="font-medium text-foreground">
+            {status?.active_connections ?? "—"}
+          </span>
+        </p>
       </section>
       <section
-        className="space-y-5 rounded-xl border border-border bg-card p-6 shadow-sm"
+        className="space-y-2 border-b border-border pb-3"
         aria-labelledby="bridge-usage-title"
       >
-        <h2 id="bridge-usage-title" className="text-base font-semibold">
+        <h2 id="bridge-usage-title" className="text-sm font-semibold">
           Today's usage
         </h2>
         {overview.error && (
@@ -100,27 +99,24 @@ export function BridgeOverview({ status }: { status?: ProxyStatus }) {
               : "Open Usage to retry."}
           </p>
         )}
-        <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
           {metrics.map(([label, value]) => (
-            <div key={label} className="rounded-xl border px-5 py-4">
+            <div key={label} className="min-w-0">
               <dt className="text-xs text-muted-foreground">{label}</dt>
-              <dd className="mt-2 text-xl font-semibold tabular-nums">
+              <dd className="mt-1 break-words text-xl font-semibold tabular-nums">
                 {value}
               </dd>
             </div>
           ))}
         </dl>
       </section>
-      <section
-        className="space-y-5 rounded-xl border border-border bg-card p-6 shadow-sm"
-        aria-labelledby="bridge-requests-title"
-      >
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <div>
-            <h2 id="bridge-requests-title" className="text-base font-semibold">
+      <section className="space-y-2" aria-labelledby="bridge-requests-title">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h2 id="bridge-requests-title" className="text-sm font-semibold">
               Requests
             </h2>
-            <p className="mt-1 text-xs text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               Latest {OVERVIEW_REQUEST_LIMIT} completed requests
             </p>
           </div>

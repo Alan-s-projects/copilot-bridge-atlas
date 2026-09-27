@@ -31,5 +31,4 @@ export interface GlobalProxyConfig {
   proxyEnabled: boolean;
   listenAddress: string;
   listenPort: number;
-  enableLogging: boolean;
 }

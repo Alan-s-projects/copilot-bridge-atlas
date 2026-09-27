@@ -26,17 +26,19 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
   logs,
   caption,
   showTokenDetails = true,
+  compact = false,
 }: {
   logs: RequestLog[];
   caption?: string;
   showTokenDetails?: boolean;
+  compact?: boolean;
 }) {
   const { t } = useTranslation();
   const locale = "en-US";
 
   return (
     <div className="overflow-x-auto rounded-lg border border-border/50 bg-card/40 backdrop-blur-sm">
-      <Table>
+      <Table className={compact ? "[&_td]:py-2 [&_th]:h-10" : undefined}>
         {caption && <caption className="sr-only">{caption}</caption>}
         <TableHeader>
           <TableRow>

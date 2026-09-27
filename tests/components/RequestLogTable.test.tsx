@@ -47,7 +47,7 @@ vi.mock("@/components/ui/select", () => ({
 }));
 
 vi.mock("@/components/ui/table", () => ({
-  Table: ({ children }: any) => <table>{children}</table>,
+  Table: ({ children, ...props }: any) => <table {...props}>{children}</table>,
   TableBody: ({ children }: any) => <tbody>{children}</tbody>,
   TableCell: ({ children, ...props }: any) => <td {...props}>{children}</td>,
   TableHead: ({ children, ...props }: any) => <th {...props}>{children}</th>,
@@ -114,6 +114,7 @@ describe("RequestLogTable", () => {
         />,
       );
       const headings = screen.getAllByRole("columnheader");
+      expect(screen.getByRole("table")).not.toHaveClass("[&_td]:py-2");
       expect(headings).toHaveLength(10);
       expect(headings[1]).toHaveTextContent("usage.billingModel");
       expect(headings[2]).toHaveTextContent("Reasoning(requested/applied)");

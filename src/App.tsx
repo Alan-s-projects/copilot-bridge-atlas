@@ -73,7 +73,7 @@ export default function App() {
   }, []);
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
       <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border px-6">
         <nav
           aria-label="Main navigation"
@@ -96,7 +96,7 @@ export default function App() {
         <ProxyToggle />
       </header>
       <main
-        className={`flex min-h-0 flex-1 flex-col ${view === "setup" ? "overflow-hidden" : "overflow-y-auto"}`}
+        className={`flex min-h-0 min-w-0 flex-1 flex-col ${view === "setup" || view === "settings" ? "overflow-hidden" : "overflow-y-auto"}`}
       >
         {view === "settings" ? (
           <SettingsPage />
@@ -105,14 +105,9 @@ export default function App() {
         ) : view === "usage" ? (
           <UsagePage />
         ) : (
-          <div className="space-y-5 px-6 pb-6 pt-4">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex min-w-0 flex-col gap-1">
-                <h1 className="text-2xl font-bold tracking-tight">Overview</h1>
-                <p className="text-sm text-muted-foreground">
-                  Monitor your Copilot connection, proxy activity, and usage
-                </p>
-              </div>
+          <div className="space-y-3 px-4 pb-4 pt-3 sm:px-6">
+            <div className="flex items-center justify-between gap-4">
+              <h1 className="text-xl font-bold">Overview</h1>
               <OverviewRefreshButton />
             </div>
             <BridgeWarnings status={status} />

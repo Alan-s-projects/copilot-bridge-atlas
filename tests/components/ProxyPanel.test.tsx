@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => ({
     proxyEnabled: true,
     listenAddress: "127.0.0.1",
     listenPort: 15722,
-    enableLogging: true,
   },
 }));
 
@@ -60,21 +59,18 @@ describe("ProxyPanel auto-save", () => {
     );
   });
 
-  it("auto-saves the request logging switch", async () => {
+  it("does not offer a recording toggle or duplicate overview counters", () => {
     render(<ProxyPanel />);
-    fireEvent.click(
-      screen.getByRole("switch", {
-        name: "Record requests for the usage dashboard",
-      }),
-    );
-
-    await waitFor(() =>
-      expect(mocks.save).toHaveBeenCalledWith({
-        ...mocks.config,
-        enableLogging: false,
-      }),
-    );
-    expect(await screen.findByText("settings.saved")).toBeVisible();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    for (const label of [
+      "Record requests for the usage dashboard",
+      "Requests",
+      "Active connections",
+      "Success rate",
+    ]) {
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    }
+    expect(mocks.save).not.toHaveBeenCalled();
   });
 
   it("flushes a pending listener edit when the settings panel closes", async () => {

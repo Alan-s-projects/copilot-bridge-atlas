@@ -120,6 +120,27 @@ beforeEach(() => {
 });
 
 describe("SettingsPage", () => {
+  it("scrolls only content and resets its position when the section changes", () => {
+    render(<SettingsPage />);
+    const content = screen.getByRole("region", { name: "Settings content" });
+    const sidebar = screen.getByRole("navigation");
+    expect(content).toHaveClass(
+      "relative",
+      "overflow-y-auto",
+      "overscroll-contain",
+      "flex-1",
+    );
+    expect(content).not.toContainElement(sidebar);
+    expect(content).not.toContainElement(
+      screen.getByRole("heading", { name: "Settings" }),
+    );
+    expect(content).toHaveAttribute("tabindex", "0");
+    content.scrollTop = 300;
+    fireEvent.click(screen.getByRole("button", { name: "Copilot" }));
+    expect(content.scrollTop).toBe(0);
+    expect(content).toHaveTextContent("Copilot settings");
+  });
+
   it("autosaves general preferences when they change", async () => {
     render(<SettingsPage />);
 

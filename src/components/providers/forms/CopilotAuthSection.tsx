@@ -21,7 +21,6 @@ import {
   Plus,
   X,
   User,
-  Settings2,
   AlertTriangle,
   RefreshCw,
 } from "lucide-react";
@@ -31,14 +30,12 @@ import type { GitHubAccount } from "@/lib/api";
 
 interface CopilotAuthSectionProps {
   className?: string;
-  /** select 模式只展示账号选择和管理入口；manage 模式展示完整账号管理 */
+  /** select mode only selects an account; manage mode provides account management. */
   mode?: "manage" | "select";
   /** 当前选中的 GitHub 账号 ID */
   selectedAccountId?: string | null;
   /** 账号选择回调 */
   onAccountSelect?: (accountId: string | null) => void;
-  /** 打开账号管理入口 */
-  onManageAccounts?: () => void;
 }
 
 /**
@@ -51,7 +48,6 @@ export const CopilotAuthSection: React.FC<CopilotAuthSectionProps> = ({
   mode = "manage",
   selectedAccountId,
   onAccountSelect,
-  onManageAccounts,
 }) => {
   const { t } = useTranslation();
   const [copied, setCopied] = React.useState(false);
@@ -292,24 +288,7 @@ export const CopilotAuthSection: React.FC<CopilotAuthSectionProps> = ({
       )}
 
       {/* 账号选择器（有账号时显示） */}
-      {mode === "select" && accountSelect ? (
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-          <div className="min-w-0 flex-1">{accountSelect}</div>
-          {onManageAccounts && (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onManageAccounts}
-              className="h-9 shrink-0"
-            >
-              <Settings2 className="h-4 w-4" />
-              {t("copilot.manageAccounts", "Manage accounts")}
-            </Button>
-          )}
-        </div>
-      ) : (
-        accountSelect
-      )}
+      {accountSelect}
 
       {/* 已登录账号列表 */}
       {mode === "manage" && isStatusSuccess && hasAnyAccount && (

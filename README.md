@@ -10,8 +10,8 @@ Download the Windows x64 MSI from
 [Releases](https://github.com/Alan-s-projects/copilot-bridge-atlas/releases).
 The installer is per-user and unsigned.
 
-1. Open **Settings → Copilot**, sign in to GitHub, and refresh your models.
-   Changes save automatically.
+1. Open **Settings → Copilot** to sign in to GitHub, then **Settings → Models**
+   to refresh your models. Changes save automatically.
 2. Turn on the proxy switch. The default address is `http://127.0.0.1:15722/v1`.
 3. Open **Connect**, review the proposed TOML, copy it, and apply it yourself.
 4. Reload Codex so it loads the selected provider and generated model catalog.

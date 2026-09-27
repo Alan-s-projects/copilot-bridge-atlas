@@ -138,6 +138,11 @@ describe("SettingsPage", () => {
     content.scrollTop = 300;
     fireEvent.click(screen.getByRole("button", { name: "Copilot" }));
     expect(content.scrollTop).toBe(0);
+    expect(content).toHaveTextContent("Auth settings");
+    expect(
+      screen.queryByRole("button", { name: "Auth" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Models" }));
     expect(content).toHaveTextContent("Copilot settings");
   });
 

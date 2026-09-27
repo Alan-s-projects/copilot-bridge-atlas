@@ -428,6 +428,7 @@ pub fn run() {
             commands::get_log_config,
             commands::set_log_config,
             commands::check_for_updates,
+            commands::get_available_release_version,
             commands::copy_text_to_clipboard,
             commands::create_db_backup,
             commands::list_db_backups,

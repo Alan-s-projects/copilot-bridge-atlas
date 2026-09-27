@@ -25,7 +25,6 @@ use std::{
 
 const MAX_ERROR_PREVIEW: usize = 4096;
 const MAX_ERROR_JSON: usize = 32 * 1024;
-const MAX_MESSAGE_CHARS: usize = 200;
 const MAX_DIAGNOSTIC_IDS: usize = 6;
 
 #[derive(Default, Clone)]
@@ -429,285 +428,210 @@ fn looks_sensitive(value: &str) -> bool {
     .any(|marker| lower.contains(marker))
 }
 
-fn safe_error_text(value: &str) -> String {
-    let normalized = value
-        .split_whitespace()
-        .take(80)
-        .collect::<Vec<_>>()
-        .join(" ");
-    let lower = normalized.to_ascii_lowercase();
-    let recognized = [
-        "bad request",
-        "invalid",
-        "expected",
-        "missing",
-        "failed",
-        "timed out",
-        "timeout",
-        "unauthorized",
-        "forbidden",
-        "not found",
-        "unsupported",
-        "request ",
-        "model ",
-        "cannot ",
-        "could not",
-        "too many",
-        "payload too large",
-        "internal server error",
-        "service unavailable",
-        "gateway timeout",
-        "stream error",
-    ]
-    .iter()
-    .any(|prefix| lower.starts_with(prefix));
-    if !recognized {
-        return "[message omitted]".into();
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
-    // Values surrounded by quotes are commonly echoed prompts, tool arguments,
-    // model inputs, or credentials. Preserve the error phrase, not those values.
-    let mut safe = String::new();
-    let mut quote: Option<char> = None;
-    for ch in normalized.chars() {
-        if let Some(delimiter) = quote {
-            if ch == delimiter {
-                quote = None;
-            }
-            continue;
-        }
-        if matches!(ch, '\'' | '"' | '`') {
-            quote = Some(ch);
-            safe.push_str("[value]");
-        } else if ch.is_ascii() && !ch.is_ascii_control() {
-            safe.push(ch);
-        } else {
-            safe.push(' ');
-        }
-    }
-    // Keep only a small diagnostic vocabulary. A syntactically valid JSON
-    // error can still echo arbitrary prompt or tool-output text as its message.
-    let mut words = Vec::new();
-    let mut omitted = false;
-    for word in safe.split_whitespace().take(48) {
-        let candidate =
-            word.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '[' && ch != ']');
-        let known = [
-            "bad",
-            "request",
-            "invalid",
-            "value",
-            "for",
-            "expected",
-            "an",
-            "a",
-            "id",
-            "that",
-            "begins",
-            "with",
-            "missing",
-            "required",
-            "unsupported",
-            "model",
-            "field",
-            "parameter",
-            "param",
-            "failed",
-            "to",
-            "read",
-            "reading",
-            "timed",
-            "out",
-            "timeout",
-            "body",
-            "size",
-            "limit",
-            "too",
-            "large",
-            "unauthorized",
-            "forbidden",
-            "not",
-            "found",
-            "internal",
-            "server",
-            "error",
-            "service",
-            "unavailable",
-            "gateway",
-            "stream",
-            "response",
-            "input",
-            "the",
-            "is",
-            "must",
-            "be",
-            "provided",
-            "of",
-            "type",
-            "empty",
-            "malformed",
-            "exceeds",
-            "maximum",
-            "on",
-            "upstream",
-            "token",
-            "tokens",
-            "content",
-            "[value]",
-        ]
-        .iter()
-        .any(|known| candidate.eq_ignore_ascii_case(known));
-        if known {
-            words.push(candidate.to_owned());
-        } else {
-            omitted = true;
-            break;
-        }
-    }
-    if omitted {
-        words.push("[value omitted]".into());
-    }
-    let result = words.join(" ");
-    if result.is_empty() || looks_sensitive(&result) {
-        return "[message omitted]".into();
-    }
-    result.chars().take(MAX_MESSAGE_CHARS).collect()
 }
 
-fn safe_error_code(value: Option<&Value>) -> String {
-    let Some(value) = value else {
-        return "none".into();
-    };
-    let value = match value {
-        Value::String(value) => value.clone(),
-        Value::Number(value) => value.to_string(),
-        _ => return "[redacted]".into(),
-    };
-    if value.len() > 64 || looks_sensitive(&value) {
-        return "[redacted]".into();
-    }
-    let lower = value.to_ascii_lowercase();
-    let known = [
-        "invalid_request",
-        "invalid_request_error",
-        "bad_request",
-        "invalid_argument",
-        "validation_error",
-        "model_not_found",
-        "unsupported_model",
-        "unsupported_parameter",
-        "missing_parameter",
-        "rate_limit_exceeded",
-        "unauthorized",
-        "forbidden",
-        "server_error",
-        "upstream_error",
-        "timeout",
-        "request_timeout",
-        "payload_too_large",
-    ];
-    if known.contains(&lower.as_str()) || lower.parse::<u16>().is_ok() {
-        value
+fn safe_token(value: &str, limit: usize) -> Option<String> {
+    let value = value.trim();
+    if (1..=limit).contains(&value.len())
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+        && !looks_sensitive(value)
+    {
+        Some(value.to_owned())
     } else {
-        "[redacted]".into()
+        None
     }
 }
 
-fn safe_error_param(value: Option<&Value>) -> String {
-    let Some(Value::String(value)) = value else {
-        return "none".into();
-    };
-    if value.len() > 96 || looks_sensitive(value) {
-        return "[redacted]".into();
-    }
-    let normalized = value
-        .split('.')
-        .map(|part| part.split_once('[').map_or(part, |(name, _)| name))
-        .collect::<Vec<_>>();
-    let roots = [
-        "input",
-        "messages",
-        "tools",
-        "model",
-        "reasoning",
-        "stream",
-        "max_output_tokens",
-        "temperature",
-        "top_p",
-        "tool_choice",
-        "response_format",
-        "instructions",
-    ];
-    let parts = [
-        "id",
-        "type",
-        "content",
-        "role",
-        "name",
-        "parameters",
-        "arguments",
-        "effort",
-        "text",
-        "input",
-        "output",
-        "call_id",
-        "schema",
-    ];
-    if normalized.is_empty()
-        || !roots.contains(&normalized[0])
-        || normalized[1..].iter().any(|part| !parts.contains(part))
-        || !value
+fn safe_param_path(value: &str) -> Option<String> {
+    let valid = (1..=128).contains(&value.len())
+        && value
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '[' | ']'))
-        || value.split('[').skip(1).any(|part| {
-            !part.split_once(']').is_some_and(|(index, _)| {
-                !index.is_empty() && index.chars().all(|ch| ch.is_ascii_digit())
-            })
-        })
-    {
-        return "[redacted]".into();
+        && !looks_sensitive(value)
+        && value.split('.').all(|part| {
+            let (name, index) = part.split_once('[').unwrap_or((part, ""));
+            !name.is_empty()
+                && name
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                && (index.is_empty()
+                    || index.strip_suffix(']').is_some_and(|index| {
+                        !index.is_empty() && index.chars().all(|ch| ch.is_ascii_digit())
+                    }))
+        });
+    valid.then(|| value.to_owned())
+}
+
+fn diagnostic_number_name(path: &str) -> bool {
+    let name = path.rsplit('.').next().unwrap_or(path);
+    let name = name.split('[').next().unwrap_or(name);
+    matches!(
+        name,
+        "count"
+            | "limit"
+            | "prompt_tokens"
+            | "input_tokens"
+            | "output_tokens"
+            | "max_tokens"
+            | "max_prompt_tokens"
+            | "max_output_tokens"
+    )
+}
+
+fn collect_numbers(value: &Value, path: &str, output: &mut Vec<String>) {
+    match value {
+        Value::Number(number) if diagnostic_number_name(path) => {
+            output.push(format!("{path}={number}"));
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate().take(8) {
+                collect_numbers(item, &format!("{path}[{index}]"), output);
+            }
+        }
+        Value::Object(fields) => {
+            for (key, child) in fields.iter().take(12) {
+                if let Some(key) = safe_token(key, 48) {
+                    let next = if path.is_empty() {
+                        key
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    collect_numbers(child, &next, output);
+                }
+            }
+        }
+        _ => {}
     }
-    value.clone()
+    output.truncate(12);
+}
+
+fn grok_prompt_limit(message: &str) -> Option<(u64, u64)> {
+    let words: Vec<_> = message.split_whitespace().collect();
+    let prompt = words.windows(4).position(|phrase| phrase == ["prompt", "token", "count", "of"])?;
+    let count = words.get(prompt + 4)?.parse().ok()?;
+    if words.get(prompt + 5..prompt + 8) != Some(&["exceeds", "the", "limit"]) {
+        return None;
+    }
+    if words.get(prompt + 8) != Some(&"of") {
+        return None;
+    }
+    let limit = words.get(prompt + 9)?.trim_end_matches('.').parse().ok()?;
+    Some((count, limit))
+}
+
+fn collect_structure(value: &Value, path: &str, output: &mut Vec<String>) {
+    match value {
+        Value::Object(fields) => {
+            for (key, child) in fields.iter().take(16) {
+                let key = safe_token(key, 48).unwrap_or_else(|| "invalid_key".into());
+                let next = if path.is_empty() {
+                    key
+                } else {
+                    format!("{path}.{key}")
+                };
+                output.push(format!("{next}:{}", json_type_name(child)));
+                if output.len() < 24 && (child.is_object() || child.is_array()) {
+                    collect_structure(child, &next, output);
+                }
+            }
+        }
+        Value::Array(items) => {
+            output.push(format!(
+                "{path}[]:{}",
+                items.first().map(json_type_name).unwrap_or("empty")
+            ));
+            if let Some(item) = items.first() {
+                collect_structure(item, &format!("{path}[]"), output);
+            }
+        }
+        _ => {}
+    }
+    output.truncate(24);
 }
 
 fn summarize_error_value(value: &Value) -> String {
     let error = value.get("error").unwrap_or(value);
-    let message = error
-        .get("message")
-        .or_else(|| error.get("detail"))
-        .or_else(|| value.get("message"))
+    let code = error
+        .get("code")
         .and_then(Value::as_str)
-        .map(safe_error_text)
-        .unwrap_or_else(|| "[message unavailable]".into());
-    let code = safe_error_code(error.get("code"));
-    let kind = safe_error_code(error.get("type"));
-    let param = safe_error_param(error.get("param"));
-    let request_id = ["request_id", "requestId", "correlation_id"]
-        .iter()
-        .find_map(|key| error.get(key).and_then(Value::as_str))
-        .and_then(safe_correlation_id)
+        .filter(|value| !looks_sensitive(value))
+        .and_then(|value| safe_token(value, 96))
         .unwrap_or_else(|| "none".into());
-    format!("kind=json message={message:?} code={code} type={kind} param={param} body_request_id={request_id}")
+    let kind = error
+        .get("type")
+        .and_then(Value::as_str)
+        .and_then(|value| safe_token(value, 96))
+        .unwrap_or_else(|| "none".into());
+    let param = error
+        .get("param")
+        .and_then(Value::as_str)
+        .and_then(safe_param_path)
+        .unwrap_or_else(|| "none".into());
+    let mut numbers = Vec::new();
+    collect_numbers(error, "", &mut numbers);
+    if numbers.is_empty() {
+        if let Some((count, limit)) = error
+            .get("message")
+            .and_then(Value::as_str)
+            .and_then(grok_prompt_limit)
+        {
+            numbers.push(format!("prompt_tokens={count}"));
+            numbers.push(format!("limit={limit}"));
+        }
+    }
+    let mut structure = Vec::new();
+    collect_structure(error, "", &mut structure);
+    format!(
+        "kind=json code={code} type={kind} param={param} numbers={} fields={}",
+        if numbers.is_empty() {
+            "none".into()
+        } else {
+            numbers.join(",")
+        },
+        if structure.is_empty() {
+            "none".into()
+        } else {
+            structure.join(",")
+        }
+    )
 }
 
 fn summarize_body(body: &[u8], compressed: bool, truncated: bool) -> String {
-    if compressed {
-        return "kind=compressed message=[encoded body omitted]".into();
-    }
     if body.is_empty() {
         return "kind=empty".into();
     }
-    let text = String::from_utf8_lossy(&body[..body.len().min(MAX_ERROR_JSON)]);
+    if compressed {
+        return format!("kind=compressed bytes={}", body.len());
+    }
+    let sample = &body[..body.len().min(MAX_ERROR_JSON)];
     if !truncated && body.len() <= MAX_ERROR_JSON {
-        if let Ok(value) = serde_json::from_str::<Value>(&text) {
+        if let Ok(value) = serde_json::from_slice::<Value>(sample) {
             return summarize_error_value(&value);
         }
     }
-    if text.trim_start().starts_with('<') {
-        return "kind=html message=[HTML body omitted]".into();
-    }
-    let message = safe_error_text(&text);
-    let kind = if truncated { "truncated" } else { "text" };
-    format!("kind={kind} message={message:?}")
+    let kind = if sample.iter().any(|byte| {
+        !byte.is_ascii() || byte.is_ascii_control() && !matches!(byte, b'\n' | b'\r' | b'\t')
+    }) {
+        "binary"
+    } else if sample.starts_with(b"<") {
+        "html"
+    } else if truncated {
+        "truncated"
+    } else {
+        "text"
+    };
+    format!("kind={kind} bytes={}", body.len())
 }
 
 #[cfg(test)]
@@ -773,32 +697,49 @@ mod tests {
     }
 
     #[test]
-    fn sanitizes_error_messages_and_never_logs_arbitrary_body_text() {
+    fn structured_failure_summaries_keep_codes_and_counts_without_freeform_text() {
+        let summary = summarize_body(br#"{"error":{"message":"prompt contains secret prompt","code":"model_max_prompt_tokens_exceeded","type":"invalid_request_error","param":"input","prompt_tokens":390003,"limit":372000,"unexpected":{"reason":"secret tool output","count":2},"otp":123456}}"#, false, false);
+        assert!(summary.contains("code=model_max_prompt_tokens_exceeded"));
+        assert!(summary.contains("type=invalid_request_error"));
+        assert!(summary.contains("param=input"));
+        assert!(summary.contains("prompt_tokens=390003"));
+        assert!(summary.contains("limit=372000"));
+        assert!(summary.contains("unexpected.count=2"));
+        assert!(summary.contains("otp:number"));
+        assert!(!summary.contains("otp=123456"));
+        assert!(summary.contains("unexpected:object"));
+        assert!(!summary.contains("secret prompt"));
+        assert!(!summary.contains("secret tool output"));
+
+        let observed = summarize_body(br#"{"error":{"message":"prompt token count of 390003 exceeds the limit of 372000","code":"model_max_prompt_tokens_exceeded","type":"invalid_request_error","param":null}}"#, false, false);
+        assert!(observed.contains("code=model_max_prompt_tokens_exceeded"));
+        assert!(observed.contains("prompt_tokens=390003"));
+        assert!(observed.contains("limit=372000"));
+        assert!(!observed.contains("prompt token count"));
+
         assert_eq!(
-            summarize_body(br#"{"error":{"message":"Invalid value for 'input[233].id': 'secret prompt'","code":"invalid_request","type":"invalid_request_error","param":"input[233].id"}}"#, false, false),
-            "kind=json message=\"Invalid value for [value] [value]\" code=invalid_request type=invalid_request_error param=input[233].id body_request_id=none"
-        );
-        assert_eq!(
-            summarize_body(b"Bad Request\n", false, false),
-            "kind=text message=\"Bad Request\""
-        );
-        assert_eq!(
-            summarize_body(b"my private prompt and bearer secret", false, false),
-            "kind=text message=\"[message omitted]\""
+            summarize_body(b"Bad Request\nsecret prompt", false, false),
+            "kind=text bytes=25"
         );
         assert_eq!(summarize_body(b"", false, false), "kind=empty");
         assert_eq!(
-            summarize_body(b"compressed bytes", true, false),
-            "kind=compressed message=[encoded body omitted]"
+            summarize_body(b"compressed secret", true, false),
+            "kind=compressed bytes=17"
         );
         assert_eq!(
-            summarize_body(
-                br#"{"error":{"message":"Invalid value: private body","code":"myPrivatePrompt","param":"tools[0].secretValue"}}"#,
-                false,
-                false
-            ),
-            "kind=json message=\"Invalid value [value omitted]\" code=[redacted] type=none param=[redacted] body_request_id=none"
+            summarize_body(b"<html>secret prompt</html>", false, false),
+            "kind=html bytes=26"
         );
+        assert_eq!(
+            summarize_body(b"{not json secret", false, false),
+            "kind=text bytes=16"
+        );
+        assert!(summarize_body(
+            br#"{"error":{"code":"Bearer secret","param":"input.secret"}}"#,
+            false,
+            false
+        )
+        .contains("code=none"));
     }
 
     #[test]
@@ -820,7 +761,7 @@ mod tests {
         headers.insert("x-request-id", HeaderValue::from_static("upstream-123"));
         headers.insert("authorization", HeaderValue::from_static("Bearer private"));
         let body = Bytes::from_static(
-            br#"{"error":{"message":"Invalid value for 'input[233].id': 'secret prompt'","code":"invalid_request","type":"invalid_request_error","param":"input[233].id"}}"#,
+            br#"{"error":{"message":"prompt token count of 390003 exceeds the limit of 372000","code":"model_max_prompt_tokens_exceeded","type":"invalid_request_error","param":"input"}}"#,
         );
         let returned = diagnostics
             .observe(ProxyResponse::buffered(
@@ -848,18 +789,24 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].0, log::Level::Info);
         assert_eq!(entries[1].0, log::Level::Warn);
+        assert!(entries[1]
+            .1
+            .contains("code=model_max_prompt_tokens_exceeded"));
+        assert!(!entries[1].1.contains("secret prompt"));
+        assert!(entries[1].1.contains("model_max_prompt_tokens_exceeded"));
         for (_, line) in &entries {
             assert_eq!(line.lines().count(), 1);
             assert!(line.contains(&diagnostics.id));
             assert!(line.contains("upstream-123"));
-            assert!(!line.contains("secret prompt"));
             assert!(!line.contains("Bearer private"));
             assert!(!line.contains("access_token"));
         }
         assert!(entries[0].1.contains("status=400"));
         assert!(entries[0].1.contains("outgoing_bytes=712"));
         assert!(entries[0].1.contains("input_items=1 tools=1"));
-        assert!(entries[1].1.contains("param=input[233].id"));
+        assert!(entries[1]
+            .1
+            .contains("code=model_max_prompt_tokens_exceeded"));
         let history = db.get_request_logs(&Default::default(), 0, 10).unwrap();
         assert_eq!(history.total, 1);
         assert_eq!(history.data[0].request_id, diagnostics.id);
@@ -868,7 +815,7 @@ mod tests {
             .error_message
             .as_deref()
             .unwrap()
-            .contains("secret prompt"));
+            .contains("private-token"));
     }
 
     #[tokio::test]
@@ -993,27 +940,24 @@ mod tests {
         assert_eq!(history.data[0].status_code, 422);
         let entries = logger.0.lock().unwrap().clone();
         assert!(entries[1].1.contains("stage=chat_conversion"));
-        assert!(!entries[1].1.contains("secret prompt"));
+        assert!(!entries[1].1.contains("private-token"));
 
         logger.0.lock().unwrap().clear();
         let db = Arc::new(Database::memory().unwrap());
         let diagnostics = make_diagnostics(db.clone());
         diagnostics.failed_event(&serde_json::json!({
             "type": "response.failed",
-            "response": {
-                "error": {
-                    "message": "Invalid value for 'input[2].id': 'secret tool output'",
-                    "code": "invalid_request",
-                    "param": "input[2].id"
-                }
-            }
+            "response": {"error": {"message": "secret tool output", "code": "model_max_prompt_tokens_exceeded", "param": "input", "prompt_tokens": 390003}}
         }));
         let history = db.get_request_logs(&Default::default(), 0, 10).unwrap();
         assert_eq!(history.data[0].request_id, diagnostics.id);
         let entries = logger.0.lock().unwrap().clone();
         assert!(entries
             .iter()
-            .any(|(_, line)| line.contains("param=input[2].id")));
+            .any(|(_, line)| line.contains("code=model_max_prompt_tokens_exceeded")));
+        assert!(entries
+            .iter()
+            .any(|(_, line)| line.contains("prompt_tokens=390003")));
         assert!(!entries
             .iter()
             .any(|(_, line)| line.contains("secret tool output")));

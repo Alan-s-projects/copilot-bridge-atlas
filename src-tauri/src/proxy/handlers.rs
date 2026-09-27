@@ -32,7 +32,6 @@ use super::{
     usage::parser::TokenUsage,
     ProxyError,
 };
-use crate::database::PRICING_SOURCE_REQUEST;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use bytes::Bytes;
 use http_body_util::{BodyExt, LengthLimitError, Limited};
@@ -1415,9 +1414,6 @@ fn log_forward_error(
 }
 
 /// 记录请求使用量
-///
-/// `outbound_model` 是「按请求计价」模式的锚点：实际发往上游的模型
-/// （路由接管映射后的真值，无映射时等于 request_model）。
 #[allow(clippy::too_many_arguments)]
 async fn log_usage(
     state: &ProxyState,
@@ -1425,7 +1421,7 @@ async fn log_usage(
     app_type: &str,
     model: &str,
     request_model: &str,
-    outbound_model: &str,
+    _outbound_model: &str,
     usage: TokenUsage,
     latency_ms: u64,
     first_token_ms: Option<u64>,
@@ -1437,13 +1433,7 @@ async fn log_usage(
     use super::usage::logger::UsageLogger;
 
     let logger = UsageLogger::new(&state.db);
-
-    let (multiplier, pricing_model_source) = logger.resolve_pricing_config(app_type).await;
-    let pricing_model = if pricing_model_source == PRICING_SOURCE_REQUEST {
-        outbound_model
-    } else {
-        model
-    };
+    let pricing_model = model;
 
     let request_id = usage.dedup_request_id(app_type, provider_id);
 
@@ -1455,7 +1445,7 @@ async fn log_usage(
         request_model.to_string(),
         pricing_model.to_string(),
         usage,
-        multiplier,
+        rust_decimal::Decimal::ONE,
         latency_ms,
         first_token_ms,
         status_code,

@@ -2,33 +2,6 @@ use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::proxy::types::{GlobalProxyConfig, ProxyConfig};
 use rusqlite::params;
-use rust_decimal::Decimal;
-use std::str::FromStr;
-
-pub(crate) const PRICING_SOURCE_RESPONSE: &str = "response";
-pub(crate) const PRICING_SOURCE_REQUEST: &str = "request";
-
-pub(crate) fn validate_cost_multiplier(value: &str) -> Result<Decimal, AppError> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(AppError::Message("Multiplier cannot be empty".into()));
-    }
-    let parsed = Decimal::from_str(trimmed)
-        .map_err(|error| AppError::Message(format!("Invalid multiplier: {value} - {error}")))?;
-    if parsed < Decimal::ZERO {
-        return Err(AppError::Message("Multiplier cannot be negative".into()));
-    }
-    Ok(parsed)
-}
-
-pub(crate) fn validate_pricing_source(value: &str) -> Result<&str, AppError> {
-    match value.trim() {
-        PRICING_SOURCE_RESPONSE => Ok(PRICING_SOURCE_RESPONSE),
-        PRICING_SOURCE_REQUEST => Ok(PRICING_SOURCE_REQUEST),
-        _ => Err(AppError::Message(format!("Invalid pricing mode: {value}"))),
-    }
-}
-
 impl Database {
     fn ensure_proxy_config_row_exists(&self, app_type: &str) -> Result<(), AppError> {
         crate::copilot_bridge::require_codex(app_type)?;
@@ -108,55 +81,6 @@ impl Database {
         Ok(())
     }
 
-    pub async fn get_default_cost_multiplier(&self, app_type: &str) -> Result<String, AppError> {
-        self.ensure_proxy_config_row_exists(app_type)?;
-        lock_conn!(self.conn)
-            .query_row(
-                "SELECT default_cost_multiplier FROM proxy_config WHERE app_type = 'codex'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| AppError::Database(error.to_string()))
-    }
-
-    pub async fn set_default_cost_multiplier(
-        &self,
-        app_type: &str,
-        value: &str,
-    ) -> Result<(), AppError> {
-        validate_cost_multiplier(value)?;
-        self.ensure_proxy_config_row_exists(app_type)?;
-        lock_conn!(self.conn).execute(
-            "UPDATE proxy_config SET default_cost_multiplier = ?1, updated_at = datetime('now') WHERE app_type = 'codex'",
-            [value.trim()],
-        ).map_err(|error| AppError::Database(error.to_string()))?;
-        Ok(())
-    }
-
-    pub async fn get_pricing_model_source(&self, app_type: &str) -> Result<String, AppError> {
-        self.ensure_proxy_config_row_exists(app_type)?;
-        lock_conn!(self.conn)
-            .query_row(
-                "SELECT pricing_model_source FROM proxy_config WHERE app_type = 'codex'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| AppError::Database(error.to_string()))
-    }
-
-    pub async fn set_pricing_model_source(
-        &self,
-        app_type: &str,
-        value: &str,
-    ) -> Result<(), AppError> {
-        let value = validate_pricing_source(value)?;
-        self.ensure_proxy_config_row_exists(app_type)?;
-        lock_conn!(self.conn).execute(
-            "UPDATE proxy_config SET pricing_model_source = ?1, updated_at = datetime('now') WHERE app_type = 'codex'",
-            [value],
-        ).map_err(|error| AppError::Database(error.to_string()))?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -211,40 +135,6 @@ mod tests {
         .unwrap();
         db.update_global_proxy_config(old_client).await.unwrap();
         assert_eq!(db.get_proxy_config().await.unwrap().listen_port, 15922);
-    }
-
-    #[tokio::test]
-    async fn pricing_preferences_round_trip_and_reject_invalid_values() {
-        let db = Database::memory().unwrap();
-        assert_eq!(db.get_default_cost_multiplier("codex").await.unwrap(), "1");
-        assert_eq!(
-            db.get_pricing_model_source("codex").await.unwrap(),
-            "response"
-        );
-        db.set_default_cost_multiplier("codex", " 1.5 ")
-            .await
-            .unwrap();
-        db.set_pricing_model_source("codex", "request")
-            .await
-            .unwrap();
-        assert_eq!(
-            db.get_default_cost_multiplier("codex").await.unwrap(),
-            "1.5"
-        );
-        assert_eq!(
-            db.get_pricing_model_source("codex").await.unwrap(),
-            "request"
-        );
-        for invalid in ["", "-1", "not-a-number"] {
-            assert!(db
-                .set_default_cost_multiplier("codex", invalid)
-                .await
-                .is_err());
-        }
-        assert!(db
-            .set_pricing_model_source("codex", "invalid")
-            .await
-            .is_err());
     }
 
     #[tokio::test]

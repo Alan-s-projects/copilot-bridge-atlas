@@ -11,7 +11,6 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UsageDashboard } from "@/components/usage/UsageDashboard";
 
-const useProviderStatsMock = vi.hoisted(() => vi.fn());
 const useModelStatsMock = vi.hoisted(() => vi.fn());
 const useUnpricedModelUsageMock = vi.hoisted(() => vi.fn());
 const usageHeroMock = vi.hoisted(() => vi.fn());
@@ -45,7 +44,6 @@ vi.mock("@/lib/query/usage", async () => {
     );
   return {
     ...actual,
-    useProviderStats: (...args: unknown[]) => useProviderStatsMock(...args),
     useModelStats: (...args: unknown[]) => useModelStatsMock(...args),
     useUnpricedModelUsage: (...args: unknown[]) =>
       useUnpricedModelUsageMock(...args),
@@ -113,12 +111,10 @@ const renderDashboard = (props: ComponentProps<typeof UsageDashboard> = {}) => {
 
 describe("UsageDashboard", () => {
   beforeEach(() => {
-    useProviderStatsMock.mockReset();
     useModelStatsMock.mockReset();
     useUnpricedModelUsageMock.mockReset();
     retryPriceCheckMock.mockReset();
     usageHeroMock.mockReset();
-    useProviderStatsMock.mockReturnValue({ data: [] });
     useModelStatsMock.mockReturnValue({ data: [] });
     useUnpricedModelUsageMock.mockReturnValue({
       data: [],
@@ -141,7 +137,6 @@ describe("UsageDashboard", () => {
       screen.queryByRole("button", { name: "usage.appFilter.pi" }),
     ).not.toBeInTheDocument();
 
-    expect(useProviderStatsMock).not.toHaveBeenCalled();
     expect(useModelStatsMock).toHaveBeenLastCalledWith(
       expect.anything(),
       { appType: "codex" },

@@ -2,7 +2,7 @@
 
 use super::calculator::{CostBreakdown, CostCalculator, ModelPricing};
 use super::parser::TokenUsage;
-use crate::database::{Database, PRICING_SOURCE_REQUEST, PRICING_SOURCE_RESPONSE};
+use crate::database::Database;
 use crate::error::AppError;
 use crate::proxy::types::ReasoningEffort;
 use crate::services::sql_helpers::{INPUT_TOKEN_SEMANTICS_FRESH, INPUT_TOKEN_SEMANTICS_TOTAL};
@@ -10,7 +10,6 @@ use crate::services::usage_stats::is_placeholder_pricing_model;
 use rusqlite::OptionalExtension;
 use rust_decimal::Decimal;
 use sha2::{Digest, Sha256};
-use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq)]
 struct UsageSemantic {
@@ -326,46 +325,6 @@ impl<'a> UsageLogger<'a> {
         }
     }
 
-    /// Read the global multiplier and pricing-model source for this app.
-    pub async fn resolve_pricing_config(&self, app_type: &str) -> (Decimal, String) {
-        let default_multiplier_raw = match self.db.get_default_cost_multiplier(app_type).await {
-            Ok(value) => value,
-            Err(e) => {
-                log::warn!("[USG-003] 获取默认倍率失败 (app_type={app_type}): {e}");
-                "1".to_string()
-            }
-        };
-        let default_multiplier = match Decimal::from_str(&default_multiplier_raw) {
-            Ok(value) => value,
-            Err(e) => {
-                log::warn!(
-                    "[USG-003] 默认倍率解析失败 (app_type={app_type}): {default_multiplier_raw} - {e}"
-                );
-                Decimal::from(1)
-            }
-        };
-
-        let default_pricing_source_raw = match self.db.get_pricing_model_source(app_type).await {
-            Ok(value) => value,
-            Err(e) => {
-                log::warn!("[USG-003] 获取默认计费模式失败 (app_type={app_type}): {e}");
-                PRICING_SOURCE_RESPONSE.to_string()
-            }
-        };
-        let default_pricing_source = if default_pricing_source_raw == PRICING_SOURCE_RESPONSE
-            || default_pricing_source_raw == PRICING_SOURCE_REQUEST
-        {
-            default_pricing_source_raw
-        } else {
-            log::warn!(
-                "[USG-003] 默认计费模式无效 (app_type={app_type}): {default_pricing_source_raw}"
-            );
-            PRICING_SOURCE_RESPONSE.to_string()
-        };
-
-        (default_multiplier, default_pricing_source)
-    }
-
     /// 计算并记录请求
     #[allow(clippy::too_many_arguments)]
     pub fn log_with_calculation(
@@ -438,6 +397,8 @@ impl<'a> UsageLogger<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
 
     fn request_log(request_id: &str, input_tokens: u32) -> RequestLog {
         RequestLog {

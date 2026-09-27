@@ -361,7 +361,7 @@ function UnpricedModelsAlert({
           {models.map((usage) => (
             <dl
               key={usage.model}
-              className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 border-t border-amber-500/20 pt-2 sm:grid-cols-[minmax(0,1.6fr)_repeat(4,minmax(0,1fr))]"
+              className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 border-t border-amber-500/20 pt-2 sm:grid-cols-3 xl:grid-cols-[minmax(0,1.6fr)_repeat(5,minmax(0,1fr))]"
             >
               <div className="min-w-0">
                 <dt className="text-xs text-muted-foreground">
@@ -382,15 +382,19 @@ function UnpricedModelsAlert({
                 value={formatTokensShort(usage.freshInputTokens)}
               />
               <UnpricedMetric
+                label={t("usage.cacheRead", "Cached Input")}
+                value={formatTokensShort(usage.cacheReadTokens)}
+              />
+              <UnpricedMetric
                 label={t("usage.output", "Output")}
                 value={formatTokensShort(usage.outputTokens)}
               />
               <UnpricedMetric
-                label={t("usage.cacheRead", "Hit")}
-                value={formatTokensShort(usage.cacheReadTokens)}
+                label={t("usage.cacheWrite", "Cache Write")}
+                value={formatTokensShort(usage.cacheCreationTokens ?? 0)}
               />
               <UnpricedMetric
-                label={t("usage.cacheHitRate", "Cache Hit Rate")}
+                label={t("usage.cacheHitRate", "Read Cache Hit Rate")}
                 value={`${(usage.cacheHitRate * 100).toFixed(1)}%`}
               />
             </dl>

@@ -1,13 +1,5 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -18,24 +10,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useRequestLogs } from "@/lib/query/usage";
-import {
-  getFreshInputTokens,
-  isUnpricedUsage,
-  type LogFilters,
-  type UsageRangeSelection,
-} from "@/types/usage";
+import type { LogFilters, UsageRangeSelection } from "@/types/usage";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { UsageDateRangePicker } from "./UsageDateRangePicker";
-import {
-  ReasoningEffortHeading,
-  ReasoningEffortValue,
-} from "./ReasoningEffort";
-import {
-  formatOutputTokensPerSecond,
-  fmtInt,
-  fmtUsd,
-  parseFiniteNumber,
-} from "./format";
+import { RequestLogsGrid } from "./RequestLogsGrid";
 
 interface RequestLogTableProps {
   range: UsageRangeSelection;
@@ -108,8 +86,6 @@ export function RequestLogTable({
     setPageInput("");
   };
 
-  const locale = "en-US";
-
   return (
     <div className="space-y-4">
       <div className="rounded-lg border bg-card/50 p-2 backdrop-blur-sm">
@@ -152,180 +128,7 @@ export function RequestLogTable({
         <div className="h-[400px] animate-pulse rounded bg-gray-100" />
       ) : (
         <>
-          <div className="rounded-lg border border-border/50 bg-card/40 backdrop-blur-sm overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="text-center whitespace-nowrap">
-                    {t("usage.time")}
-                  </TableHead>
-                  <TableHead className="text-center whitespace-nowrap">
-                    {t("usage.billingModel")}
-                  </TableHead>
-                  <TableHead className="text-center whitespace-nowrap">
-                    <ReasoningEffortHeading />
-                  </TableHead>
-                  <TableHead className="text-center whitespace-nowrap">
-                    {t("usage.inputTokens")}
-                  </TableHead>
-                  <TableHead className="text-center whitespace-nowrap">
-                    {t("usage.outputTokens")}
-                  </TableHead>
-                  <TableHead className="text-center whitespace-nowrap">
-                    {t("usage.totalCost")}
-                  </TableHead>
-                  <TableHead className="text-center whitespace-nowrap">
-                    {t("usage.timingInfo")}
-                  </TableHead>
-                  <TableHead className="text-center whitespace-nowrap">
-                    {t("usage.status")}
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {logs.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={8}
-                      className="text-center text-muted-foreground"
-                    >
-                      {t("usage.noData")}
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  logs.map((log) => {
-                    const unpriced = isUnpricedUsage(log);
-                    return (
-                      <TableRow key={log.requestId}>
-                        <TableCell className="text-center whitespace-nowrap text-xs px-1.5">
-                          {new Date(log.createdAt * 1000).toLocaleString(
-                            locale,
-                            {
-                              month: "2-digit",
-                              day: "2-digit",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            },
-                          )}
-                        </TableCell>
-                        <TableCell className="text-center font-mono text-xs max-w-[200px]">
-                          <div
-                            className="truncate"
-                            title={
-                              log.requestModel && log.requestModel !== log.model
-                                ? `${log.requestModel} → ${log.model}`
-                                : log.model
-                            }
-                          >
-                            {log.requestModel &&
-                            log.requestModel !== log.model ? (
-                              <span>
-                                {log.requestModel}
-                                <span className="text-muted-foreground">
-                                  {" → "}
-                                  {log.model}
-                                </span>
-                              </span>
-                            ) : (
-                              log.model
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-center whitespace-nowrap px-1.5">
-                          <ReasoningEffortValue log={log} />
-                        </TableCell>
-                        <TableCell className="text-center px-1.5">
-                          {(() => {
-                            const freshInput = getFreshInputTokens(log);
-                            const isCacheInclusive =
-                              log.inputTokens !== freshInput;
-                            return (
-                              <div
-                                className="tabular-nums"
-                                title={
-                                  isCacheInclusive
-                                    ? `Raw: ${log.inputTokens.toLocaleString()}`
-                                    : undefined
-                                }
-                              >
-                                {fmtInt(freshInput, locale)}
-                              </div>
-                            );
-                          })()}
-                          {(log.cacheReadTokens > 0 ||
-                            log.cacheCreationTokens > 0) && (
-                            <div className="text-[10px] text-muted-foreground whitespace-nowrap">
-                              {[
-                                log.cacheReadTokens > 0 &&
-                                  `R${fmtInt(log.cacheReadTokens, locale)}`,
-                                log.cacheCreationTokens > 0 &&
-                                  `W${fmtInt(log.cacheCreationTokens, locale)}`,
-                              ]
-                                .filter(Boolean)
-                                .join("·")}
-                            </div>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-center px-1.5">
-                          <div className="tabular-nums">
-                            {fmtInt(log.outputTokens, locale)}
-                            {(() => {
-                              const tpsStr = formatOutputTokensPerSecond(log);
-                              if (tpsStr == null) return null;
-                              return (
-                                <span className="text-muted-foreground text-xs">
-                                  /{tpsStr} tps
-                                </span>
-                              );
-                            })()}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-center px-1.5">
-                          <div
-                            className={`font-medium tabular-nums ${
-                              unpriced ? "text-muted-foreground" : ""
-                            }`}
-                          >
-                            {unpriced
-                              ? t("usage.unpriced", "Unpriced")
-                              : fmtUsd(log.totalCostUsd, 4)}
-                          </div>
-                          {parseFiniteNumber(log.costMultiplier) != null &&
-                            parseFiniteNumber(log.costMultiplier) !== 1 && (
-                              <div className="text-[11px] text-muted-foreground">
-                                ×
-                                {parseFiniteNumber(log.costMultiplier)?.toFixed(
-                                  2,
-                                )}
-                              </div>
-                            )}
-                        </TableCell>
-                        <TableCell className="text-center whitespace-nowrap text-xs tabular-nums">
-                          {(log.latencyMs / 1000).toFixed(1)}s
-                          {log.firstTokenMs != null && (
-                            <span className="text-muted-foreground">
-                              /{(log.firstTokenMs / 1000).toFixed(1)}s
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <span
-                            className={
-                              log.statusCode >= 200 && log.statusCode < 300
-                                ? "text-green-600"
-                                : "text-red-600"
-                            }
-                          >
-                            {log.statusCode}
-                          </span>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
-          </div>
+          <RequestLogsGrid logs={logs} />
 
           <div className="flex items-center justify-between text-sm text-muted-foreground">
             <span>{t("usage.totalRecords", { total })}</span>

@@ -6,11 +6,8 @@ import {
 import { useGlobalProxyConfig } from "@/lib/query/proxy";
 import type { ProxyStatus } from "@/types/proxy";
 import type { RequestLog } from "@/types/usage";
-import { fmtInt, fmtUsd, formatTokensShort } from "@/components/usage/format";
-import {
-  ReasoningEffortHeading,
-  ReasoningEffortValue,
-} from "@/components/usage/ReasoningEffort";
+import { fmtInt, fmtUsd } from "@/components/usage/format";
+import { RequestLogsGrid } from "@/components/usage/RequestLogsGrid";
 
 const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
 const clock = (timestamp: number) =>
@@ -22,74 +19,10 @@ const RecentRequests = memo(function RecentRequests({
   logs: RequestLog[];
 }) {
   return (
-    <div className="max-h-80 overflow-auto rounded-xl border">
-      <table className="w-full text-left text-sm">
-        <caption className="sr-only">
-          Latest {OVERVIEW_REQUEST_LIMIT} completed requests
-        </caption>
-        <thead className="sticky top-0 bg-muted text-xs text-muted-foreground">
-          <tr>
-            {[
-              "Time",
-              "Model",
-              "Reasoning",
-              "HTTP status",
-              "Latency",
-              "Tokens in / out",
-              "Estimated cost",
-            ].map((heading) => (
-              <th
-                key={heading}
-                className="whitespace-nowrap px-4 py-2 font-medium"
-              >
-                {heading === "Reasoning" ? <ReasoningEffortHeading /> : heading}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {logs.slice(0, OVERVIEW_REQUEST_LIMIT).map((log) => (
-            <tr key={log.requestId} className="border-t">
-              <td
-                className="whitespace-nowrap px-4 py-2 text-xs"
-                title={new Date(log.createdAt * 1000).toLocaleString("en-US")}
-              >
-                {clock(log.createdAt)}
-              </td>
-              <td
-                className="max-w-52 truncate px-4 py-2 font-mono text-xs"
-                title={log.model}
-              >
-                {log.model}
-              </td>
-              <td className="whitespace-nowrap px-4 py-2">
-                <ReasoningEffortValue log={log} />
-              </td>
-              <td
-                className={`px-4 py-2 font-mono text-xs ${log.statusCode >= 200 && log.statusCode < 400 ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}
-              >
-                {log.statusCode || "Error"}
-              </td>
-              <td className="whitespace-nowrap px-4 py-2 text-xs">
-                {(log.latencyMs / 1000).toFixed(2)} s
-              </td>
-              <td className="whitespace-nowrap px-4 py-2 text-xs">
-                {formatTokensShort(log.inputTokens)} /{" "}
-                {formatTokensShort(log.outputTokens)}
-              </td>
-              <td className="px-4 py-2 text-xs">
-                {fmtUsd(log.totalCostUsd, 4)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {logs.length === 0 && (
-        <p className="p-4 text-sm text-muted-foreground">
-          No requests recorded yet.
-        </p>
-      )}
-    </div>
+    <RequestLogsGrid
+      logs={logs.slice(0, OVERVIEW_REQUEST_LIMIT)}
+      caption={`Latest ${OVERVIEW_REQUEST_LIMIT} completed requests`}
+    />
   );
 });
 

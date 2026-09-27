@@ -71,7 +71,11 @@ const snapshot = {
         appliedReasoningEffort: "max",
         statusCode: 200,
         latencyMs: 2500,
+        firstTokenMs: 500,
         inputTokens: 1000,
+        freshInputTokens: 300,
+        cacheReadTokens: 600,
+        cacheCreationTokens: 100,
         outputTokens: 200,
         totalCostUsd: "0.01",
       },
@@ -129,7 +133,7 @@ describe("read-only bridge overview", () => {
     });
     expect(within(table).getByText("gpt-6-astra")).toBeVisible();
     const headings = within(table).getAllByRole("columnheader");
-    expect(headings[1]).toHaveTextContent("Model");
+    expect(headings[1]).toHaveTextContent("Billing Model");
     expect(headings[2]).toHaveTextContent("Reasoning(requested/applied)");
     const rows = within(table).getAllByRole("row");
     expect(within(rows[1]).getAllByRole("cell")[2]).toHaveTextContent(
@@ -139,8 +143,34 @@ describe("read-only bridge overview", () => {
       "\u2014 / \u2014",
     );
     expect(within(table).getByText("400")).toBeVisible();
-    expect(within(table).getByText("200")).toBeVisible();
-    expect(within(table).getByText("2.50 s")).toBeVisible();
+    const firstCells = within(rows[1]).getAllByRole("cell");
+    expect(firstCells).toHaveLength(9);
+    expect(firstCells[3]).toHaveTextContent("200");
+    expect(firstCells.slice(4, 7).map((cell) => cell.textContent)).toEqual([
+      "300 / 600 / 60.0%",
+      "200/100 tps",
+      "100",
+    ]);
+    expect(headings.slice(4, 7).map((heading) => heading.textContent)).toEqual([
+      "Input(fresh/cached/hit)",
+      "Output",
+      "Cache Write",
+    ]);
+    expect(firstCells[8]).toHaveTextContent("$0.0100");
+    expect(within(table).getByText("2.5s")).toBeVisible();
+    expect(firstCells[7]).toHaveTextContent(/^2\.5s$/);
+    expect(headings.map((heading) => heading.textContent)).toEqual([
+      "Time",
+      "Billing Model",
+      "Reasoning(requested/applied)",
+      "Status",
+      "Input(fresh/cached/hit)",
+      "Output",
+      "Cache Write",
+      "Duration",
+      "Cost",
+    ]);
+    expect(mocks.logs).toHaveBeenCalledWith({ appType: "codex" }, 0, 5);
     expect(screen.getAllByRole("button")).toHaveLength(1);
     expect(
       proxy.queryByRole("button", { name: "Refresh overview" }),
@@ -249,7 +279,7 @@ describe("read-only bridge overview", () => {
     });
     mocks.logs.mockResolvedValue({ data: [] });
     renderOverview();
-    expect(await screen.findByText("No requests recorded yet.")).toBeVisible();
+    expect(await screen.findByText("No data")).toBeVisible();
     for (const label of ["Success today", "Cache reuse today"]) {
       expect(screen.getByText(label).nextElementSibling).toHaveTextContent("—");
     }

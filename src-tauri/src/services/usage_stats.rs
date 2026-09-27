@@ -5,7 +5,8 @@
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::services::sql_helpers::{
-    fresh_input_sql, INPUT_TOKEN_SEMANTICS_FRESH, INPUT_TOKEN_SEMANTICS_TOTAL,
+    fresh_input_sql, output_generation_ms_sql, INPUT_TOKEN_SEMANTICS_FRESH,
+    INPUT_TOKEN_SEMANTICS_TOTAL,
 };
 use chrono::{Local, NaiveDate, TimeZone, Timelike};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -26,9 +27,10 @@ pub struct UsageSummary {
     pub success_rate: f32,
     #[serde(default)]
     pub avg_latency_ms: f64,
-    /// input + output + cache_creation + cache_read — the total tokens
-    /// actually processed by the model (including cache hits). Used as the
-    /// headline "real consumption" number in the usage hero.
+    /// Time-weighted output rate; old rollups fall back to request latency.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens_per_second: Option<f64>,
+    /// Fresh input + output + cache writes + cache reads, retained for API compatibility.
     pub real_total_tokens: u64,
     /// cache_read / (input + cache_creation + cache_read). Range 0.0–1.0.
     /// Reported as a fraction; multiply by 100 in UI for percentage display.
@@ -100,6 +102,7 @@ pub struct UnpricedModelUsage {
     pub fresh_input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
     pub cache_hit_rate: f64,
 }
 
@@ -143,6 +146,9 @@ pub struct RequestLogDetail {
     pub applied_reasoning_effort: Option<String>,
     pub cost_multiplier: String,
     pub input_tokens: u32,
+    /// Cache-normalized input using the stored row's token semantics.
+    #[serde(default)]
+    pub fresh_input_tokens: u64,
     pub output_tokens: u32,
     pub cache_read_tokens: u32,
     pub cache_creation_tokens: u32,
@@ -168,7 +174,7 @@ pub struct RequestLogDetail {
     pub pricing_model: Option<String>,
 }
 
-/// Map the 28-column request-log projection.
+/// Map the 29-column request-log projection.
 ///
 /// The SELECT must return columns in this order:
 /// `request_id, provider_id, provider_name, app_type, model, request_model,
@@ -177,7 +183,7 @@ pub struct RequestLogDetail {
 ///  cache_creation_cost_usd, total_cost_usd, is_streaming, latency_ms,
 ///  first_token_ms, duration_ms, status_code, error_message, created_at,
 ///  data_source, pricing_model, input_token_semantics,
-///  requested_reasoning_effort, applied_reasoning_effort`
+///  requested_reasoning_effort, applied_reasoning_effort, fresh_input_tokens`
 ///
 /// 不需要 provider_name 时（如 backfill）SELECT `NULL AS provider_name` 占位即可。
 fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestLogDetail> {
@@ -212,6 +218,7 @@ fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
         input_token_semantics: row.get::<_, i64>(25)?,
         requested_reasoning_effort: row.get(26)?,
         applied_reasoning_effort: row.get(27)?,
+        fresh_input_tokens: row.get::<_, i64>(28)? as u64,
     })
 }
 
@@ -467,6 +474,7 @@ impl Database {
 
         let fresh_input_detail = fresh_input_sql("l");
         let fresh_input_rollup = fresh_input_sql("r");
+        let generation_ms = output_generation_ms_sql("l");
         let sql = format!(
             "SELECT
                 COALESCE(d.total_requests, 0) + COALESCE(r.total_requests, 0),
@@ -476,7 +484,9 @@ impl Database {
                 COALESCE(d.total_cache_creation_tokens, 0) + COALESCE(r.total_cache_creation_tokens, 0),
                 COALESCE(d.total_cache_read_tokens, 0) + COALESCE(r.total_cache_read_tokens, 0),
                 COALESCE(d.success_count, 0) + COALESCE(r.success_count, 0),
-                COALESCE(d.total_latency_ms, 0) + COALESCE(r.total_latency_ms, 0)
+                COALESCE(d.total_latency_ms, 0) + COALESCE(r.total_latency_ms, 0),
+                COALESCE(d.timed_output_tokens, 0) + COALESCE(r.timed_output_tokens, 0),
+                COALESCE(d.generation_ms, 0) + COALESCE(r.generation_ms, 0)
             FROM
                 (SELECT
                     COUNT(*) as total_requests,
@@ -486,7 +496,11 @@ impl Database {
                     COALESCE(SUM(l.cache_creation_tokens), 0) as total_cache_creation_tokens,
                     COALESCE(SUM(l.cache_read_tokens), 0) as total_cache_read_tokens,
                     COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0) as success_count,
-                    COALESCE(SUM(CAST(l.latency_ms AS REAL)), 0) as total_latency_ms
+                    COALESCE(SUM(CAST(l.latency_ms AS REAL)), 0) as total_latency_ms,
+                    COALESCE(SUM(CASE WHEN l.output_tokens > 0 AND ({generation_ms}) > 0
+                        THEN l.output_tokens ELSE 0 END), 0) as timed_output_tokens,
+                    COALESCE(SUM(CASE WHEN l.output_tokens > 0 AND ({generation_ms}) > 0
+                        THEN CAST(({generation_ms}) AS REAL) ELSE 0 END), 0) as generation_ms
                  FROM proxy_request_logs l {detail_join} {where_clause}) d,
                 (SELECT
                     COALESCE(SUM(r.request_count), 0) as total_requests,
@@ -496,7 +510,11 @@ impl Database {
                     COALESCE(SUM(r.cache_creation_tokens), 0) as total_cache_creation_tokens,
                     COALESCE(SUM(r.cache_read_tokens), 0) as total_cache_read_tokens,
                     COALESCE(SUM(r.success_count), 0) as success_count,
-                    COALESCE(SUM(CAST(r.avg_latency_ms AS REAL) * r.request_count), 0) as total_latency_ms
+                    COALESCE(SUM(CAST(r.avg_latency_ms AS REAL) * r.request_count), 0) as total_latency_ms,
+                    COALESCE(SUM(CASE WHEN r.output_tokens > 0 AND r.avg_latency_ms > 0 AND r.request_count > 0
+                        THEN r.output_tokens ELSE 0 END), 0) as timed_output_tokens,
+                    COALESCE(SUM(CASE WHEN r.output_tokens > 0 AND r.avg_latency_ms > 0 AND r.request_count > 0
+                        THEN CAST(r.avg_latency_ms AS REAL) * r.request_count ELSE 0 END), 0) as generation_ms
                  FROM usage_daily_rollups r {rollup_join} {rollup_where}) r"
         );
 
@@ -514,6 +532,10 @@ impl Database {
             let total_cache_read_tokens: i64 = row.get(5)?;
             let success_count: i64 = row.get(6)?;
             let total_latency_ms: f64 = row.get(7)?;
+            let timed_output_tokens: i64 = row.get(8)?;
+            let generation_ms: f64 = row.get(9)?;
+            let output_tokens_per_second = (timed_output_tokens > 0 && generation_ms > 0.0)
+                .then(|| timed_output_tokens as f64 * 1000.0 / generation_ms);
             let avg_latency_ms = if total_requests > 0 {
                 total_latency_ms / total_requests as f64
             } else {
@@ -542,6 +564,7 @@ impl Database {
                 total_cache_read_tokens: total_cache_read_tokens as u64,
                 success_rate,
                 avg_latency_ms,
+                output_tokens_per_second,
                 real_total_tokens,
                 cache_hit_rate,
             })
@@ -1307,6 +1330,7 @@ impl Database {
                 fresh_input_tokens,
                 output_tokens,
                 cache_read_tokens,
+                cache_creation_tokens,
                 cache_hit_rate: if cacheable_input > 0 {
                     cache_read_tokens as f64 / cacheable_input as f64
                 } else {
@@ -1390,6 +1414,7 @@ impl Database {
         params.push(Box::new(offset as i64));
 
         let logs_pname = provider_name_coalesce("l", "p");
+        let fresh_input = fresh_input_sql("l");
         let sql = format!(
             "SELECT l.request_id, l.provider_id, {logs_pname} as provider_name, l.app_type, l.model,
                     l.request_model, l.cost_multiplier,
@@ -1397,7 +1422,8 @@ impl Database {
                     l.input_cost_usd, l.output_cost_usd, l.cache_read_cost_usd, l.cache_creation_cost_usd, l.total_cost_usd,
                     l.is_streaming, l.latency_ms, l.first_token_ms, l.duration_ms,
                     l.status_code, l.error_message, l.created_at, l.data_source, l.pricing_model,
-                    l.input_token_semantics, l.requested_reasoning_effort, l.applied_reasoning_effort
+                    l.input_token_semantics, l.requested_reasoning_effort, l.applied_reasoning_effort,
+                    {fresh_input} AS fresh_input_tokens
              FROM proxy_request_logs l
              LEFT JOIN providers p ON l.provider_id = p.id AND l.app_type = p.app_type
              {where_clause}
@@ -1455,7 +1481,8 @@ impl Database {
         conn: &Connection,
         only_model_id: Option<&str>,
     ) -> Result<u64, AppError> {
-        const BASE_SQL: &str =
+        let fresh_input = fresh_input_sql("");
+        let sql = format!(
             "SELECT request_id, provider_id, NULL AS provider_name, app_type, model, request_model,
                         cost_multiplier,
                         input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
@@ -1463,15 +1490,17 @@ impl Database {
                         cache_creation_cost_usd, total_cost_usd, is_streaming, latency_ms,
                         first_token_ms, duration_ms, status_code, error_message, created_at,
                         data_source, pricing_model, input_token_semantics,
-                        requested_reasoning_effort, applied_reasoning_effort
+                        requested_reasoning_effort, applied_reasoning_effort,
+                        {fresh_input} AS fresh_input_tokens
              FROM proxy_request_logs
              WHERE app_type = 'codex' AND COALESCE(data_source, 'proxy') = 'proxy'
                AND CAST(total_cost_usd AS REAL) <= 0
                AND (input_tokens > 0 OR output_tokens > 0
-                    OR cache_read_tokens > 0 OR cache_creation_tokens > 0)";
+                    OR cache_read_tokens > 0 OR cache_creation_tokens > 0)"
+        );
 
         let mut logs = {
-            let mut stmt = conn.prepare(BASE_SQL)?;
+            let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([], row_to_request_log_detail)?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
@@ -2106,6 +2135,126 @@ mod tests {
             assert_eq!(costs, expected, "{model}");
         }
         Ok(())
+    }
+
+    #[test]
+    fn request_cache_details_match_summary_and_preserve_recorded_costs() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        {
+            let conn = lock_conn!(db.conn);
+            for (id, input, semantics) in [
+                ("total", 1000, INPUT_TOKEN_SEMANTICS_TOTAL),
+                ("legacy", 900, 0),
+                ("fresh", 100, INPUT_TOKEN_SEMANTICS_FRESH),
+            ] {
+                insert_usage_log(
+                    &conn,
+                    id,
+                    "codex",
+                    "p1",
+                    "gpt-6-astra",
+                    "proxy",
+                    1000,
+                    input,
+                    50,
+                    800,
+                    100,
+                    200,
+                    "9.123456",
+                )?;
+                conn.execute(
+                    "UPDATE proxy_request_logs SET input_token_semantics = ?1 WHERE request_id = ?2",
+                    params![semantics, id],
+                )?;
+            }
+        }
+        let logs = db.get_request_logs(&LogFilters::default(), 0, 20)?;
+        assert_eq!(logs.total, 3);
+        for log in &logs.data {
+            assert_eq!(log.fresh_input_tokens, 100);
+            assert_eq!(log.cache_read_tokens, 800);
+            assert_eq!(log.cache_creation_tokens, 100);
+            assert_eq!(log.total_cost_usd, "9.123456");
+            let json = serde_json::to_value(log).unwrap();
+            assert_eq!(json["freshInputTokens"], 100);
+        }
+        let summary = db.get_usage_summary(None, None, Some("codex"), None, None)?;
+        assert_eq!(summary.total_input_tokens, 300);
+        assert_eq!(summary.total_cache_read_tokens, 2400);
+        assert_eq!(summary.total_cache_creation_tokens, 300);
+        assert!((summary.cache_hit_rate - 0.8).abs() < 0.000001);
+        assert_eq!(summary.total_cost, "27.370368");
+        Ok(())
+    }
+
+    #[test]
+    fn summary_output_tps_uses_generation_timing_and_respects_model_scope() -> Result<(), AppError>
+    {
+        let db = Database::memory()?;
+        {
+            let conn = lock_conn!(db.conn);
+            for (id, model, output, latency, first, duration) in [
+                ("ttft", "gpt-6-astra", 100, 2000, Some(1000), None),
+                ("duration", "gpt-6-astra", 600, 9000, Some(2000), Some(3000)),
+                ("fallback", "gpt-6-astra", 100, 2000, None, None),
+                ("invalid", "gpt-6-astra", 100, 1000, Some(1500), None),
+                ("empty", "gpt-6-astra", 0, 5000, None, None),
+                ("other", "gpt-6-luna", 10, 1000, None, None),
+            ] {
+                insert_usage_log(
+                    &conn, id, "codex", "p1", model, "proxy", 1000, 100, output, 0, 0, 200, "1",
+                )?;
+                conn.execute(
+                    "UPDATE proxy_request_logs SET latency_ms=?1, first_token_ms=?2, duration_ms=?3 WHERE request_id=?4",
+                    params![latency, first, duration, id],
+                )?;
+            }
+        }
+        let astra = db.get_usage_summary(None, None, Some("codex"), None, Some("gpt-6-astra"))?;
+        assert!((astra.output_tokens_per_second.unwrap() - 800.0 / 6.0).abs() < 0.000001);
+        let all = db.get_usage_summary(None, None, Some("codex"), None, None)?;
+        assert!((all.output_tokens_per_second.unwrap() - 810.0 / 7.0).abs() < 0.000001);
+        let missing = db.get_usage_summary(None, None, Some("codex"), None, Some("missing"))?;
+        assert_eq!(missing.output_tokens_per_second, None);
+        assert!(serde_json::to_value(missing)
+            .unwrap()
+            .get("outputTokensPerSecond")
+            .is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn summary_output_tps_uses_latency_when_only_daily_rollups_remain() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        assert_eq!(
+            db.get_usage_summary(None, None, None, None, None)?
+                .output_tokens_per_second,
+            None
+        );
+        {
+            let conn = lock_conn!(db.conn);
+            let date = (Local::now() - chrono::Duration::days(40))
+                .format("%Y-%m-%d")
+                .to_string();
+            conn.execute(
+                "INSERT INTO usage_daily_rollups (date, app_type, provider_id, model, request_count, success_count, output_tokens, avg_latency_ms)
+                 VALUES (?1, 'codex', 'p1', 'gpt-6-astra', 2, 2, 400, 4000)",
+                [date],
+            )?;
+        }
+        let summary = db.get_usage_summary(None, None, None, None, None)?;
+        assert_eq!(summary.output_tokens_per_second, Some(50.0));
+        Ok(())
+    }
+
+    #[test]
+    fn read_hit_rate_excludes_output_and_counts_cache_writes_as_misses() {
+        for output in [0, 50, 100_000] {
+            let (total, rate) = derive_real_total_and_hit_rate(100, output, 100, 800);
+            assert_eq!(total, 1000 + output);
+            assert!((rate - 0.8).abs() < 0.000001);
+        }
+        assert_eq!(derive_real_total_and_hit_rate(0, 50, 0, 0), (50, 0.0));
     }
 
     #[test]

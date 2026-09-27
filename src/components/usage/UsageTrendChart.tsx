@@ -329,7 +329,7 @@ export function UsageTrendChart({
               yAxisId="tokens"
               type="monotone"
               dataKey="cacheCreationTokens"
-              name={t("usage.cacheCreationTokens", "Cache Creation")}
+              name={t("usage.cacheCreationTokens", "Cache Write")}
               stroke="#f97316"
               fillOpacity={1}
               fill="url(#colorCacheCreation)"
@@ -339,7 +339,7 @@ export function UsageTrendChart({
               yAxisId="tokens"
               type="monotone"
               dataKey="cacheReadTokens"
-              name={t("usage.cacheReadTokens", "Cache Hit")}
+              name={t("usage.cacheReadTokens", "Cached Input")}
               stroke="#a855f7"
               fillOpacity={1}
               fill="url(#colorCacheRead)"

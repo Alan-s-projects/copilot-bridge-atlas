@@ -3,9 +3,75 @@ import {
   formatOutputTokensPerSecond,
   formatTokensShort,
   getOutputTokensPerSecond,
+  formatReadCacheHitRate,
+  formatCostBreakdown,
 } from "@/components/usage/format";
+import { getFreshInputTokens } from "@/types/usage";
 
 describe("usage format helpers", () => {
+  it("uses server-normalized fresh input and excludes output from read hit rate", () => {
+    const log = {
+      appType: "codex",
+      inputTokens: 1000,
+      freshInputTokens: 100,
+      cacheReadTokens: 800,
+      cacheCreationTokens: 100,
+      outputTokens: 9000,
+    };
+    expect(getFreshInputTokens(log)).toBe(100);
+    expect(formatReadCacheHitRate(log)).toBe("80.0%");
+    const withoutOutput = { ...log, outputTokens: 0 };
+    expect(formatReadCacheHitRate(withoutOutput)).toBe("80.0%");
+    expect(
+      formatReadCacheHitRate({
+        ...log,
+        inputTokens: 0,
+        freshInputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+      }),
+    ).toBe("--");
+  });
+
+  it("preserves explicit zero and legacy fresh-input fallbacks", () => {
+    expect(
+      getFreshInputTokens({
+        appType: "codex",
+        inputTokens: 1000,
+        freshInputTokens: 0,
+        cacheReadTokens: 800,
+      }),
+    ).toBe(0);
+    expect(
+      getFreshInputTokens({
+        appType: "codex",
+        inputTokens: 1000,
+        cacheReadTokens: 800,
+      }),
+    ).toBe(200);
+    expect(
+      getFreshInputTokens({
+        appType: "codex",
+        inputTokens: 100,
+        cacheReadTokens: 800,
+      }),
+    ).toBe(100);
+  });
+
+  it("shows all stored cost components and the multiplier without repricing", () => {
+    expect(
+      formatCostBreakdown({
+        inputCostUsd: "0.003",
+        outputCostUsd: "0.0075",
+        cacheReadCostUsd: "0.00006",
+        cacheCreationCostUsd: "0.000375",
+        costMultiplier: "1.5",
+      }),
+    ).toBe(
+      "Fresh input: $0.003000; Cached Input: $0.000060; Output: $0.007500; Cache Write: $0.000375; Cost multiplier: x1.5",
+    );
+  });
+
   it("formats compact English token units", () => {
     expect(formatTokensShort(12_345)).toBe("12.3K");
     expect(formatTokensShort(123_456_789, 2)).toBe("123.46M");

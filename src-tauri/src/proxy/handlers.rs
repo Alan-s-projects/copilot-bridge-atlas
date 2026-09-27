@@ -189,7 +189,14 @@ pub async fn handle_responses(
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
-        .forward_request(method, &endpoint, body, headers, &ctx.provider)
+        .forward_request(
+            method,
+            &endpoint,
+            body,
+            headers,
+            &ctx.provider,
+            &mut ctx.reasoning_effort,
+        )
         .await
     {
         Ok(result) => result,
@@ -295,7 +302,14 @@ async fn handle_codex_standalone_passthrough(
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
-        .forward_request(method, &endpoint, body, headers, &ctx.provider)
+        .forward_request(
+            method,
+            &endpoint,
+            body,
+            headers,
+            &ctx.provider,
+            &mut ctx.reasoning_effort,
+        )
         .await
     {
         Ok(result) => result,
@@ -340,7 +354,14 @@ pub async fn handle_responses_compact(
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
-        .forward_request(method, &endpoint, body, headers, &ctx.provider)
+        .forward_request(
+            method,
+            &endpoint,
+            body,
+            headers,
+            &ctx.provider,
+            &mut ctx.reasoning_effort,
+        )
         .await
     {
         Ok(result) => result,
@@ -430,6 +451,7 @@ async fn handle_codex_chat_to_responses_transform(
             let app_type_str = ctx.app_type_str;
             let start_time = ctx.start_time;
             let session_id = ctx.session_id.clone();
+            let reasoning_effort = ctx.reasoning_effort.clone();
 
             Some(SseUsageCollector::new(
                 start_time,
@@ -458,6 +480,7 @@ async fn handle_codex_chat_to_responses_transform(
                     let request_model = request_model.clone();
                     let outbound_model = fallback_model.clone();
                     let session_id = session_id.clone();
+                    let reasoning_effort = reasoning_effort.clone();
 
                     tokio::spawn(async move {
                         log_usage(
@@ -473,6 +496,7 @@ async fn handle_codex_chat_to_responses_transform(
                             true,
                             status.as_u16(),
                             Some(session_id),
+                            reasoning_effort,
                         )
                         .await;
                     });
@@ -572,6 +596,7 @@ async fn handle_codex_chat_to_responses_transform(
             let provider_id = ctx.provider.id.clone();
             let session_id = ctx.session_id.clone();
             let latency_ms = ctx.latency_ms();
+            let reasoning_effort = ctx.reasoning_effort.clone();
             async move {
                 log_usage(
                     &state,
@@ -586,6 +611,7 @@ async fn handle_codex_chat_to_responses_transform(
                     false,
                     status.as_u16(),
                     Some(session_id),
+                    reasoning_effort,
                 )
                 .await;
             }
@@ -1367,6 +1393,7 @@ fn log_forward_error(
         is_streaming,
         Some(ctx.session_id.clone()),
         None,
+        ctx.reasoning_effort.clone(),
     ) {
         log::warn!("记录失败请求日志失败: {e}");
     }
@@ -1390,6 +1417,7 @@ async fn log_usage(
     is_streaming: bool,
     status_code: u16,
     session_id: Option<String>,
+    reasoning_effort: ReasoningEffort,
 ) {
     use super::usage::logger::UsageLogger;
 
@@ -1423,6 +1451,7 @@ async fn log_usage(
         session_id,
         None, // provider_type
         is_streaming,
+        reasoning_effort,
     ) {
         log::warn!("[USG-001] 记录使用量失败: {e}");
     }
@@ -1435,6 +1464,130 @@ mod tests {
         codex_proxy_error_json, read_codex_request_body, upstream_body_parse_error,
     };
     use crate::proxy::ProxyError;
+
+    #[tokio::test]
+    async fn reasoning_metadata_reaches_logs_for_native_and_chat_streaming_and_json() {
+        use crate::{
+            database::Database,
+            provider::Provider,
+            proxy::{
+                handler_config::CODEX_PARSER_CONFIG,
+                handler_context::RequestContext,
+                provider_router::ProviderRouter,
+                providers::codex_chat_history::CodexChatHistoryStore,
+                response_processor::process_response,
+                server::ProxyState,
+                types::{CopilotOptimizerConfig, ReasoningEffort},
+                upstream_response::ProxyResponse,
+            },
+            services::usage_stats::LogFilters,
+        };
+        use serde_json::json;
+        use std::{collections::HashMap, sync::Arc, time::Instant};
+        use tokio::sync::RwLock;
+
+        for chat in [false, true] {
+            for stream in [false, true] {
+                let db = Arc::new(Database::memory().unwrap());
+                let state = ProxyState {
+                    db: db.clone(),
+                    config: Arc::new(RwLock::new(Default::default())),
+                    status: Arc::new(RwLock::new(Default::default())),
+                    start_time: Arc::new(RwLock::new(None)),
+                    current_providers: Arc::new(RwLock::new(HashMap::new())),
+                    provider_router: Arc::new(ProviderRouter::new(db.clone())),
+                    codex_chat_history: Arc::new(CodexChatHistoryStore::default()),
+                    app_handle: None,
+                };
+                let ctx = RequestContext {
+                    start_time: Instant::now(),
+                    provider: Provider::with_id("fixture".into(), "Fixture".into(), json!({})),
+                    request_model: "gpt-6-astra".into(),
+                    outbound_model: Some("gpt-6-astra".into()),
+                    reasoning_effort: ReasoningEffort {
+                        requested: Some("ultra".into()),
+                        applied: Some("high".into()),
+                    },
+                    tag: "Codex",
+                    app_type_str: "codex",
+                    session_id: "reasoning-fixture".into(),
+                    session_client_provided: true,
+                    copilot_optimizer_config: CopilotOptimizerConfig::default(),
+                };
+                let body = if chat {
+                    let mut choice = json!({"finish_reason":"stop"});
+                    choice[if stream { "delta" } else { "message" }] =
+                        json!({"role":"assistant","content":"Done"});
+                    json!({
+                        "id":"chatcmpl_reasoning_fixture","model":"gpt-6-astra",
+                        "choices":[choice],"usage":{"prompt_tokens":10,"completion_tokens":3}
+                    })
+                } else {
+                    json!({
+                        "id":"resp_reasoning_fixture","model":"gpt-6-astra",
+                        "output":[],"usage":{"input_tokens":10,"output_tokens":3}
+                    })
+                };
+                let mut headers = axum::http::HeaderMap::new();
+                let body = if stream {
+                    headers.insert("content-type", "text/event-stream".parse().unwrap());
+                    let event = if chat {
+                        body
+                    } else {
+                        json!({"type":"response.completed","response":body})
+                    };
+                    format!("data: {event}\n\ndata: [DONE]\n\n")
+                } else {
+                    body.to_string()
+                };
+                let upstream = ProxyResponse::buffered(
+                    axum::http::StatusCode::OK,
+                    headers,
+                    bytes::Bytes::from(body),
+                );
+                let response = if chat {
+                    super::handle_codex_chat_to_responses_transform(
+                        upstream,
+                        &ctx,
+                        &state,
+                        stream,
+                        None,
+                        Default::default(),
+                    )
+                    .await
+                    .unwrap()
+                } else {
+                    process_response(upstream, &ctx, &state, &CODEX_PARSER_CONFIG, None)
+                        .await
+                        .unwrap()
+                };
+                axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                    .await
+                    .unwrap();
+                let logs = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                    loop {
+                        let logs = db.get_request_logs(&LogFilters::default(), 0, 20).unwrap();
+                        if !logs.data.is_empty() {
+                            break logs;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    }
+                })
+                .await
+                .expect("usage logging should complete");
+                assert_eq!(logs.total, 1, "chat={chat}, stream={stream}");
+                assert_eq!(
+                    logs.data[0].requested_reasoning_effort.as_deref(),
+                    Some("ultra")
+                );
+                assert_eq!(
+                    logs.data[0].applied_reasoning_effort.as_deref(),
+                    Some("high")
+                );
+                assert_eq!(logs.data[0].is_streaming, stream);
+            }
+        }
+    }
 
     fn encode_request(encoding: &str, body: &[u8]) -> Vec<u8> {
         use std::io::Write;

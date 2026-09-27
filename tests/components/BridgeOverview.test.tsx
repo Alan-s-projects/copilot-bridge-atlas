@@ -67,6 +67,8 @@ const snapshot = {
         requestId: "ok",
         createdAt: 1790397000,
         model: "gpt-6-astra",
+        requestedReasoningEffort: "ultra",
+        appliedReasoningEffort: "max",
         statusCode: 200,
         latencyMs: 2500,
         inputTokens: 1000,
@@ -126,6 +128,16 @@ describe("read-only bridge overview", () => {
       name: "Latest 5 completed requests",
     });
     expect(within(table).getByText("gpt-6-astra")).toBeVisible();
+    const headings = within(table).getAllByRole("columnheader");
+    expect(headings[1]).toHaveTextContent("Model");
+    expect(headings[2]).toHaveTextContent("Reasoning(requested/applied)");
+    const rows = within(table).getAllByRole("row");
+    expect(within(rows[1]).getAllByRole("cell")[2]).toHaveTextContent(
+      "ultra / max",
+    );
+    expect(within(rows[2]).getAllByRole("cell")[2]).toHaveTextContent(
+      "\u2014 / \u2014",
+    );
     expect(within(table).getByText("400")).toBeVisible();
     expect(within(table).getByText("200")).toBeVisible();
     expect(within(table).getByText("2.50 s")).toBeVisible();

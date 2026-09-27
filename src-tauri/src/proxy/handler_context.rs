@@ -1,8 +1,11 @@
 //! Per-request state for the selected Codex Copilot provider.
 use crate::provider::Provider;
 use crate::proxy::{
-    extract_session_id, forwarder::RequestForwarder, server::ProxyState,
-    types::CopilotOptimizerConfig, ProxyError,
+    extract_session_id,
+    forwarder::RequestForwarder,
+    server::ProxyState,
+    types::{CopilotOptimizerConfig, ReasoningEffort},
+    ProxyError,
 };
 use axum::http::HeaderMap;
 use std::time::Instant;
@@ -13,6 +16,7 @@ pub struct RequestContext {
     pub request_model: String,
     /// Actual outbound identity anchors request-based pricing.
     pub outbound_model: Option<String>,
+    pub reasoning_effort: ReasoningEffort,
     pub tag: &'static str,
     pub app_type_str: &'static str,
     pub session_id: String,
@@ -58,6 +62,7 @@ impl RequestContext {
             provider,
             request_model,
             outbound_model: None,
+            reasoning_effort: ReasoningEffort::from_request(body),
             tag: "Codex",
             app_type_str: "codex",
             session_id: session.session_id,

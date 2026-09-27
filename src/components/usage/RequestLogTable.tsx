@@ -27,6 +27,10 @@ import {
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { UsageDateRangePicker } from "./UsageDateRangePicker";
 import {
+  ReasoningEffortHeading,
+  ReasoningEffortValue,
+} from "./ReasoningEffort";
+import {
   formatOutputTokensPerSecond,
   fmtInt,
   fmtUsd,
@@ -159,6 +163,9 @@ export function RequestLogTable({
                     {t("usage.billingModel")}
                   </TableHead>
                   <TableHead className="text-center whitespace-nowrap">
+                    <ReasoningEffortHeading />
+                  </TableHead>
+                  <TableHead className="text-center whitespace-nowrap">
                     {t("usage.inputTokens")}
                   </TableHead>
                   <TableHead className="text-center whitespace-nowrap">
@@ -179,7 +186,7 @@ export function RequestLogTable({
                 {logs.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={8}
                       className="text-center text-muted-foreground"
                     >
                       {t("usage.noData")}
@@ -223,6 +230,9 @@ export function RequestLogTable({
                               log.model
                             )}
                           </div>
+                        </TableCell>
+                        <TableCell className="text-center whitespace-nowrap px-1.5">
+                          <ReasoningEffortValue log={log} />
                         </TableCell>
                         <TableCell className="text-center px-1.5">
                           {(() => {

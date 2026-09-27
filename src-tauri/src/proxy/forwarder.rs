@@ -1851,6 +1851,347 @@ mod tests {
             }
         }
 
+        #[tokio::test]
+        async fn grok_fixture_process_start_and_poll_arguments_deserialize_across_transports() {
+            use super::super::super::providers::{
+                streaming_codex_chat, transform_codex_chat, transform_copilot_responses,
+            };
+            #[derive(serde::Deserialize)]
+            struct Start {
+                cmd: String,
+                yield_time_ms: u64,
+            }
+            #[derive(serde::Deserialize)]
+            struct Poll {
+                session_id: i32,
+            }
+
+            let raw_start = r#"{"cmd":"echo ready","yield_time_ms":120000.0}"#;
+            let raw_poll = r#"{"session_id":4876.0}"#;
+            assert!(serde_json::from_str::<Start>(raw_start).is_err());
+            assert!(serde_json::from_str::<Poll>(raw_poll).is_err());
+
+            for (protocol, stream) in [
+                (CopilotProtocol::Responses, false),
+                (CopilotProtocol::Responses, true),
+                (CopilotProtocol::Chat, false),
+                (CopilotProtocol::Chat, true),
+            ] {
+                let call = |id: &str, name: &str, arguments: &str| {
+                    json!({"type":"function_call","id":format!("fc_{id}"),
+                        "call_id":format!("call_{id}"),"name":name,
+                        "arguments":arguments,"status":"completed"})
+                };
+                let response = if protocol == CopilotProtocol::Responses {
+                    let result = json!({"id":"resp_grok_smoke","model":"grok-4.7",
+                        "output":[call("start","functions__exec_command",raw_start),
+                            call("poll","functions__write_stdin",raw_poll)],
+                        "usage":{"input_tokens":10,"output_tokens":10}});
+                    if stream {
+                        let mut events = String::new();
+                        for (index, item) in result["output"].as_array().unwrap().iter().enumerate()
+                        {
+                            events.push_str(&format!(
+                                "data: {}\n\n",
+                                json!({"type":"response.output_item.done",
+                                    "output_index":index,"item":item})
+                            ));
+                        }
+                        events.push_str(&format!(
+                            "data: {}\n\ndata: [DONE]\n\n",
+                            json!({"type":"response.completed","response":result})
+                        ));
+                        events
+                    } else {
+                        result.to_string()
+                    }
+                } else {
+                    let calls = [
+                        json!({"index":0,"id":"call_start","function":{
+                            "name":"functions__exec_command","arguments":raw_start}}),
+                        json!({"index":1,"id":"call_poll","function":{
+                            "name":"functions__write_stdin","arguments":raw_poll}}),
+                    ];
+                    let choice = if stream {
+                        json!({"delta":{"tool_calls":calls},"finish_reason":"tool_calls"})
+                    } else {
+                        json!({"message":{"tool_calls":calls},"finish_reason":"tool_calls"})
+                    };
+                    let result = json!({"id":"chatcmpl_grok_smoke","model":"grok-4.7",
+                        "choices":[choice]});
+                    if stream {
+                        format!("data: {result}\n\ndata: [DONE]\n\n")
+                    } else {
+                        result.to_string()
+                    }
+                };
+                let mut headers = HeaderMap::new();
+                if stream {
+                    headers.insert(
+                        http::header::CONTENT_TYPE,
+                        HeaderValue::from_static("text/event-stream"),
+                    );
+                }
+                let upstream = mock_upstream(StatusCode::OK, headers, Bytes::from(response)).await;
+                let (mut forwarder, provider) = fixture(&upstream, protocol);
+                let fixture = &mut forwarder.copilot_fixture.as_mut().unwrap().models[0];
+                fixture.id = "grok-4.7".into();
+                fixture.vendor = "xAI".into();
+                let request = json!({"model":"grok-4.7","stream":stream,
+                "input":[{"role":"user","content":"Start a harmless process, then poll it."}],
+                "tools":[{"type":"namespace","name":"functions","tools":[
+                    {"type":"function","name":"exec_command","parameters":{
+                        "type":"object","properties":{"cmd":{"type":"string"},
+                            "yield_time_ms":{"type":"integer"}}}},
+                    {"type":"function","name":"write_stdin","parameters":{
+                        "type":"object","properties":{"session_id":{
+                            "type":"integer","format":"int32"}}}}
+                ]}]});
+                let mut context =
+                    transform_codex_chat::build_codex_tool_context_from_request(&request);
+                let result = forwarder
+                    .forward_request(
+                        http::Method::POST,
+                        "/responses",
+                        request,
+                        HeaderMap::new(),
+                        &provider,
+                        &mut ReasoningEffort::default(),
+                    )
+                    .await
+                    .unwrap();
+                context.enable_for_outbound_model(result.outbound_model.as_deref());
+                assert_eq!(result.outbound_model.as_deref(), Some("grok-4.7"));
+                let bytes = match (protocol, stream) {
+                    (CopilotProtocol::Responses, _) => {
+                        assert_eq!(
+                            result.codex_upstream_format,
+                            Some(CodexUpstreamFormat::CompatibleResponses)
+                        );
+                        transform_copilot_responses::adapt_response(result.response, context)
+                            .await
+                            .unwrap()
+                            .bytes_with_limit(MAX_RESPONSE_BODY_BYTES)
+                            .await
+                            .unwrap()
+                    }
+                    (CopilotProtocol::Chat, true) => {
+                        assert_eq!(
+                            result.codex_upstream_format,
+                            Some(CodexUpstreamFormat::ChatCompletions)
+                        );
+                        let converted = streaming_codex_chat::
+                            create_responses_sse_stream_from_chat_with_context(
+                                result.response.bytes_stream(),
+                                context,
+                            );
+                        ProxyResponse::streamed(StatusCode::OK, HeaderMap::new(), converted)
+                            .bytes_with_limit(MAX_RESPONSE_BODY_BYTES)
+                            .await
+                            .unwrap()
+                    }
+                    (CopilotProtocol::Chat, false) => {
+                        let raw = result
+                            .response
+                            .bytes_with_limit(MAX_RESPONSE_BODY_BYTES)
+                            .await
+                            .unwrap();
+                        Bytes::from(
+                            transform_codex_chat::chat_completion_to_response_with_context(
+                                serde_json::from_slice(&raw).unwrap(),
+                                &context,
+                            )
+                            .unwrap()
+                            .to_string(),
+                        )
+                    }
+                };
+                let output: Value = if stream {
+                    String::from_utf8(bytes.to_vec())
+                        .unwrap()
+                        .lines()
+                        .filter_map(|line| line.strip_prefix("data: "))
+                        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                        .find(|event| event["type"] == "response.completed")
+                        .expect("completed stream")["response"]
+                        .clone()
+                } else {
+                    serde_json::from_slice(&bytes).unwrap()
+                };
+                let output = output["output"].as_array().unwrap();
+                let start: Start =
+                    serde_json::from_str(output[0]["arguments"].as_str().unwrap()).unwrap();
+                let poll: Poll =
+                    serde_json::from_str(output[1]["arguments"].as_str().unwrap()).unwrap();
+                assert_eq!(start.cmd, "echo ready");
+                assert_eq!(start.yield_time_ms, 120_000);
+                assert_eq!(poll.session_id, 4876);
+            }
+        }
+
+        #[tokio::test]
+        #[ignore = "opt-in live Grok probe; reads an explicitly supplied Atlas auth file and consumes Copilot tokens"]
+        async fn live_grok_integer_tool_calls_deserialize() {
+            use super::super::super::providers::{
+                copilot_auth::CopilotAuthManager, transform_codex_chat, transform_copilot_responses,
+            };
+            #[derive(serde::Deserialize)]
+            struct Start {
+                cmd: String,
+                yield_time_ms: u64,
+            }
+            #[derive(serde::Deserialize)]
+            struct Poll {
+                session_id: i32,
+            }
+
+            let auth_file = std::env::var_os("ATLAS_LIVE_GROK_AUTH_FILE")
+                .expect("Set ATLAS_LIVE_GROK_AUTH_FILE for the opt-in test");
+            let test_home = tempfile::tempdir().expect("create isolated live test home");
+            std::fs::copy(auth_file, test_home.path().join("copilot_auth.json"))
+                .expect("copy the account into isolated test home");
+            let manager = CopilotAuthManager::new(test_home.path().to_path_buf());
+            let token = manager
+                .get_valid_token()
+                .await
+                .unwrap_or_else(|_| panic!("Cannot authenticate isolated Grok test account"));
+            let endpoint = manager.get_default_api_endpoint().await;
+            let model = manager
+                .fetch_models()
+                .await
+                .unwrap_or_else(|_| panic!("Cannot load Copilot models for live Grok test"))
+                .into_iter()
+                .find(|model| model.id.eq_ignore_ascii_case("grok-4.7"))
+                .expect("Grok 4.7 is not offered by the test account");
+            assert_eq!(model.vendor.to_ascii_lowercase(), "xai");
+            let dummy =
+                mock_upstream(StatusCode::OK, HeaderMap::new(), Bytes::from_static(b"{}")).await;
+            let (mut forwarder, provider) = fixture(&dummy, CopilotProtocol::Responses);
+            let live = forwarder.copilot_fixture.as_mut().unwrap();
+            live.endpoint = endpoint;
+            live.token = token;
+            live.models = vec![model];
+            live.client = crate::proxy::http_client::get();
+
+            for (name, prompt, parameters) in [
+                (
+                    "exec_command",
+                    "Call functions.exec_command with cmd exactly 'echo ready' and yield_time_ms 120000.0. Return only the tool call.",
+                    json!({"type":"object","properties":{"cmd":{"type":"string"},
+                        "yield_time_ms":{"type":"integer"}},"required":["cmd","yield_time_ms"]}),
+                ),
+                (
+                    "write_stdin",
+                    "Call functions.write_stdin to poll session_id 4876.0 with chars set to an empty string. Return only the tool call.",
+                    json!({"type":"object","properties":{"session_id":{"type":"integer","format":"int32"},
+                        "chars":{"type":"string"}},"required":["session_id","chars"]}),
+                ),
+            ] {
+                let request = json!({
+                    "model":"grok-4.7","stream":true,"max_output_tokens":1024,
+                    "input":[{"role":"user","content":prompt}],
+                    "tools":[{"type":"namespace","name":"functions","tools":[
+                        {"type":"function","name":name,"parameters":parameters}
+                    ]}],
+                    "tool_choice":{"type":"function","namespace":"functions","name":name}
+                });
+                let mut context =
+                    transform_codex_chat::build_codex_tool_context_from_request(&request);
+                let result = tokio::time::timeout(
+                    std::time::Duration::from_secs(90),
+                    forwarder.forward_request(
+                        http::Method::POST,
+                        "/responses",
+                        request,
+                        HeaderMap::new(),
+                        &provider,
+                        &mut ReasoningEffort::default(),
+                    ),
+                )
+                    .await
+                    .expect("Live Grok response headers timed out")
+                    .unwrap_or_else(|_| panic!("Live Grok request failed"));
+                assert_eq!(
+                    result.codex_upstream_format,
+                    Some(CodexUpstreamFormat::CompatibleResponses)
+                );
+                context.enable_for_outbound_model(result.outbound_model.as_deref());
+                let status = result.response.status();
+                let headers = result.response.headers().clone();
+                let raw = tokio::time::timeout(
+                    std::time::Duration::from_secs(90),
+                    result.response.bytes_with_limit(MAX_RESPONSE_BODY_BYTES),
+                )
+                .await
+                .expect("Live Grok upstream stream timed out")
+                .unwrap_or_else(|_| panic!("Cannot read live Grok upstream stream"));
+                let original = String::from_utf8_lossy(&raw);
+                let raw_response: Value = original
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("data: "))
+                    .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+                    .find(|event| event["type"] == "response.completed")
+                    .expect("Upstream Grok stream did not complete")["response"]
+                    .clone();
+                let upstream_arguments = raw_response["output"]
+                    .as_array()
+                    .and_then(|items| items.iter().find(|item| item["type"] == "function_call"))
+                    .and_then(|call| call["arguments"].as_str())
+                    .expect("Upstream Grok did not return tool arguments");
+                let emitted_decimal = upstream_arguments.contains(match name {
+                    "exec_command" => "120000.0",
+                    "write_stdin" => "4876.0",
+                    _ => unreachable!(),
+                });
+                let bytes = tokio::time::timeout(
+                    std::time::Duration::from_secs(90),
+                    transform_copilot_responses::adapt_response(
+                        ProxyResponse::buffered(status, headers, raw),
+                        context,
+                    )
+                        .await
+                        .unwrap_or_else(|_| panic!("Cannot adapt live Grok response"))
+                        .bytes_with_limit(MAX_RESPONSE_BODY_BYTES),
+                )
+                    .await
+                    .expect("Live Grok stream timed out")
+                    .unwrap_or_else(|_| panic!("Cannot read live Grok response"));
+                let text = std::str::from_utf8(&bytes).expect("live Grok SSE is UTF-8");
+                let response: Value = text
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("data: "))
+                    .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+                    .find(|event| event["type"] == "response.completed")
+                    .expect("Live Grok stream did not complete")["response"]
+                    .clone();
+                let tool = response["output"]
+                    .as_array()
+                    .and_then(|items| {
+                        items.iter().find(|item| item["type"] == "function_call")
+                    })
+                    .expect("Live Grok did not call the requested tool");
+                assert_eq!(tool["name"], name);
+                let arguments = tool["arguments"]
+                    .as_str()
+                    .expect("Live Grok tool arguments are not a string");
+                match name {
+                    "exec_command" => {
+                        let command: Start = serde_json::from_str(arguments)
+                            .expect("Grok yielded a non-integer command timeout");
+                        assert_eq!(command.cmd, "echo ready");
+                        assert_eq!(command.yield_time_ms, 120_000);
+                    }
+                    "write_stdin" => {
+                        let poll: Poll = serde_json::from_str(arguments)
+                            .expect("Grok yielded a non-integer session ID");
+                        assert_eq!(poll.session_id, 4876);
+                    }
+                    _ => unreachable!(),
+                }
+                println!("verified live Grok {name}: upstream_decimal={emitted_decimal}");
+            }
+        }
+
         fn client_headers() -> HeaderMap {
             HeaderMap::from_iter([
                 (

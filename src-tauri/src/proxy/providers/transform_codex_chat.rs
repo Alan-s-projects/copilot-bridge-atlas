@@ -8,6 +8,8 @@ use super::codex_chat_common::{
     append_reasoning_content, extract_reasoning_field_text, extract_reasoning_summary_text,
     response_function_call_item, response_function_call_item_with_namespace,
 };
+use super::copilot_model_map::is_grok_model;
+use super::tool_integer_repair::repair_integer_arguments;
 use crate::proxy::{
     error::ProxyError,
     json_canonical::{
@@ -20,6 +22,8 @@ use crate::proxy::{
         TOOL_RESULT_MEDIA_MOVED_MARKER,
     },
 };
+use indexmap::IndexMap;
+use serde_json::value::RawValue;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
@@ -58,6 +62,7 @@ pub(crate) struct CodexToolSpec {
     pub(crate) kind: CodexToolKind,
     pub(crate) name: String,
     pub(crate) namespace: Option<String>,
+    pub(crate) parameters: Option<Value>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -67,15 +72,64 @@ pub(crate) struct CodexToolContext {
     chat_name_to_spec: HashMap<String, CodexToolSpec>,
     namespace_name_to_chat_name: HashMap<(String, String), String>,
     wrapped_arguments: HashSet<String>,
+    grok_integer_repair: bool,
 }
 
 impl CodexToolContext {
+    pub(crate) fn enable_for_outbound_model(&mut self, outbound_model: Option<&str>) {
+        self.grok_integer_repair = outbound_model.is_some_and(is_grok_model);
+    }
+
+    pub(crate) fn should_buffer_arguments(&self, name: &str) -> bool {
+        self.grok_integer_repair
+            && self
+                .lookup_chat_name(name)
+                .is_some_and(|spec| spec.parameters.is_some())
+    }
+
+    fn schema_for_recipient(&self, recipient: &str) -> Option<&Value> {
+        self.lookup_chat_name(recipient)
+            .or_else(|| {
+                let (namespace, name) = recipient.split_once('.')?;
+                let chat_name = self
+                    .namespace_name_to_chat_name
+                    .get(&(namespace.to_string(), name.to_string()))?;
+                self.lookup_chat_name(chat_name)
+            })
+            .and_then(|spec| spec.parameters.as_ref())
+    }
+
+    pub(crate) fn repair_arguments(&self, name: &str, arguments: &str) -> String {
+        if !self.grok_integer_repair {
+            return arguments.to_string();
+        }
+        let Some(schema) = self
+            .lookup_chat_name(name)
+            .and_then(|spec| spec.parameters.as_ref())
+        else {
+            return arguments.to_string();
+        };
+        repair_integer_arguments(arguments, schema, &|recipient| {
+            self.schema_for_recipient(recipient)
+        })
+    }
+
     pub(crate) fn has_wrapped_arguments(&self, name: &str) -> bool {
         self.wrapped_arguments.contains(name)
     }
 
     pub(crate) fn unwrap_arguments(&self, name: &str, arguments: &str) -> String {
         if self.has_wrapped_arguments(name) && !arguments.is_empty() {
+            if self.grok_integer_repair {
+                if let Ok(mut value) =
+                    serde_json::from_str::<IndexMap<String, Box<RawValue>>>(arguments)
+                {
+                    if let Some(raw) = value.swap_remove("arguments") {
+                        return serde_json::from_str::<String>(raw.get())
+                            .unwrap_or_else(|_| raw.get().to_string());
+                    }
+                }
+            }
             if let Ok(Value::Object(mut value)) = serde_json::from_str(arguments) {
                 if let Some(arguments) = value.remove("arguments") {
                     // Some Chat gateways serialize the nested object again.
@@ -141,6 +195,13 @@ impl CodexToolContext {
         let Some(mut chat_tool) = responses_function_tool_to_chat_tool(tool, &chat_name) else {
             return;
         };
+        // Save the original schema before a Chat gateway envelope changes it.
+        let original_parameters = tool
+            .get("function")
+            .and_then(|function| function.get("parameters"))
+            .or_else(|| tool.get("parameters"))
+            .filter(|parameters| parameters.is_object())
+            .cloned();
         let parameters = &mut chat_tool["function"]["parameters"];
         if ["anyOf", "oneOf", "allOf"]
             .iter()
@@ -168,6 +229,7 @@ impl CodexToolContext {
             },
             name: original_name,
             namespace: namespace.map(ToString::to_string),
+            parameters: original_parameters,
         };
         self.add_chat_tool(chat_name, spec, chat_tool);
     }
@@ -198,6 +260,7 @@ impl CodexToolContext {
             kind: CodexToolKind::Custom,
             name: name.clone(),
             namespace: None,
+            parameters: None,
         };
         self.add_chat_tool(name, spec, chat_tool);
     }
@@ -228,6 +291,7 @@ impl CodexToolContext {
             kind: CodexToolKind::ToolSearch,
             name: TOOL_SEARCH_PROXY_NAME.to_string(),
             namespace: None,
+            parameters: None,
         };
         self.add_chat_tool(TOOL_SEARCH_PROXY_NAME.to_string(), spec, chat_tool);
     }
@@ -1591,7 +1655,7 @@ fn chat_tool_call_to_response_item(
         .unwrap_or_else(|| format!("call_{index}"));
     let function = tool_call.get("function").unwrap_or(&Value::Null);
     let name = function.get("name").and_then(|v| v.as_str()).unwrap_or("");
-    let arguments = canonicalize_tool_arguments(function.get("arguments"));
+    let arguments = serialized_chat_arguments(function, name, tool_context);
 
     let item_id = response_tool_call_item_id_from_chat_name(&call_id, name, tool_context);
     response_tool_call_item_from_chat_name(
@@ -1636,7 +1700,7 @@ fn chat_legacy_function_call_to_response_item(
         return None;
     }
 
-    let arguments = canonicalize_tool_arguments(function_call.get("arguments"));
+    let arguments = serialized_chat_arguments(function_call, name, tool_context);
 
     let item_id = response_tool_call_item_id_from_chat_name(call_id, name, tool_context);
     Some(response_tool_call_item_from_chat_name(
@@ -1672,7 +1736,8 @@ pub(crate) fn response_tool_call_item_from_chat_name(
     tool_context: &CodexToolContext,
 ) -> Value {
     let unwrapped = tool_context.unwrap_arguments(chat_name, arguments);
-    let arguments = unwrapped.as_str();
+    let repaired = tool_context.repair_arguments(chat_name, &unwrapped);
+    let arguments = repaired.as_str();
     match tool_context.lookup_chat_name(chat_name) {
         Some(spec) if spec.kind == CodexToolKind::ToolSearch => {
             response_tool_search_call_item(call_id, status, arguments, reasoning)
@@ -1693,6 +1758,23 @@ pub(crate) fn response_tool_call_item_from_chat_name(
             response_function_call_item(item_id, status, call_id, chat_name, arguments, reasoning)
         }
     }
+}
+
+fn serialized_chat_arguments(
+    function: &Value,
+    name: &str,
+    tool_context: &CodexToolContext,
+) -> String {
+    if tool_context.grok_integer_repair && !tool_context.is_custom_tool_chat_name(name) {
+        if let Some(Value::String(arguments)) = function.get("arguments") {
+            return if arguments.trim().is_empty() {
+                "{}".to_string()
+            } else {
+                arguments.clone()
+            };
+        }
+    }
+    canonicalize_tool_arguments(function.get("arguments"))
 }
 
 fn response_tool_search_call_item(
@@ -5099,5 +5181,99 @@ mod tests {
         assert_eq!(out[1]["content"], "U1");
         assert_eq!(out[2]["content"], "A1");
         assert_eq!(out[3]["content"], "U2");
+    }
+
+    #[test]
+    fn grok_repairs_namespaced_tool_calls_without_touching_other_models_or_custom_text() {
+        let request = json!({
+            "tools": [
+                {"type":"namespace","name":"functions","tools":[
+                    {"type":"function","name":"write_stdin","parameters":{"type":"object",
+                        "properties":{"session_id":{"type":"integer","format":"int32"},
+                            "large":{"type":"integer"}}}}
+                ]},
+                {"type":"custom","name":"apply_patch","format":{"type":"text"}}
+            ]
+        });
+        let chat = json!({"id":"chatcmpl_grok","model":"grok-4.7","choices":[{
+            "message":{"tool_calls":[
+                {"id":"call_1","function":{"name":"functions__write_stdin",
+                    "arguments":r#"{"session_id":4876.0,"large":9007199254740993.0}"#}},
+                {"id":"call_2","function":{"name":"apply_patch",
+                    "arguments":r#"{"input":"literal 4876.0"}"#}}
+            ]},
+            "finish_reason":"tool_calls"
+        }]});
+
+        for model in ["grok-4.7", "gpt-6-astra", "gemini-3.8-flash"] {
+            let mut context = build_codex_tool_context_from_request(&request);
+            context.enable_for_outbound_model(Some(model));
+            let response = chat_completion_to_response_with_context(chat.clone(), &context)
+                .expect("synthetic chat response converts");
+            assert_eq!(response["output"][0]["namespace"], "functions");
+            assert_eq!(response["output"][0]["name"], "write_stdin");
+            if model == "grok-4.7" {
+                assert_eq!(
+                    response["output"][0]["arguments"],
+                    r#"{"session_id":4876,"large":9007199254740993}"#
+                );
+            } else {
+                assert!(
+                    response["output"][0]["arguments"]
+                        .as_str()
+                        .unwrap()
+                        .contains(r#""session_id":4876.0"#),
+                    "{model} should stay on its existing path"
+                );
+            }
+            assert_eq!(response["output"][1]["input"], "literal 4876.0");
+        }
+    }
+
+    #[test]
+    fn grok_unwraps_root_envelopes_and_resolves_parallel_tool_schemas() {
+        let request = json!({
+            "tools":[
+                {"type":"namespace","name":"functions","tools":[
+                    {"type":"function","name":"exec_command",
+                        "parameters":{"type":"object","properties":{"yield_time_ms":{"type":"integer"}}}},
+                    {"type":"function","name":"write_stdin",
+                        "parameters":{"type":"object","properties":{"session_id":{"type":"integer"}}}}
+                ]},
+                {"type":"function","name":"multi_tool_use.parallel",
+                    "parameters":{"type":"object","properties":{"tool_uses":{
+                        "type":"array","items":{"type":"object","properties":{
+                            "recipient_name":{"type":"string"},
+                            "parameters":{"type":"object"}
+                        }}
+                    }}}},
+                {"type":"function","name":"choose",
+                    "parameters":{"oneOf":[
+                        {"type":"object","required":["session_id"],"properties":{
+                            "session_id":{"type":"integer"}}},
+                        {"type":"object","required":["text"],"properties":{
+                            "text":{"type":"string"}}}
+                    ]}}
+            ]
+        });
+        let mut context = build_codex_tool_context_from_request(&request);
+        context.enable_for_outbound_model(Some("xai/GROK-4.7"));
+        let arguments = r#"{"tool_uses":[{"recipient_name":"functions.write_stdin","parameters":{"session_id":4876.0}},{"recipient_name":"functions.exec_command","parameters":{"yield_time_ms":120000.0}}]}"#;
+        assert_eq!(
+            context.repair_arguments("multi_tool_use.parallel", arguments),
+            arguments
+                .replace("4876.0", "4876")
+                .replace("120000.0", "120000")
+        );
+        let call = response_tool_call_item_from_chat_name(
+            "fc_choose",
+            "completed",
+            "call_choose",
+            "choose",
+            r#"{"arguments":"{\"session_id\":4876.0}"}"#,
+            None,
+            &context,
+        );
+        assert_eq!(call["arguments"], r#"{"session_id":4876}"#);
     }
 }

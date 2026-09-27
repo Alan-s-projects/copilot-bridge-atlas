@@ -7,6 +7,7 @@ pub mod copilot_auth;
 pub mod copilot_model_map;
 pub mod streaming_codex_chat;
 pub(crate) mod streaming_copilot_responses;
+pub(crate) mod tool_integer_repair;
 pub mod transform_codex_chat;
 pub(crate) mod transform_copilot_responses;
 

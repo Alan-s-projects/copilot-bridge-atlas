@@ -464,17 +464,15 @@ pub(crate) fn create_usage_collector(
                 let provider_id = provider_id.clone();
                 let session_id = session_id.clone();
                 let request_model = request_model.clone();
-                let outbound_model = fallback_model.clone();
                 let reasoning_effort = reasoning_effort.clone();
 
                 tokio::spawn(async move {
-                    log_usage_internal(
+                    log_usage(
                         &state,
                         &provider_id,
                         app_type_str,
                         &model,
                         &request_model,
-                        &outbound_model,
                         usage,
                         latency_ms,
                         first_token_ms,
@@ -492,17 +490,15 @@ pub(crate) fn create_usage_collector(
                 let provider_id = provider_id.clone();
                 let session_id = session_id.clone();
                 let request_model = request_model.clone();
-                let outbound_model = fallback_model.clone();
                 let reasoning_effort = reasoning_effort.clone();
 
                 tokio::spawn(async move {
-                    log_usage_internal(
+                    log_usage(
                         &state,
                         &provider_id,
                         app_type_str,
                         &model,
                         &request_model,
-                        &outbound_model,
                         TokenUsage::default(),
                         latency_ms,
                         first_token_ms,
@@ -534,23 +530,17 @@ fn spawn_log_usage(
     let app_type_str = ctx.app_type_str.to_string();
     let model = model.to_string();
     let request_model = request_model.to_string();
-    // The anchor point of the "per-request pricing" model: the mapped outbound model, equal to request_model without mapping
-    let outbound_model = ctx
-        .outbound_model
-        .clone()
-        .unwrap_or_else(|| ctx.request_model.clone());
     let latency_ms = ctx.latency_ms();
     let session_id = ctx.session_id.clone();
     let reasoning_effort = ctx.reasoning_effort.clone();
 
     tokio::spawn(async move {
-        log_usage_internal(
+        log_usage(
             &state,
             &provider_id,
             &app_type_str,
             &model,
             &request_model,
-            &outbound_model,
             usage,
             latency_ms,
             None,
@@ -563,15 +553,14 @@ fn spawn_log_usage(
     });
 }
 
-/// Internal usage recording function
+/// Record usage consistently for native Responses and the Chat bridge.
 #[allow(clippy::too_many_arguments)]
-async fn log_usage_internal(
+pub(super) async fn log_usage(
     state: &ProxyState,
     provider_id: &str,
     app_type: &str,
     model: &str,
     request_model: &str,
-    _outbound_model: &str,
     usage: TokenUsage,
     latency_ms: u64,
     first_token_ms: Option<u64>,
@@ -1130,13 +1119,12 @@ mod tests {
             }),
         )?;
         let state = build_state(db.clone());
-        log_usage_internal(
+        log_usage(
             &state,
             "provider-current",
             app_type,
             "gpt-response-fixture",
             "gpt-request-fixture",
-            "gpt-outbound-fixture",
             TokenUsage {
                 input_tokens: 1_000_000,
                 output_tokens: 0,

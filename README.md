@@ -6,7 +6,7 @@ A Desktop app connecting Codex → GitHub Copilot.
 
 Download the Windows x64 MSI from [Releases](https://github.com/Alan-s-projects/copilot-bridge-atlas/releases).
 
-Atlas 6.0.0 stores its data in `%USERPROFILE%\.copilot-bridge-atlas`.
+Atlas 6.x stores its data in `%USERPROFILE%\.copilot-bridge-atlas`. Patch updates preserve this data.
 
 1. Open **Settings → Accounts** to sign in to GitHub.
 2. Then **Settings → Models** to refresh your models.

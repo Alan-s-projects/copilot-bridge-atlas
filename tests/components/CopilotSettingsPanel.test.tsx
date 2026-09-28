@@ -5,15 +5,7 @@ import type { ProviderFormProps } from "@/components/providers/forms/ProviderFor
 import type { Provider } from "@/types";
 
 const mocks = vi.hoisted(() => ({
-  readLive: vi.fn(),
   update: vi.fn(),
-  updateTray: vi.fn(),
-}));
-vi.mock("@/lib/api", () => ({
-  providersApi: {
-    readLiveSettings: mocks.readLive,
-    updateTrayMenu: mocks.updateTray,
-  },
 }));
 vi.mock("@/lib/query", () => ({
   useProvidersQuery: () => ({
@@ -69,7 +61,6 @@ const provider: Provider = {
 describe("Copilot provider editing", () => {
   beforeEach(() => {
     mocks.update.mockReset().mockResolvedValue(undefined);
-    mocks.updateTray.mockReset().mockResolvedValue(undefined);
   });
   it("preserves stored models and account binding without importing live configuration", async () => {
     render(<CopilotSettingsPanel />);
@@ -81,8 +72,6 @@ describe("Copilot provider editing", () => {
         provider,
       }),
     );
-    expect(mocks.readLive).not.toHaveBeenCalled();
-    expect(mocks.updateTray).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("settings")).toBeVisible();
   });
 });

@@ -28,7 +28,6 @@ vi.mock("@/lib/query", () => ({
 vi.mock("@/lib/api", () => ({
   providersApi: {
     onSwitched: vi.fn().mockResolvedValue(() => {}),
-    updateTrayMenu: vi.fn(),
   },
 }));
 vi.mock("@/hooks/useProxyStatus", () => ({

@@ -22,9 +22,9 @@ use super::{
         streaming_copilot_responses, transform_codex_chat,
     },
     response_processor::{
-        create_logged_passthrough_stream_with_diagnostics, process_response, read_decoded_body,
-        strip_entity_headers_for_rebuilt_body, strip_hop_by_hop_response_headers,
-        SseUsageCollector,
+        create_logged_passthrough_stream_with_diagnostics, log_usage, process_response,
+        read_decoded_body, strip_entity_headers_for_rebuilt_body,
+        strip_hop_by_hop_response_headers, SseUsageCollector,
     },
     server::ProxyState,
     sse::{strip_sse_field, take_sse_block},
@@ -509,7 +509,6 @@ async fn handle_codex_chat_to_responses_transform(
                     let state = state.clone();
                     let provider_id = provider_id.clone();
                     let request_model = request_model.clone();
-                    let outbound_model = fallback_model.clone();
                     let session_id = session_id.clone();
                     let reasoning_effort = reasoning_effort.clone();
 
@@ -520,7 +519,6 @@ async fn handle_codex_chat_to_responses_transform(
                             app_type_str,
                             &model,
                             &request_model,
-                            &outbound_model,
                             usage,
                             latency_ms,
                             first_token_ms,
@@ -620,10 +618,6 @@ async fn handle_codex_chat_to_responses_transform(
             .or_else(|| ctx.outbound_model.clone())
             .unwrap_or_else(|| ctx.request_model.clone());
         let request_model = ctx.request_model.clone();
-        let outbound_model = ctx
-            .outbound_model
-            .clone()
-            .unwrap_or_else(|| ctx.request_model.clone());
         let app_type_str = ctx.app_type_str;
         tokio::spawn({
             let state = state.clone();
@@ -638,7 +632,6 @@ async fn handle_codex_chat_to_responses_transform(
                     app_type_str,
                     &model,
                     &request_model,
-                    &outbound_model,
                     usage,
                     latency_ms,
                     None,
@@ -1407,57 +1400,8 @@ fn merge_tool_call_delta(
     }
 }
 
-// ============================================================================
-// Usage logging for the Codex Chat bridge.
-// ============================================================================
-
 fn log_forward_error(ctx: &RequestContext, error: &ProxyError) {
     ctx.diagnostics.proxy_failure("forward", error);
-}
-
-/// Record request usage
-#[allow(clippy::too_many_arguments)]
-async fn log_usage(
-    state: &ProxyState,
-    provider_id: &str,
-    app_type: &str,
-    model: &str,
-    request_model: &str,
-    _outbound_model: &str,
-    usage: TokenUsage,
-    latency_ms: u64,
-    first_token_ms: Option<u64>,
-    is_streaming: bool,
-    status_code: u16,
-    session_id: Option<String>,
-    reasoning_effort: ReasoningEffort,
-) {
-    use super::usage::logger::UsageLogger;
-
-    let logger = UsageLogger::new(&state.db);
-    let pricing_model = model;
-
-    let request_id = usage.dedup_request_id(app_type, provider_id);
-
-    if let Err(e) = logger.log_with_calculation(
-        request_id,
-        provider_id.to_string(),
-        app_type.to_string(),
-        model.to_string(),
-        request_model.to_string(),
-        pricing_model.to_string(),
-        usage,
-        rust_decimal::Decimal::ONE,
-        latency_ms,
-        first_token_ms,
-        status_code,
-        session_id,
-        None, // provider_type
-        is_streaming,
-        reasoning_effort,
-    ) {
-        log::warn!("[USG-001] Failed to record usage: {e}");
-    }
 }
 
 #[cfg(test)]

@@ -68,7 +68,6 @@ export const CopilotAuthSection: React.FC<CopilotAuthSectionProps> = ({
   const {
     accounts,
     defaultAccountId,
-    migrationError,
     isStatusSuccess,
     isStatusError,
     hasAnyAccount,
@@ -276,15 +275,6 @@ export const CopilotAuthSection: React.FC<CopilotAuthSectionProps> = ({
             />
           )}
         </div>
-      )}
-
-      {mode === "manage" && migrationError && (
-        <p className="text-sm text-amber-600 dark:text-amber-400">
-          {t("copilot.migrationFailed", {
-            error: migrationError,
-            defaultValue: "Legacy auth migration failed: {{error}}",
-          })}
-        </p>
       )}
 
       {/* Account picker when accounts are available */}

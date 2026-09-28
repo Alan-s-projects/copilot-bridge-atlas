@@ -18,8 +18,8 @@ use std::sync::Mutex;
 // DAO methods are provided through impl Database, no additional export is required
 
 /// Current Schema version number
-/// Increment each time the table structure is modified, and add corresponding migration logic in schema.rs
-pub(crate) const SCHEMA_VERSION: i32 = 24;
+/// Atlas 6 starts with a new schema and does not upgrade earlier databases.
+pub(crate) const SCHEMA_VERSION: i32 = 25;
 
 /// Safely acquire Mutex locks and avoid unwrap panics
 macro_rules! lock_conn {
@@ -47,7 +47,6 @@ impl Database {
     /// Database files are located at `~/.copilot-bridge-atlas/copilot-bridge-atlas.db`
     pub fn init() -> Result<Self, AppError> {
         let db_path = get_app_config_dir().join("copilot-bridge-atlas.db");
-        let db_exists = db_path.exists();
 
         // Make sure the parent directory exists
         if let Some(parent) = db_path.parent() {
@@ -59,9 +58,8 @@ impl Database {
         // Enable foreign key constraints
         conn.execute("PRAGMA foreign_keys = ON;", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
-        if !db_exists {
-            // For a brand-new database, configure incremental auto-vacuum
-            // before creating any tables so no rebuild is needed later.
+        if Self::get_user_version(&conn)? == 0 && !Self::has_user_tables(&conn)? {
+            // Configure a new database before creating tables.
             conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
                 .map_err(|e| AppError::Database(e.to_string()))?;
         }
@@ -69,28 +67,7 @@ impl Database {
             conn: Mutex::new(conn),
         };
 
-        // Pre-migration backup: only when upgrading from an existing database
-        {
-            let conn = lock_conn!(db.conn);
-            let version = Self::get_user_version(&conn)?;
-            drop(conn);
-            if version > 0 && version < SCHEMA_VERSION {
-                log::info!(
-                    "Creating pre-migration database backup (v{version} → v{SCHEMA_VERSION})"
-                );
-                db.backup_database_file()
-                    .map_err(|error| {
-                        AppError::Database(format!(
-                            "Cannot upgrade database until its safety backup succeeds: {error}"
-                        ))
-                    })?
-                    .ok_or_else(|| {
-                        AppError::Database("Pre-migration safety backup was not created".into())
-                    })?;
-            }
-        }
-
-        db.apply_schema_migrations()?;
+        db.initialize_schema()?;
         if let Err(e) = db.ensure_incremental_auto_vacuum() {
             log::warn!("Failed to ensure incremental auto-vacuum: {e}");
         }
@@ -144,7 +121,7 @@ impl Database {
         let db = Self {
             conn: Mutex::new(conn),
         };
-        db.apply_schema_migrations()?;
+        db.initialize_schema()?;
         db.ensure_model_pricing_seeded()?;
 
         Ok(db)

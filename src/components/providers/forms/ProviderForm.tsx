@@ -125,7 +125,7 @@ export function ProviderForm({
   const flushAutoSaveRef = useRef<() => void>(() => {});
   onSubmitRef.current = onSubmit;
   const [accountId, setAccountId] = useState<string | null>(
-    initialMeta?.authBinding?.accountId ?? initialMeta?.githubAccountId ?? null,
+    initialMeta?.authBinding?.accountId ?? null,
   );
   const [enableUltraReasoning, setEnableUltraReasoning] = useState<boolean>(
     () => {
@@ -154,7 +154,6 @@ export function ProviderForm({
     const meta: ProviderMeta = {
       ...initialMeta,
       providerType: "github_copilot",
-      githubAccountId: accountId ?? undefined,
       authBinding: {
         source: "managed_account",
         authProvider: "github_copilot",

@@ -4,9 +4,6 @@ use serde_json::{Map, Value};
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::sync::OnceLock;
-
-static LEGACY_APP_CONFIG_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 pub fn get_home_dir() -> PathBuf {
     std::env::var("COPILOT_BRIDGE_ATLAS_TEST_HOME")
@@ -16,35 +13,8 @@ pub fn get_home_dir() -> PathBuf {
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
 }
 
-/// Atlas never discovers another application's data directory.
 pub fn get_app_config_dir() -> PathBuf {
-    LEGACY_APP_CONFIG_DIR
-        .get()
-        .cloned()
-        .flatten()
-        .unwrap_or_else(|| get_home_dir().join(".copilot-bridge-atlas"))
-}
-
-/// Keep an earlier Atlas folder selection for the process lifetime without
-/// restoring the removed directory editor, store plugin, or write commands.
-pub(crate) fn initialize_legacy_app_config_dir(app_data_dir: &Path) {
-    LEGACY_APP_CONFIG_DIR.get_or_init(|| {
-        read_legacy_app_config_dir(&app_data_dir.join("app_paths.json"), &get_home_dir())
-    });
-}
-
-fn read_legacy_app_config_dir(store_path: &Path, home: &Path) -> Option<PathBuf> {
-    let bytes = fs::read(store_path).ok()?;
-    let store: Value = serde_json::from_slice(&bytes).ok()?;
-    let raw = store.get("app_config_dir_override")?.as_str()?.trim();
-    let path = if raw == "~" {
-        home.to_path_buf()
-    } else if let Some(relative) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
-        home.join(relative)
-    } else {
-        PathBuf::from(raw)
-    };
-    (path.is_absolute() && path.is_dir()).then_some(path)
+    get_home_dir().join(".copilot-bridge-atlas")
 }
 
 fn normalize_path_lexically(path: &Path) -> PathBuf {
@@ -275,78 +245,6 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn legacy_data_directory_preserves_existing_data_and_store() {
-        let root = tempfile::tempdir().unwrap();
-        let data_dir = root.path().join("existing data");
-        fs::create_dir_all(&data_dir).unwrap();
-        let settings_path = data_dir.join("settings.json");
-        fs::write(&settings_path, b"existing preferences").unwrap();
-        let store_path = root.path().join("app_paths.json");
-        let bytes = serde_json::to_vec(&serde_json::json!({
-            "app_config_dir_override": data_dir,
-            "retired_metadata": {"preserve": true}
-        }))
-        .unwrap();
-        fs::write(&store_path, &bytes).unwrap();
-
-        assert_eq!(
-            read_legacy_app_config_dir(&store_path, root.path()),
-            Some(data_dir)
-        );
-        assert_eq!(fs::read(&store_path).unwrap(), bytes);
-        assert_eq!(fs::read(&settings_path).unwrap(), b"existing preferences");
-        assert!(!root.path().join(".copilot-bridge-atlas").exists());
-    }
-
-    #[test]
-    fn legacy_data_directory_accepts_existing_home_relative_paths() {
-        let root = tempfile::tempdir().unwrap();
-        let data_dir = root.path().join("atlas-data");
-        fs::create_dir_all(&data_dir).unwrap();
-        let store_path = root.path().join("app_paths.json");
-
-        for raw in ["~/atlas-data", "~\\atlas-data", "  ~/atlas-data  ", "~"] {
-            let store = serde_json::json!({"app_config_dir_override": raw});
-            fs::write(&store_path, serde_json::to_vec(&store).unwrap()).unwrap();
-            assert_eq!(
-                read_legacy_app_config_dir(&store_path, root.path()),
-                Some(if raw == "~" {
-                    root.path().to_path_buf()
-                } else {
-                    data_dir.clone()
-                })
-            );
-        }
-    }
-
-    #[test]
-    fn legacy_data_directory_ignores_missing_invalid_or_unusable_selections() {
-        let root = tempfile::tempdir().unwrap();
-        let store_path = root.path().join("app_paths.json");
-        assert_eq!(read_legacy_app_config_dir(&store_path, root.path()), None);
-        assert!(!store_path.exists());
-
-        for store in [
-            serde_json::json!({}),
-            serde_json::json!({"app_config_dir_override": null}),
-            serde_json::json!({"app_config_dir_override": 42}),
-            serde_json::json!({"app_config_dir_override": ""}),
-            serde_json::json!({"app_config_dir_override": "."}),
-            serde_json::json!({"app_config_dir_override": root.path().join("missing")}),
-            serde_json::json!({"app_config_dir_override": store_path}),
-        ] {
-            let bytes = serde_json::to_vec(&store).unwrap();
-            fs::write(&store_path, &bytes).unwrap();
-            assert_eq!(read_legacy_app_config_dir(&store_path, root.path()), None);
-            assert_eq!(fs::read(&store_path).unwrap(), bytes);
-        }
-        fs::write(&store_path, b"not JSON").unwrap();
-        assert_eq!(read_legacy_app_config_dir(&store_path, root.path()), None);
-        assert_eq!(fs::read(&store_path).unwrap(), b"not JSON");
-        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
-    }
 
     fn assert_atomic_write_replaces_existing_file(dir: &Path) {
         let path = dir.join("atomic-write-contract.json");

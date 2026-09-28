@@ -3,8 +3,7 @@ import { useCopilotQuota } from "@/lib/query/copilot";
 import { extractErrorMessage } from "@/utils/errorUtils";
 
 export default function CopilotQuotaFooter({ meta }: { meta?: ProviderMeta }) {
-  const accountId =
-    meta?.authBinding?.accountId ?? meta?.githubAccountId ?? null;
+  const accountId = meta?.authBinding?.accountId ?? null;
   const { data, error, isFetching } = useCopilotQuota(accountId);
   const used = Math.max(0, Math.min(100, data?.utilization ?? 0));
   return (

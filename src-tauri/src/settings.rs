@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
 
@@ -59,19 +58,13 @@ impl UsageDateRange {
     }
 }
 
-/// Device preferences live alongside Atlas's database. Unknown imported
-/// preferences remain opaque, so editing current settings does not erase them.
+/// Device preferences live alongside Atlas's database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
-    #[serde(flatten)]
-    pub legacy_options: BTreeMap<String, serde_json::Value>,
     pub launch_on_startup: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage_dashboard_refresh_interval_ms: Option<u32>,
-    /// Legacy read-only discovery hint; the connection preview owns selection.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub codex_config_dir: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_provider_codex: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -83,10 +76,8 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            legacy_options: BTreeMap::new(),
             launch_on_startup: false,
             usage_dashboard_refresh_interval_ms: None,
-            codex_config_dir: None,
             current_provider_codex: None,
             backup_interval_hours: None,
             backup_retain_count: None,
@@ -99,23 +90,11 @@ impl AppSettings {
         crate::config::get_app_config_dir().join("settings.json")
     }
 
-    fn normalize(&mut self) {
-        self.codex_config_dir = self
-            .codex_config_dir
-            .as_deref()
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-            .map(str::to_owned);
-    }
-
     fn load_from_file() -> Self {
         let path = Self::settings_path();
         match std::fs::read_to_string(&path) {
             Ok(text) => match serde_json::from_str::<Self>(&text) {
-                Ok(mut settings) => {
-                    settings.normalize();
-                    settings
-                }
+                Ok(settings) => settings,
                 Err(error) => {
                     log::warn!("Cannot parse settings {}: {error}", path.display());
                     Self::default()
@@ -136,19 +115,6 @@ fn settings_store() -> &'static RwLock<AppSettings> {
     SETTINGS_STORE.get_or_init(|| RwLock::new(AppSettings::load_from_file()))
 }
 
-pub(crate) fn resolve_override_path(raw: &str) -> PathBuf {
-    if raw == "~" {
-        return crate::config::get_home_dir();
-    }
-    if let Some(suffix) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
-        return suffix
-            .split(['/', '\\'])
-            .filter(|part| !part.is_empty())
-            .fold(crate::config::get_home_dir(), |path, part| path.join(part));
-    }
-    PathBuf::from(raw)
-}
-
 pub fn get_settings() -> AppSettings {
     settings_store()
         .read()
@@ -156,14 +122,7 @@ pub fn get_settings() -> AppSettings {
         .clone()
 }
 
-pub fn get_settings_for_frontend() -> AppSettings {
-    let mut settings = get_settings();
-    settings.legacy_options.clear();
-    settings
-}
-
-pub fn update_settings(mut settings: AppSettings) -> Result<(), AppError> {
-    settings.normalize();
+pub fn update_settings(settings: AppSettings) -> Result<(), AppError> {
     let mut guard = settings_store()
         .write()
         .unwrap_or_else(|error| error.into_inner());
@@ -180,13 +139,6 @@ pub fn reload_settings() -> Result<(), AppError> {
     Ok(())
 }
 
-pub fn get_codex_override_dir() -> Option<PathBuf> {
-    get_settings()
-        .codex_config_dir
-        .as_deref()
-        .map(resolve_override_path)
-}
-
 pub fn get_current_provider() -> Option<String> {
     get_settings().current_provider_codex
 }
@@ -197,7 +149,6 @@ pub fn set_current_provider(id: Option<&str>) -> Result<(), AppError> {
         .unwrap_or_else(|error| error.into_inner());
     let mut settings = guard.clone();
     settings.current_provider_codex = id.map(str::to_owned);
-    settings.normalize();
     crate::config::write_json_file(&AppSettings::settings_path(), &settings)?;
     *guard = settings;
     Ok(())
@@ -219,34 +170,4 @@ pub fn effective_backup_interval_hours() -> u32 {
 
 pub fn effective_backup_retain_count() -> usize {
     get_settings().backup_retain_count.unwrap_or(10).max(1) as usize
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn inactive_imported_preferences_remain_opaque() {
-        let mut settings: AppSettings = serde_json::from_value(json!({
-            "launchOnStartup": true,
-            "showInTray": false,
-            "language": "ja",
-            "retiredFeature": {"keep": true},
-            "localMigrations": {"keep": true}
-        }))
-        .unwrap();
-        settings.normalize();
-        assert!(settings.launch_on_startup);
-        assert_eq!(settings.legacy_options["showInTray"], json!(false));
-        assert_eq!(settings.legacy_options["language"], json!("ja"));
-        assert_eq!(
-            settings.legacy_options["retiredFeature"],
-            json!({"keep": true})
-        );
-        assert_eq!(
-            serde_json::to_value(settings).unwrap()["localMigrations"],
-            json!({"keep": true})
-        );
-    }
 }

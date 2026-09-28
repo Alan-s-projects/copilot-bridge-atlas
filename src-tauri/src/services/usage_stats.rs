@@ -4,9 +4,10 @@
 
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
+#[cfg(test)]
+use crate::services::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL;
 use crate::services::sql_helpers::{
     fresh_input_sql, output_generation_ms_sql, INPUT_TOKEN_SEMANTICS_FRESH,
-    INPUT_TOKEN_SEMANTICS_TOTAL,
 };
 use chrono::{Local, TimeZone, Timelike};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -224,13 +225,8 @@ fn provider_name_coalesce(log_alias: &str, provider_alias: &str) -> String {
     format!("COALESCE({provider_alias}.name, {log_alias}.provider_id)")
 }
 
-/// SQL fragment: Wrap `data_source` of the specified alias into COALESCE, and treat NULL as 'proxy'.
-///
-/// Guard against NULL data_source rows that may be written before schema v9 (see
-/// `tests::create_legacy_nullable_logs_table`). All queries using data_source
-/// All snippets should be generated through this helper to avoid missing them.
 fn data_source_expr(log_alias: &str) -> String {
-    format!("COALESCE({log_alias}.data_source, 'proxy')")
+    format!("{log_alias}.data_source")
 }
 
 /// SQL snippet: LEFT JOIN the log/summary rows to the providers table to get the provider name.
@@ -280,8 +276,7 @@ fn push_provider_model_filters(
 }
 
 pub(crate) fn effective_usage_log_filter(log_alias: &str) -> String {
-    // Imported conversation totals are not requests handled by Atlas. Keep the
-    // historical rows on disk, but never mix them into proxy counts or cache rates.
+    // Imported conversation totals are not requests handled by Atlas.
     format!(
         "{log_alias}.app_type = 'codex' AND {} = 'proxy'",
         data_source_expr(log_alias)
@@ -289,8 +284,7 @@ pub(crate) fn effective_usage_log_filter(log_alias: &str) -> String {
 }
 
 fn effective_usage_rollup_filter(alias: &str) -> String {
-    // Legacy rollups predate a data_source column. Session importers used these
-    // reserved provider IDs; real proxy rows retain their actual provider ID.
+    // Session imports use reserved provider IDs. Proxy rows have a provider ID.
     format!(
         "{alias}.app_type = 'codex' AND {alias}.provider_id NOT IN ('_session', '_codex_session')"
     )
@@ -1012,7 +1006,7 @@ impl Database {
                         requested_reasoning_effort, applied_reasoning_effort,
                         {fresh_input} AS fresh_input_tokens, pricing_tier
              FROM proxy_request_logs
-             WHERE app_type = 'codex' AND COALESCE(data_source, 'proxy') = 'proxy'
+             WHERE app_type = 'codex' AND data_source = 'proxy'
                AND CAST(total_cost_usd AS REAL) <= 0
                AND pricing_tier IS NULL
                AND (input_tokens > 0 OR output_tokens > 0
@@ -1096,17 +1090,13 @@ impl Database {
 
         let million = rust_decimal::Decimal::from(1_000_000u64);
 
-        // Explicit fresh-input rows need no deduction. Legacy Codex totals
-        // include cache reads; current totals also include cache creation.
+        // Fresh-input rows need no deduction; total input includes cache tokens.
         let billable_input_tokens = if log.input_token_semantics == INPUT_TOKEN_SEMANTICS_FRESH {
             log.input_tokens as u64
-        } else if log.input_token_semantics == INPUT_TOKEN_SEMANTICS_TOTAL {
+        } else {
             (log.input_tokens as u64)
                 .saturating_sub(log.cache_read_tokens as u64)
                 .saturating_sub(log.cache_creation_tokens as u64)
-        } else {
-            // v12 and earlier: input included cache reads but excluded cache writes.
-            (log.input_tokens as u64).saturating_sub(log.cache_read_tokens as u64)
         };
         let input_cost =
             rust_decimal::Decimal::from(billable_input_tokens) * pricing.input / million;
@@ -1772,45 +1762,6 @@ mod tests {
         Ok(())
     }
 
-    fn create_legacy_nullable_logs_table(conn: &Connection) -> Result<(), AppError> {
-        conn.execute(
-            "CREATE TABLE proxy_request_logs (
-                request_id TEXT PRIMARY KEY,
-                app_type TEXT NOT NULL,
-                model TEXT NOT NULL,
-                input_tokens INTEGER NOT NULL,
-                output_tokens INTEGER NOT NULL,
-                cache_read_tokens INTEGER NOT NULL,
-                cache_creation_tokens INTEGER NOT NULL,
-                status_code INTEGER NOT NULL,
-                created_at INTEGER NOT NULL,
-                data_source TEXT
-            )",
-            [],
-        )?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_effective_filter_keeps_legacy_null_data_source_proxy_rows() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        create_legacy_nullable_logs_table(&conn)?;
-        conn.execute(
-            "INSERT INTO proxy_request_logs (
-                request_id, app_type, model, input_tokens, output_tokens,
-                cache_read_tokens, cache_creation_tokens, status_code, created_at, data_source
-            ) VALUES ('legacy-proxy', 'codex', 'gpt-5.5', 10, 2, 1, 0, 200, 1000, NULL)",
-            [],
-        )?;
-
-        let filter = effective_usage_log_filter("l");
-        let sql = format!("SELECT COUNT(*) FROM proxy_request_logs l WHERE {filter}");
-        let count: i64 = conn.query_row(&sql, [], |row| row.get(0))?;
-        assert_eq!(count, 1);
-
-        Ok(())
-    }
-
     #[test]
     fn test_backfill_missing_usage_costs_uses_new_gpt_5_5_pricing() -> Result<(), AppError> {
         let db = Database::memory()?;
@@ -1851,7 +1802,7 @@ mod tests {
     }
 
     #[test]
-    fn test_backfill_gpt_pricing_after_upgrade() -> Result<(), AppError> {
+    fn test_backfill_gpt_pricing_after_new_price() -> Result<(), AppError> {
         let db = Database::memory()?;
         let cases = [
             (
@@ -1940,7 +1891,7 @@ mod tests {
             let conn = lock_conn!(db.conn);
             for (id, input, semantics) in [
                 ("total", 1000, INPUT_TOKEN_SEMANTICS_TOTAL),
-                ("legacy", 900, 0),
+                ("total-other", 1000, INPUT_TOKEN_SEMANTICS_TOTAL),
                 ("fresh", 100, INPUT_TOKEN_SEMANTICS_FRESH),
             ] {
                 insert_usage_log(
@@ -2051,97 +2002,6 @@ mod tests {
             assert!((rate - 0.8).abs() < 0.000001);
         }
         assert_eq!(derive_real_total_and_hit_rate(0, 50, 0, 0), (50, 0.0));
-    }
-
-    #[test]
-    fn test_backfill_distinguishes_legacy_and_total_cache_semantics() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            // v12 mirror row: input = fresh + read; creation was reported separately.
-            insert_usage_log(
-                &conn,
-                "legacy-cache-semantics",
-                "codex",
-                "p1",
-                "gpt-5.5",
-                "proxy",
-                1000,
-                800_000,
-                0,
-                600_000,
-                200_000,
-                200,
-                "0",
-            )?;
-            // v13 proxy row: input = fresh + read + creation.
-            insert_usage_log(
-                &conn,
-                "total-cache-semantics",
-                "codex",
-                "p1",
-                "gpt-5.5",
-                "proxy",
-                1001,
-                1_000_000,
-                0,
-                600_000,
-                200_000,
-                200,
-                "0",
-            )?;
-            conn.execute(
-                "UPDATE proxy_request_logs
-                 SET input_token_semantics = ?1
-                 WHERE request_id = 'total-cache-semantics'",
-                [INPUT_TOKEN_SEMANTICS_TOTAL],
-            )?;
-            insert_usage_log(
-                &conn,
-                "fresh-cache-semantics",
-                "codex",
-                "p1",
-                "gpt-5.5",
-                "proxy",
-                1002,
-                200_000,
-                0,
-                600_000,
-                200_000,
-                200,
-                "0",
-            )?;
-            conn.execute(
-                "UPDATE proxy_request_logs SET input_token_semantics = ?1 WHERE request_id = 'fresh-cache-semantics'",
-                [INPUT_TOKEN_SEMANTICS_FRESH],
-            )?;
-        }
-
-        assert_eq!(db.backfill_missing_usage_costs()?, 3);
-
-        let conn = lock_conn!(db.conn);
-        let mut stmt = conn.prepare(
-            "SELECT request_id, input_cost_usd
-             FROM proxy_request_logs
-             WHERE request_id IN ('fresh-cache-semantics', 'legacy-cache-semantics', 'total-cache-semantics')
-             ORDER BY request_id",
-        )?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(
-            rows,
-            vec![
-                ("fresh-cache-semantics".to_string(), "2.000000".to_string()),
-                ("legacy-cache-semantics".to_string(), "2.000000".to_string()),
-                ("total-cache-semantics".to_string(), "2.000000".to_string()),
-            ]
-        );
-
-        Ok(())
     }
 
     #[test]

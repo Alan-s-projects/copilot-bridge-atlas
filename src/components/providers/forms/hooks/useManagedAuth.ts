@@ -256,7 +256,6 @@ export function useManagedAuth(
     accounts,
     hasAnyAccount: accounts.length > 0,
     defaultAccountId: authStatus?.default_account_id ?? null,
-    migrationError: authStatus?.migration_error ?? null,
     pollingState,
     deviceCode,
     error,

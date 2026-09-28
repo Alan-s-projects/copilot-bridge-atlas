@@ -54,9 +54,6 @@ pub struct ProviderMeta {
     pub provider_type: Option<String>,
     #[serde(rename = "authBinding", skip_serializing_if = "Option::is_none")]
     pub auth_binding: Option<AuthBinding>,
-    /// Read compatibility for a saved Copilot account binding.
-    #[serde(rename = "githubAccountId", skip_serializing_if = "Option::is_none")]
-    pub github_account_id: Option<String>,
 }
 
 impl ProviderMeta {
@@ -64,14 +61,12 @@ impl ProviderMeta {
         if auth_provider != "github_copilot" {
             return None;
         }
-        if let Some(binding) = &self.auth_binding {
-            if binding.source == AuthBindingSource::ManagedAccount
-                && binding.auth_provider.as_deref() == Some(auth_provider)
-            {
-                return binding.account_id.clone();
-            }
-        }
-        self.github_account_id.clone()
+        self.auth_binding.as_ref().and_then(|binding| {
+            (binding.source == AuthBindingSource::ManagedAccount
+                && binding.auth_provider.as_deref() == Some(auth_provider))
+            .then(|| binding.account_id.clone())
+            .flatten()
+        })
     }
 }
 
@@ -81,38 +76,19 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn explicit_default_account_does_not_restore_a_legacy_account_binding() {
-        let meta: ProviderMeta = serde_json::from_value(json!({
-            "githubAccountId": "old-account",
-            "authBinding": {
-                "source": "managed_account",
-                "authProvider": "github_copilot"
-            }
-        }))
-        .unwrap();
-        assert_eq!(meta.managed_account_id_for("github_copilot"), None);
-    }
-
-    #[test]
-    fn existing_copilot_metadata_keeps_account_and_ignores_retired_protocol_selection() {
+    fn managed_account_binding_selects_the_saved_account() {
         let meta: ProviderMeta = serde_json::from_value(json!({
             "providerType": "github_copilot",
-            "githubAccountId": "account",
-            "codexCopilotApiFormat": "openai_responses",
-            "retiredFeature": true
+            "authBinding": {
+                "source": "managed_account",
+                "authProvider": "github_copilot",
+                "accountId": "account"
+            }
         }))
         .unwrap();
         assert_eq!(
             meta.managed_account_id_for("github_copilot").as_deref(),
             Some("account")
         );
-        assert!(serde_json::to_value(&meta)
-            .unwrap()
-            .get("codexCopilotApiFormat")
-            .is_none());
-        assert!(serde_json::to_value(&meta)
-            .unwrap()
-            .get("retiredFeature")
-            .is_none());
     }
 }

@@ -12,19 +12,14 @@ interface AuthBinding {
 }
 
 export interface ProviderMeta {
-  apiFormat?: "openai_chat" | "openai_responses";
-  // Retired metadata is accepted from old records but never controls routing.
-  codexCopilotApiFormat?: string;
   authBinding?: AuthBinding;
   providerType?: string;
-  // Accept the saved account binding used by earlier provider records.
-  githubAccountId?: string;
 }
 
 export interface CodexCatalogModel {
   model: string;
   displayName?: string;
-  /** Defaults to enabled for catalog rows saved by earlier app versions. */
+  /** A missing preference enables a model by default. */
   enabled?: boolean;
   available?: boolean;
   vendor?: string;

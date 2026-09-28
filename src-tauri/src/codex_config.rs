@@ -22,10 +22,6 @@ const OPENAI_FALLBACK_PROFILE: &str = "gpt-6-astra";
 
 /// Get Codex configuration directory path
 pub fn get_codex_config_dir() -> PathBuf {
-    if let Some(custom) = crate::settings::get_codex_override_dir() {
-        return custom;
-    }
-
     get_home_dir().join(".codex")
 }
 

@@ -112,7 +112,6 @@
     "logoutAll": "Logout all accounts",
     "retry": "Retry",
     "copyCode": "Copy code",
-    "migrationFailed": "Legacy auth migration failed: {{error}}",
     "deploymentType": "GitHub Deployment Type",
     "deploymentGitHubCom": "GitHub.com",
     "deploymentEnterprise": "GitHub Enterprise Server",

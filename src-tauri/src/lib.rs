@@ -169,7 +169,6 @@ pub fn run() {
         .setup(|app| {
             let _ = rustls::crypto::ring::default_provider().install_default();
 
-            crate::config::initialize_legacy_app_config_dir(&app.path().app_data_dir()?);
             panic_hook::init_app_config_dir(crate::config::get_app_config_dir());
 
             // Initialization log (output to <app_config_dir>/logs/copilot-bridge-atlas.log)

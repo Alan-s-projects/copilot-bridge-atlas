@@ -1499,14 +1499,6 @@ mod tests {
         for chat in [false, true] {
             for stream in [false, true] {
                 let db = Arc::new(Database::memory().unwrap());
-                db.conn
-                    .lock()
-                    .unwrap()
-                    .execute(
-                        "UPDATE proxy_config SET enable_logging = 0 WHERE app_type = 'codex'",
-                        [],
-                    )
-                    .unwrap();
                 let config = db.get_proxy_config().await.unwrap();
                 let state = ProxyState {
                     db: db.clone(),

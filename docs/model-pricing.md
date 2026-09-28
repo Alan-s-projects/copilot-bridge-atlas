@@ -21,13 +21,11 @@ The higher tier applies **strictly above** the threshold, to the entire request,
 not just excess tokens. The threshold uses total input, including cached reads
 and cache writes; output tokens do not select the tier. Fresh input, cached
 input, cache writes, and output then use their respective rates in that tier.
-This is shared by new request logging and missing-cost backfill. Historical
-fresh/total/legacy input semantics are normalized before choosing a tier.
+This is shared by request logging and missing-cost backfill. Fresh and total
+input semantics are normalized before choosing a tier.
 Both request tables show `Pricing Tier` as `Default` or `Long context`, recorded
 with the calculated cost. Errors and unpriced requests have no tier. Later price
-edits do not relabel recorded tiers, including zero-cost requests. Existing
-positive-cost proxy records from the flat-rate implementation migrate as
-`Default`, without changing any cost.
+edits do not relabel recorded tiers, including zero-cost requests.
 
 The Cost Pricing table displays each long-context tier underneath its default
 rate. The price editor saves both tiers, so editing a default does not silently
@@ -36,19 +34,12 @@ switch, editable positive-integer input threshold, and all four rates, including
 for models without a bundled tier. A custom flat price with no `longContext`
 field remains flat.
 
-## Upgrade and Overrides
+## Overrides
 
-Schema 22 adds optional tier metadata. On upgrade it removes **unchanged**
-entries from the previous bundled table and seeds the GitHub snapshot. The old
-snapshot is retained in `legacy-model-pricing.json` solely to identify these
-unchanged rows, never as an active pricing source.
-
-Explicit local overrides and deletion tombstones are reapplied. Edited or
-imported non-default prices survive. Reset to code defaults clears overrides
-and tombstones and restores only the official bundled entries and tiers.
-Existing nonzero request costs and imported conversation history are not
-repriced. Previously recorded flat-rate long-context estimates remain historical
-estimates; this update does not silently rewrite them.
+Atlas 6 seeds prices from the bundled GitHub snapshot. Explicit local overrides
+and deletion tombstones apply to the current installation. Reset to defaults
+clears overrides and tombstones and restores the bundled entries and tiers.
+Recorded request costs are not repriced.
 
 Models absent from the price list remain usable and are reported as unpriced.
 Lookup does not borrow a price from a different model. Existing GPT date and

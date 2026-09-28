@@ -160,8 +160,8 @@ impl Database {
                 AppError::Database(format!("Setting staging database auto_vacuum failed: {e}"))
             })?;
 
-        // Remove the authorizer after running external SQL. Schema creation and
-        // migration below are trusted application statements.
+        // Remove the authorizer after running external SQL. Schema validation
+        // below uses trusted application statements.
         temp_conn.authorizer(Some(import_authorizer));
         let batch_result = temp_conn.execute_batch(sql_content);
         temp_conn.authorizer(
@@ -176,13 +176,8 @@ impl Database {
             ));
         }
 
-        // Validate the schema produced by the input itself before migrations
-        // can create missing tables and accidentally make a truncated file look valid.
+        // Validate the imported schema before touching the live database.
         Self::validate_imported_schema(&temp_conn)?;
-
-        // Complete missing tables/indexes and perform migration
-        Self::create_tables_on_conn(&temp_conn)?;
-        Self::apply_schema_migrations_on_conn(&temp_conn)?;
         on_staging_ready()?;
 
         let backup_file_guard = lock_backup_file_operations()?;
@@ -239,14 +234,7 @@ impl Database {
 
     fn validate_copilot_bridge_atlas_sql_export(sql: &str) -> Result<(), AppError> {
         let trimmed = sql.trim_start();
-        if trimmed.starts_with(COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER)
-            || trimmed.lines().next().is_some_and(|line| {
-                line.starts_with("-- ")
-                    && (line.ends_with(" SQLite export")
-                            // Accept SQL backups written by older Atlas versions.
-                            || line.ends_with(" SQLite \u{5bfc}\u{51fa}"))
-            })
-        {
+        if trimmed.lines().next() == Some(COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER) {
             return Ok(());
         }
 
@@ -509,16 +497,21 @@ impl Database {
 
     /// Validate that the external SQL created a recognizable Copilot Bridge Atlas schema.
     ///
-    /// These tables all existed in the oldest supported SQL-export schema
-    /// (v3.8.x). Checking before migrations keeps header-only/truncated files
-    /// from being completed by `create_tables_on_conn`, while allowing a valid
-    /// backup whose user-owned configuration tables happen to contain no rows.
+    /// Require the current version and tables before accepting an import.
     fn validate_imported_schema(conn: &Connection) -> Result<(), AppError> {
+        let version = Self::get_user_version(conn)?;
+        if version != super::SCHEMA_VERSION {
+            return Err(AppError::Database(format!(
+                "Unsupported database schema {version}; Atlas 6 requires schema {}.",
+                super::SCHEMA_VERSION
+            )));
+        }
         const REQUIRED_TABLES: &[&str] = &[
             "providers",
             "settings",
             "proxy_config",
             "proxy_request_logs",
+            "proxy_request_diagnostics",
             "usage_daily_rollups",
             "model_pricing",
         ];
@@ -885,7 +878,7 @@ impl Database {
         .map_err(|e| AppError::Database(e.to_string()))?;
 
         // Stage and fully validate the selected file before touching the live
-        // connection. A corrupt/future-schema backup or failed migration must
+        // connection. A corrupt or incompatible backup must
         // leave the current database unchanged.
         let temp_file = NamedTempFile::new().map_err(|e| AppError::IoContext {
             context: "Failed to create database recovery temporary file".to_string(),
@@ -903,8 +896,6 @@ impl Database {
         Self::validate_sqlite_integrity(&staging_conn)?;
         Self::validate_imported_schema(&staging_conn)?;
         Self::ensure_incremental_auto_vacuum_on_conn(&staging_conn)?;
-        Self::create_tables_on_conn(&staging_conn)?;
-        Self::apply_schema_migrations_on_conn(&staging_conn)?;
         Self::ensure_model_pricing_seeded_on_conn(&staging_conn)?;
         Self::validate_sqlite_integrity(&staging_conn)?;
 
@@ -1169,141 +1160,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn version_19_sql_import_preserves_opaque_tables_and_recorded_costs() -> Result<(), AppError> {
-        let _test_home = TestHomeGuard::new();
-        let source = Database::memory()?;
-        {
-            let conn = crate::database::lock_conn!(source.conn);
-            conn.execute_batch(
-                "CREATE TABLE retired_data (id TEXT PRIMARY KEY, payload BLOB);
-                 INSERT INTO retired_data VALUES ('history', X'00FF1234');
-                 INSERT INTO proxy_request_logs
-                   (request_id, provider_id, app_type, model, total_cost_usd, latency_ms, status_code, created_at, data_source)
-                 VALUES ('old-request', 'old-provider', 'codex', 'gpt-6-astra', '12.345600', 10, 200, 1, 'imported');
-                 PRAGMA user_version = 19;"
-            )?;
-        }
-        let export = source.export_sql_string()?.replacen(
-            super::COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER,
-            "-- Historical SQLite \u{5bfc}\u{51fa}",
-            1,
-        );
-        let target = Database::memory()?;
-        target.import_sql_string(&export)?;
-        let conn = crate::database::lock_conn!(target.conn);
-        assert_eq!(
-            Database::get_user_version(&conn)?,
-            crate::database::SCHEMA_VERSION
-        );
-        assert_eq!(
-            conn.query_row(
-                "SELECT payload FROM retired_data WHERE id = 'history'",
-                [],
-                |row| row.get::<_, Vec<u8>>(0)
-            )?,
-            [0, 255, 18, 52]
-        );
-        assert_eq!(
-            conn.query_row(
-                "SELECT total_cost_usd FROM proxy_request_logs WHERE request_id = 'old-request'",
-                [],
-                |row| row.get::<_, String>(0)
-            )?,
-            "12.345600"
-        );
-        Ok(())
-    }
-
-    #[test]
-    #[serial]
-    fn startup_does_not_migrate_when_the_safety_backup_fails() -> Result<(), AppError> {
-        let _test_home = TestHomeGuard::new();
-        let directory = crate::config::get_app_config_dir();
-        let path = directory.join("copilot-bridge-atlas.db");
-        {
-            let conn = Connection::open(&path)?;
-            Database::create_tables_on_conn(&conn)?;
-            conn.execute("INSERT INTO settings VALUES ('sentinel', 'keep')", [])?;
-            Database::set_user_version(&conn, 22)?;
-        }
-        std::fs::write(directory.join("backups"), "block directory creation")
-            .map_err(|error| AppError::io(&directory, error))?;
-        let error = match Database::init() {
-            Ok(_) => panic!("startup must stop when its safety backup fails"),
-            Err(error) => error,
-        };
-        assert!(error.to_string().contains("safety backup succeeds"));
-        let conn = Connection::open(&path)?;
-        assert_eq!(Database::get_user_version(&conn)?, 22);
-        assert_eq!(
-            conn.query_row(
-                "SELECT value FROM settings WHERE key='sentinel'",
-                [],
-                |row| row.get::<_, String>(0)
-            )?,
-            "keep"
-        );
-        Ok(())
-    }
-
-    #[test]
-    #[serial]
-    fn retired_health_logs_survive_upgrade_maintenance_and_backups() -> Result<(), AppError> {
-        let _test_home = TestHomeGuard::new();
-        update_settings(AppSettings {
-            backup_interval_hours: Some(0),
-            ..Default::default()
-        })?;
-        let source = Database::memory()?;
-        {
-            let conn = crate::database::lock_conn!(source.conn);
-            conn.execute_batch(
-                "CREATE TABLE stream_check_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT, provider_id TEXT NOT NULL,
-                    provider_name TEXT NOT NULL, app_type TEXT NOT NULL, status TEXT NOT NULL,
-                    success INTEGER NOT NULL, message TEXT NOT NULL, response_time_ms INTEGER,
-                    http_status INTEGER, model_used TEXT, retry_count INTEGER DEFAULT 0,
-                    tested_at INTEGER NOT NULL
-                 );
-                 CREATE INDEX idx_stream_check_logs_provider
-                    ON stream_check_logs(app_type, provider_id, tested_at DESC);
-                 INSERT INTO stream_check_logs
-                    (provider_id, provider_name, app_type, status, success, message, tested_at)
-                    VALUES ('p1', 'Copilot', 'codex', 'operational', 1, 'historical result', 1);
-                 PRAGMA user_version = 22;",
-            )?;
-        }
-        source.apply_schema_migrations()?;
-        source.periodic_backup_if_needed()?;
-        let target = Database::memory()?;
-        target.import_sql_string(&source.export_sql_string()?)?;
-        let backup = source.backup_database_file()?.expect("backup exists");
-        let backup_conn = Connection::open(&backup)?;
-        let target_conn = crate::database::lock_conn!(target.conn);
-        for conn in [&backup_conn, &*target_conn] {
-            assert_eq!(
-                Database::get_user_version(conn)?,
-                crate::database::SCHEMA_VERSION
-            );
-            assert_eq!(
-                conn.query_row(
-                    "SELECT message FROM stream_check_logs WHERE id=1",
-                    [],
-                    |row| row.get::<_, String>(0)
-                )?,
-                "historical result"
-            );
-            assert_eq!(
-                conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='idx_stream_check_logs_provider'", [], |row| row.get::<_, i64>(0))?,
-                1
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    #[serial]
-    fn import_accepts_genuine_export_without_providers_or_retired_tables() -> Result<(), AppError> {
+    fn import_accepts_genuine_export_without_providers() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let source = Database::memory()?;
         {
@@ -1364,15 +1221,7 @@ mod tests {
         let error = target
             .import_sql_string(&header_only)
             .expect_err("Files missing the original schema must be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("required Copilot Bridge Atlas tables")
-                || error
-                    .to_string()
-                    .contains("Copilot Bridge Atlas required table"),
-            "Should be rejected by original schema validation, actual error: {error}"
-        );
+        assert!(error.to_string().contains("Atlas 6 requires schema"));
 
         let conn = crate::database::lock_conn!(target.conn);
         let provider: (i64, String) = conn.query_row(
@@ -2485,7 +2334,7 @@ mod tests {
         assert_eq!(
             error.to_string(),
             format!(
-                "Database error: Unsupported database schema {}; this app accepts version 19 through {}.",
+                "Database error: Unsupported database schema {}; Atlas 6 requires schema {}.",
                 crate::database::SCHEMA_VERSION + 1,
                 crate::database::SCHEMA_VERSION,
             ),

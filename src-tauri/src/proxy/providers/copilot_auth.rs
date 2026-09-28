@@ -10,10 +10,9 @@
 //! 4. Use GitHub token to obtain Copilot token
 //! 5. Automatically refresh Copilot token (60 seconds before expiration)
 //!
-//! ## Multiple account support (v3)
+//! ## Multiple account support
 //! - Each GitHub account stores tokens independently
 //! - Provider associates accounts through meta.authBinding
-//! - Automatically migrate v1 single account format to v3 multi-account + default account format
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -128,7 +127,7 @@ fn normalize_github_domain(raw: &str) -> Result<String, CopilotAuthError> {
 }
 
 /// Generate a composite account ID to ensure that user IDs of different GHES instances do not conflict.
-/// The github.com account maintains the original format (backward compatibility), and the GHES account uses the `domain:user_id` format.
+/// github.com uses its numeric ID; GHES uses the `domain:user_id` format.
 fn composite_account_id(domain: &str, user_id: u64) -> String {
     if domain == DEFAULT_GITHUB_DOMAIN {
         user_id.to_string()
@@ -551,14 +550,8 @@ pub struct CopilotAuthStatus {
     pub accounts: Vec<GitHubAccount>,
     /// Default account ID (explicit state, avoids relying on HashMap order)
     pub default_account_id: Option<String>,
-    /// Status message when migration of old authentication data fails (used for front-end prompts)
-    pub migration_error: Option<String>,
-    /// Whether it has been authenticated (backward compatibility: true if you have any account)
+    /// Whether it has been authenticated
     pub authenticated: bool,
-    /// GitHub username (backward compatibility: username of the first account)
-    pub username: Option<String>,
-    /// Copilot token expiration time (backward compatibility: expiration time of the first account)
-    pub expires_at: Option<i64>,
 }
 
 /// Account data (internal storage structure)
@@ -578,11 +571,10 @@ struct GitHubAccountData {
     pub github_domain: String,
 }
 
-/// Persistent storage structure (v3 multiple accounts + default account format)
+/// Persistent storage structure for Atlas 6.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct CopilotAuthStore {
-    /// Storage format version (3 = multiple accounts + default account format)
-    #[serde(default)]
+    /// Storage format version
     version: u32,
     /// Multiple account data (key = GitHub user ID)
     #[serde(default)]
@@ -590,11 +582,6 @@ struct CopilotAuthStore {
     /// Default account ID
     #[serde(skip_serializing_if = "Option::is_none")]
     default_account_id: Option<String>,
-    /// Fields compatible with v1 single account format
-    #[serde(skip_serializing_if = "Option::is_none")]
-    github_token: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    authenticated_at: Option<i64>,
 }
 
 /// Copilot authentication manager (supports multiple accounts)
@@ -616,10 +603,6 @@ pub struct CopilotAuthManager {
     endpoint_locks: Arc<RwLock<HashMap<String, Arc<Mutex<()>>>>>,
     /// storage path
     storage_path: PathBuf,
-    /// Old format token to be migrated
-    pending_migration: Arc<RwLock<Option<String>>>,
-    /// Status message when migration of old authentication data fails
-    migration_error: Arc<RwLock<Option<String>>>,
 }
 
 impl CopilotAuthManager {
@@ -637,8 +620,6 @@ impl CopilotAuthManager {
             api_endpoints: Arc::new(RwLock::new(HashMap::new())),
             endpoint_locks: Arc::new(RwLock::new(HashMap::new())),
             storage_path,
-            pending_migration: Arc::new(RwLock::new(None)),
-            migration_error: Arc::new(RwLock::new(None)),
         };
 
         // Attempt to load from disk (synchronous, no network request initiated)
@@ -736,8 +717,6 @@ impl CopilotAuthManager {
                 *default_account_id = Some(account.id.clone());
             }
         }
-
-        self.set_migration_error(None).await;
 
         // persistence
         self.save_to_disk().await?;
@@ -895,9 +874,6 @@ impl CopilotAuthManager {
         &self,
         account_id: &str,
     ) -> Result<String, CopilotAuthError> {
-        // Make sure the migration is complete
-        self.ensure_migration_complete().await?;
-
         // GHES accounts use GitHub OAuth tokens directly without Copilot token exchange.
         let domain = self.get_account_domain(account_id).await;
         if is_ghes(&domain) {
@@ -956,9 +932,6 @@ impl CopilotAuthManager {
 
     /// Get a valid Copilot Token (backward compatibility: use the first account)
     pub async fn get_valid_token(&self) -> Result<String, CopilotAuthError> {
-        // Make sure the migration is complete
-        self.ensure_migration_complete().await?;
-
         match self.resolve_default_account_id().await {
             Some(id) => self.get_valid_token_for_account(&id).await,
             None => Err(CopilotAuthError::GitHubTokenInvalid),
@@ -985,8 +958,6 @@ impl CopilotAuthManager {
         account_id: &str,
         force_refresh: bool,
     ) -> Result<Vec<CopilotModel>, CopilotAuthError> {
-        self.ensure_migration_complete().await?;
-
         {
             let models = self.copilot_models.read().await;
             if !force_refresh {
@@ -1176,8 +1147,6 @@ impl CopilotAuthManager {
 
     /// Obtain the API endpoint of the specified account (return directly if cache hits, lazily pull from API if not)
     pub async fn get_api_endpoint(&self, account_id: &str) -> String {
-        let _ = self.ensure_migration_complete().await;
-
         {
             let endpoints = self.api_endpoints.read().await;
             if let Some(endpoint) = endpoints.get(account_id) {
@@ -1211,8 +1180,6 @@ impl CopilotAuthManager {
 
     /// Get the API endpoint of the default account
     pub async fn get_default_api_endpoint(&self) -> String {
-        let _ = self.ensure_migration_complete().await;
-
         match self.resolve_default_account_id().await {
             Some(id) => self.get_api_endpoint(&id).await,
             None => {
@@ -1291,35 +1258,16 @@ impl CopilotAuthManager {
 
     /// Get authentication status (supports multiple accounts)
     pub async fn get_status(&self) -> CopilotAuthStatus {
-        // Make sure the migration is complete
-        let _ = self.ensure_migration_complete().await;
-
         let accounts = self.accounts.read().await.clone();
         let default_account_id = self.resolve_default_account_id().await;
-        let copilot_tokens = self.copilot_tokens.read().await.clone();
-        let migration_error = self.migration_error.read().await.clone();
 
         let account_list = Self::sorted_accounts(&accounts, default_account_id.as_deref());
         let authenticated = !account_list.is_empty();
-        let username = default_account_id
-            .as_ref()
-            .and_then(|id| accounts.get(id))
-            .map(|a| a.user.login.clone())
-            .or_else(|| account_list.first().map(|a| a.login.clone()));
-
-        // Get the expiration time of the default account
-        let expires_at = default_account_id
-            .as_ref()
-            .and_then(|id| copilot_tokens.get(id))
-            .map(|t| t.expires_at);
 
         CopilotAuthStatus {
             accounts: account_list,
             default_account_id,
-            migration_error,
             authenticated,
-            username,
-            expires_at,
         }
     }
 
@@ -1342,7 +1290,6 @@ impl CopilotAuthManager {
             let mut default_account_id = self.default_account_id.write().await;
             default_account_id.take();
         }
-        self.set_migration_error(None).await;
         {
             let mut tokens = self.copilot_tokens.write().await;
             tokens.clear();
@@ -1442,11 +1389,6 @@ impl CopilotAuthManager {
                 .entry(account_id.to_string())
                 .or_insert_with(|| Arc::new(Mutex::new(()))),
         )
-    }
-
-    async fn set_migration_error(&self, message: Option<String>) {
-        let mut migration_error = self.migration_error.write().await;
-        *migration_error = message;
     }
 
     fn write_store_atomic(&self, content: &str) -> Result<(), CopilotAuthError> {
@@ -1577,7 +1519,7 @@ impl CopilotAuthManager {
         Ok(())
     }
 
-    // ==================== Storage and Migration ====================
+    // ==================== Storage ====================
 
     /// Load from disk (only load token, do not initiate network request)
     fn load_from_disk_sync(&self) -> Result<(), CopilotAuthError> {
@@ -1589,87 +1531,22 @@ impl CopilotAuthManager {
         let store: CopilotAuthStore = serde_json::from_str(&content)
             .map_err(|e| CopilotAuthError::ParseError(e.to_string()))?;
 
-        if store.version >= 2 {
-            // v2 multiple account format
-            if let Ok(mut accounts) = self.accounts.try_write() {
-                *accounts = store.accounts;
-                log::info!("[CopilotAuth] Load {} accounts from disk", accounts.len());
-            }
-            if let Ok(mut default_account_id) = self.default_account_id.try_write() {
-                *default_account_id = store.default_account_id;
-                if default_account_id.is_none() {
-                    if let Ok(accounts) = self.accounts.try_read() {
-                        *default_account_id = Self::fallback_default_account_id(&accounts);
-                    }
-                }
-            }
-        } else if store.github_token.is_some() {
-            // v1 single account format, marked for migration
-            log::info!("[CopilotAuth] Old format detected, will be migrated on first access");
-            if let Ok(mut pending) = self.pending_migration.try_write() {
-                *pending = store.github_token;
-            }
+        if store.version != 6 {
+            return Err(CopilotAuthError::ParseError(format!(
+                "Unsupported Copilot auth store version {}; Atlas 6 requires version 6",
+                store.version
+            )));
         }
-
-        Ok(())
-    }
-
-    /// Make sure the migration is complete
-    async fn ensure_migration_complete(&self) -> Result<(), CopilotAuthError> {
-        let pending = {
-            let guard = self.pending_migration.read().await;
-            guard.clone()
-        };
-
-        if let Some(legacy_token) = pending {
-            log::info!("[CopilotAuth] Perform legacy format migration");
-
-            // Get user information
-            match self
-                .fetch_user_info_with_token(&legacy_token, DEFAULT_GITHUB_DOMAIN)
-                .await
-            {
-                Ok(user) => {
-                    let account_id = composite_account_id(DEFAULT_GITHUB_DOMAIN, user.id);
-
-                    // Try to get Copilot token to verify subscription
-                    if let Err(e) = self
-                        .fetch_copilot_token_with_github_token(
-                            &legacy_token,
-                            &account_id,
-                            DEFAULT_GITHUB_DOMAIN,
-                        )
-                        .await
-                    {
-                        log::warn!("[CopilotAuth] Failed to authenticate Copilot subscription during migration: {e}");
-                    }
-
-                    // Add account
-                    self.add_account_internal(
-                        legacy_token,
-                        user,
-                        DEFAULT_GITHUB_DOMAIN.to_string(),
-                    )
-                    .await?;
-                    self.set_migration_error(None).await;
-
-                    log::info!("[CopilotAuth] Old format migration completed");
+        if let Ok(mut accounts) = self.accounts.try_write() {
+            *accounts = store.accounts;
+            log::info!("[CopilotAuth] Load {} accounts from disk", accounts.len());
+        }
+        if let Ok(mut default_account_id) = self.default_account_id.try_write() {
+            *default_account_id = store.default_account_id;
+            if default_account_id.is_none() {
+                if let Ok(accounts) = self.accounts.try_read() {
+                    *default_account_id = Self::fallback_default_account_id(&accounts);
                 }
-                Err(e) => {
-                    self.set_migration_error(Some(format!(
-                        "Legacy Copilot auth migration failed: {e}"
-                    )))
-                    .await;
-                    log::warn!(
-                        "[CopilotAuth] Migration failed, the old token may have expired: {e}"
-                    );
-                }
-            }
-
-            // Clear pending migration mark
-            {
-                let mut pending = self.pending_migration.write().await;
-                *pending = None;
             }
         }
 
@@ -1682,11 +1559,9 @@ impl CopilotAuthManager {
         let default_account_id = self.resolve_default_account_id().await;
 
         let store = CopilotAuthStore {
-            version: 3,
+            version: 6,
             accounts,
             default_account_id,
-            github_token: None,
-            authenticated_at: None,
         };
 
         let content = serde_json::to_string_pretty(&store)
@@ -1866,10 +1741,7 @@ mod tests {
                 reauth_required: false,
             }],
             default_account_id: Some("12345".to_string()),
-            migration_error: None,
             authenticated: true,
-            username: Some("testuser".to_string()),
-            expires_at: Some(1234567890),
         };
 
         let json = serde_json::to_string(&status).unwrap();
@@ -1877,8 +1749,6 @@ mod tests {
 
         assert!(parsed.authenticated);
         assert_eq!(parsed.default_account_id, Some("12345".to_string()));
-        assert_eq!(parsed.username, Some("testuser".to_string()));
-        assert_eq!(parsed.expires_at, Some(1234567890));
         assert_eq!(parsed.accounts.len(), 1);
         assert_eq!(parsed.accounts[0].id, "12345");
         assert_eq!(parsed.accounts[0].login, "testuser");
@@ -1915,37 +1785,21 @@ mod tests {
         );
 
         let store = CopilotAuthStore {
-            version: 3,
+            version: 6,
             accounts,
             default_account_id: Some("67890".to_string()),
-            github_token: None,
-            authenticated_at: None,
         };
 
         let json = serde_json::to_string_pretty(&store).unwrap();
         let parsed: CopilotAuthStore = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(parsed.version, 3);
+        assert_eq!(parsed.version, 6);
         assert_eq!(parsed.default_account_id, Some("67890".to_string()));
         assert_eq!(parsed.accounts.len(), 2);
         assert!(parsed.accounts.contains_key("12345"));
         assert!(parsed.accounts.contains_key("67890"));
         assert_eq!(parsed.accounts["12345"].user.login, "alice");
         assert_eq!(parsed.accounts["67890"].user.login, "bob");
-    }
-
-    #[test]
-    fn test_legacy_format_detection() {
-        // Old format (v1)
-        let legacy_json = r#"{
-            "github_token": "gho_legacy_token",
-            "authenticated_at": 1700000000
-        }"#;
-
-        let store: CopilotAuthStore = serde_json::from_str(legacy_json).unwrap();
-        assert_eq!(store.version, 0); // default value
-        assert!(store.github_token.is_some());
-        assert!(store.accounts.is_empty());
     }
 
     #[test]

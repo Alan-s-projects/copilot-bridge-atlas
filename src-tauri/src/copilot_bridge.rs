@@ -106,7 +106,7 @@ fn ensure_copilot_entry(db: &Database) -> Result<(), AppError> {
     db.save_provider("codex", &provider)
 }
 
-/// Keep legacy DB rows and backups for rollback, but never activate their writers.
+/// Initialize the Copilot provider record.
 pub fn initialize(state: &AppState) -> Result<(), AppError> {
     ensure_copilot_entry(&state.db)?;
     let current = current(&state.db)?;

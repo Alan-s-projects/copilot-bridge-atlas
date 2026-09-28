@@ -10,7 +10,6 @@ const authMocks = vi.hoisted(() => ({
 const failedStatus = (refetchStatus: () => void) => ({
   accounts: [],
   defaultAccountId: null,
-  migrationError: null,
   isStatusSuccess: false,
   isStatusError: true,
   hasAnyAccount: false,

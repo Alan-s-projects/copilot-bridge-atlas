@@ -13,7 +13,7 @@ export interface RequestLog {
   costMultiplier: string;
   inputTokens: number;
   /** Normalized by Atlas using the stored row's input-token semantics. */
-  freshInputTokens?: number;
+  freshInputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
@@ -184,37 +184,16 @@ export interface UsageRangeSelection {
   liveEndTime?: boolean;
 }
 
-/** Subset of request-log fields needed to derive cache-normalized input. */
-export interface CacheNormalizableLog {
-  appType: string;
-  inputTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens?: number;
-  freshInputTokens?: number;
-}
+/** Input counts already normalized by the Atlas backend. */
+export type InputTokenUsage = Pick<
+  RequestLog,
+  "freshInputTokens" | "cacheReadTokens" | "cacheCreationTokens"
+>;
 
-/**
- * Prefer the server's normalized count, including legacy and cache-write semantics.
- * Keep the read-only fallback for snapshots from older Atlas versions.
- */
-export function getFreshInputTokens(log: CacheNormalizableLog): number {
-  if (
-    typeof log.freshInputTokens === "number" &&
-    Number.isFinite(log.freshInputTokens) &&
-    log.freshInputTokens >= 0
-  ) {
-    return log.freshInputTokens;
-  }
-  if (log.appType === "codex" && log.inputTokens >= log.cacheReadTokens) {
-    return log.inputTokens - log.cacheReadTokens;
-  }
-  return log.inputTokens;
-}
-
-export function getReadCacheHitRate(log: CacheNormalizableLog): number | null {
-  const cachedInput = log.cacheReadTokens ?? 0;
+export function getReadCacheHitRate(log: InputTokenUsage): number | null {
+  const cachedInput = log.cacheReadTokens;
   const totalInput =
-    getFreshInputTokens(log) + cachedInput + (log.cacheCreationTokens ?? 0);
+    log.freshInputTokens + cachedInput + log.cacheCreationTokens;
   return totalInput > 0 ? cachedInput / totalInput : null;
 }
 

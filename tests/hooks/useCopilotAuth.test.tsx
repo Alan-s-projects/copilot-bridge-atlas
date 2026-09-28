@@ -1,14 +1,15 @@
 import type { ReactNode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useManagedAuth } from "@/components/providers/forms/hooks/useManagedAuth";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useCopilotAuth } from "@/components/providers/forms/hooks/useCopilotAuth";
 
 const apiMocks = vi.hoisted(() => ({
   authGetStatus: vi.fn(),
   authStartLogin: vi.fn(),
   authPollForAccount: vi.fn(),
   authRemoveAccount: vi.fn(),
+  authLogout: vi.fn(),
 }));
 const toastMocks = vi.hoisted(() => ({ success: vi.fn() }));
 
@@ -60,15 +61,17 @@ describe("GitHub Copilot device authentication", () => {
     apiMocks.authStartLogin.mockReset().mockResolvedValue(code);
     apiMocks.authPollForAccount.mockReset().mockResolvedValue(null);
     apiMocks.authRemoveAccount.mockResolvedValue(undefined);
+    apiMocks.authLogout.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("starts the GitHub device flow with the selected domain", async () => {
-    const { result } = renderHook(
-      () => useManagedAuth("github_copilot", "example.ghe.com"),
-      {
-        wrapper: createWrapper(),
-      },
-    );
+    const { result } = renderHook(() => useCopilotAuth("example.ghe.com"), {
+      wrapper: createWrapper(),
+    });
     act(() => result.current.addAccount());
     await waitFor(() => expect(result.current.isPolling).toBe(true));
     expect(apiMocks.authStartLogin).toHaveBeenCalledWith(
@@ -92,7 +95,7 @@ describe("GitHub Copilot device authentication", () => {
           resolveStart = resolve;
         }),
     );
-    const { result } = renderHook(() => useManagedAuth("github_copilot"), {
+    const { result } = renderHook(() => useCopilotAuth(), {
       wrapper: createWrapper(),
     });
     act(() => result.current.addAccount());
@@ -112,7 +115,7 @@ describe("GitHub Copilot device authentication", () => {
           resolvePoll = resolve;
         }),
     );
-    const { result } = renderHook(() => useManagedAuth("github_copilot"), {
+    const { result } = renderHook(() => useCopilotAuth(), {
       wrapper: createWrapper(),
     });
     await waitFor(() => expect(result.current.isStatusSuccess).toBe(true));
@@ -134,10 +137,9 @@ describe("GitHub Copilot device authentication", () => {
           resolveStart = resolve;
         }),
     );
-    const { result, unmount } = renderHook(
-      () => useManagedAuth("github_copilot"),
-      { wrapper: createWrapper() },
-    );
+    const { result, unmount } = renderHook(() => useCopilotAuth(), {
+      wrapper: createWrapper(),
+    });
     act(() => result.current.addAccount());
     await waitFor(() => expect(apiMocks.authStartLogin).toHaveBeenCalled());
     unmount();
@@ -146,7 +148,7 @@ describe("GitHub Copilot device authentication", () => {
   });
 
   it("removes a Copilot account and refreshes status", async () => {
-    const { result } = renderHook(() => useManagedAuth("github_copilot"), {
+    const { result } = renderHook(() => useCopilotAuth(), {
       wrapper: createWrapper(),
     });
     await waitFor(() => expect(result.current.isStatusSuccess).toBe(true));
@@ -164,5 +166,83 @@ describe("GitHub Copilot device authentication", () => {
       ),
     );
     expect(toastMocks.success).toHaveBeenCalled();
+  });
+
+  it("waits for a slow poll to finish before scheduling the next request", async () => {
+    vi.useFakeTimers();
+    let resolvePoll!: (value: null) => void;
+    apiMocks.authPollForAccount.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePoll = resolve;
+        }),
+    );
+    const { result } = renderHook(() => useCopilotAuth(), {
+      wrapper: createWrapper(),
+    });
+    act(() => result.current.addAccount());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(apiMocks.authPollForAccount).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(apiMocks.authPollForAccount).toHaveBeenCalledTimes(1);
+    await act(async () => resolvePoll(null));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(7_999);
+    });
+    expect(apiMocks.authPollForAccount).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(apiMocks.authPollForAccount).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["logout", "remove"] as const)(
+    "cancels a pending login when the user selects %s",
+    async (action) => {
+      let resolveStart!: (value: typeof code) => void;
+      apiMocks.authStartLogin.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveStart = resolve;
+          }),
+      );
+      const { result } = renderHook(() => useCopilotAuth(), {
+        wrapper: createWrapper(),
+      });
+      act(() => result.current.addAccount());
+      await waitFor(() => expect(apiMocks.authStartLogin).toHaveBeenCalled());
+      act(() => {
+        if (action === "logout") result.current.logout();
+        else result.current.removeAccount("acct-1");
+      });
+      await waitFor(() =>
+        expect(
+          action === "logout"
+            ? apiMocks.authLogout
+            : apiMocks.authRemoveAccount,
+        ).toHaveBeenCalled(),
+      );
+      await act(async () => resolveStart(code));
+      expect(result.current.deviceCode).toBeNull();
+      expect(result.current.pollingState).toBe("idle");
+      expect(apiMocks.authPollForAccount).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reports polling failures even when their message contains pending", async () => {
+    apiMocks.authPollForAccount.mockRejectedValue(
+      new Error("Could not read pending account storage"),
+    );
+    const { result } = renderHook(() => useCopilotAuth(), {
+      wrapper: createWrapper(),
+    });
+    act(() => result.current.addAccount());
+    await waitFor(() => expect(result.current.pollingState).toBe("error"));
+    expect(result.current.error).toBe("Could not read pending account storage");
   });
 });

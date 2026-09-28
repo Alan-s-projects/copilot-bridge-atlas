@@ -1,7 +1,6 @@
 //! Read-only Codex discovery and Atlas-owned model catalog generation.
 use crate::config::get_home_dir;
 use crate::error::AppError;
-use crate::model_capabilities::{image_input_capability_from_modalities, ImageInputCapability};
 use crate::proxy::providers::copilot_model_map::is_valid_model_id;
 use once_cell::sync::OnceCell;
 use serde_json::{json, Value};
@@ -46,15 +45,16 @@ fn extract_codex_top_level_u64(config_text: &str, field: &str) -> Option<u64> {
         .filter(|value| *value > 0)
 }
 
-fn codex_catalog_input_modalities(
-    model: &str,
-    declared_modalities: Option<&[String]>,
-) -> Vec<String> {
-    let modalities = match image_input_capability_from_modalities(model, declared_modalities) {
-        ImageInputCapability::Supported => &["text", "image"][..],
-        ImageInputCapability::Unsupported | ImageInputCapability::Unknown => &["text"][..],
-    };
-    modalities.iter().map(|item| (*item).to_string()).collect()
+fn codex_catalog_input_modalities(declared_modalities: Option<&[String]>) -> Vec<String> {
+    let mut modalities = vec!["text".to_string()];
+    if declared_modalities.is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item.trim().eq_ignore_ascii_case("image"))
+    }) {
+        modalities.push("image".to_string());
+    }
+    modalities
 }
 
 /// Canonical reasoning effort levels Codex understands. `none` disables thinking.
@@ -187,7 +187,6 @@ fn codex_catalog_model_entry(
     entry_obj.insert(
         "input_modalities".to_string(),
         json!(codex_catalog_input_modalities(
-            &spec.model,
             spec.input_modalities.as_deref()
         )),
     );

@@ -3,6 +3,44 @@ use crate::Provider;
 use serde_json::json;
 
 #[test]
+fn malformed_provider_json_is_reported_without_replacing_saved_configuration() {
+    let db = Database::memory().unwrap();
+    db.save_provider(
+        "codex",
+        &Provider::with_id("copilot".into(), "GitHub Copilot".into(), json!({})),
+    )
+    .unwrap();
+
+    for (settings, meta) in [
+        ("{broken", "{}"),
+        ("{}", "{broken"),
+        ("{}", r#"{"authBinding":false}"#),
+    ] {
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE providers SET settings_config = ?1, meta = ?2 WHERE id = 'copilot'",
+                [settings, meta],
+            )
+            .unwrap();
+        }
+        assert!(db.get_provider_by_id("copilot", "codex").is_err());
+        assert!(db.get_all_providers("codex").is_err());
+        let saved: (String, String) = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT settings_config, meta FROM providers WHERE id = 'copilot'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(saved, (settings.to_string(), meta.to_string()));
+    }
+}
+
+#[test]
 fn fresh_database_creates_only_bridge_tables() {
     let db = Database::memory().unwrap();
     let conn = db.conn.lock().unwrap();

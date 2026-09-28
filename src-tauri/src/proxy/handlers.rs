@@ -219,9 +219,8 @@ pub async fn handle_responses(
             codex_tool_context.clone(),
         )
         .await
-        .map_err(|error| {
-            ctx.diagnostics.proxy_failure("adapt_response", &error);
-            error
+        .inspect_err(|error| {
+            ctx.diagnostics.proxy_failure("adapt_response", error);
         })?
     } else {
         response
@@ -237,9 +236,8 @@ pub async fn handle_responses(
             codex_tool_context,
         )
         .await
-        .map_err(|error| {
-            ctx.diagnostics.proxy_failure("chat_conversion", &error);
-            error
+        .inspect_err(|error| {
+            ctx.diagnostics.proxy_failure("chat_conversion", error);
         });
     }
 
@@ -267,9 +265,8 @@ pub async fn handle_responses(
         connection_guard,
     )
     .await
-    .map_err(|error| {
-        ctx.diagnostics.proxy_failure("response_processing", &error);
-        error
+    .inspect_err(|error| {
+        ctx.diagnostics.proxy_failure("response_processing", error);
     })
 }
 
@@ -352,9 +349,8 @@ async fn handle_codex_standalone_passthrough(
         connection_guard,
     )
     .await
-    .map_err(|error| {
-        ctx.diagnostics.proxy_failure("response_processing", &error);
-        error
+    .inspect_err(|error| {
+        ctx.diagnostics.proxy_failure("response_processing", error);
     })
 }
 
@@ -413,9 +409,8 @@ pub async fn handle_responses_compact(
             codex_tool_context,
         )
         .await
-        .map_err(|error| {
-            ctx.diagnostics.proxy_failure("chat_conversion", &error);
-            error
+        .inspect_err(|error| {
+            ctx.diagnostics.proxy_failure("chat_conversion", error);
         });
     }
 
@@ -427,9 +422,8 @@ pub async fn handle_responses_compact(
         connection_guard,
     )
     .await
-    .map_err(|error| {
-        ctx.diagnostics.proxy_failure("response_processing", &error);
-        error
+    .inspect_err(|error| {
+        ctx.diagnostics.proxy_failure("response_processing", error);
     })
 }
 
@@ -600,12 +594,11 @@ async fn handle_codex_chat_to_responses_transform(
         chat_response,
         &tool_context,
     )
-    .map_err(|e| {
+    .inspect_err(|_| {
         log::error!(
             "[Codex] Chat response conversion failed: atlas_id={}",
             ctx.diagnostics.id
         );
-        e
     })?;
     state
         .codex_chat_history

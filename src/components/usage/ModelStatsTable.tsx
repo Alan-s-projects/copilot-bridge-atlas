@@ -118,8 +118,6 @@ export function ModelStatsTable({
                     fresh={stat.totalInputTokens}
                     cached={stat.totalCacheReadTokens}
                     hit={formatReadCacheHitRate({
-                      appType: "codex",
-                      inputTokens: stat.totalInputTokens,
                       freshInputTokens: stat.totalInputTokens,
                       cacheReadTokens: stat.totalCacheReadTokens,
                       cacheCreationTokens: stat.totalCacheCreationTokens,

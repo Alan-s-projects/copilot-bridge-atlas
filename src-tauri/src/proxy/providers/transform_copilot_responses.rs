@@ -164,12 +164,8 @@ fn restore_item(item: &mut Value, context: &CodexToolContext) -> Option<Complete
     if item["type"] != "function_call" {
         return None;
     }
-    let Some(name) = item.get("name").and_then(Value::as_str) else {
-        return None;
-    };
-    if context.lookup_chat_name(name).is_none() {
-        return None;
-    }
+    let name = item.get("name").and_then(Value::as_str)?;
+    context.lookup_chat_name(name)?;
     let repair = context.should_buffer_arguments(name);
     *item = response_tool_call_item_from_chat_name(
         item.get("id").and_then(Value::as_str).unwrap_or(""),

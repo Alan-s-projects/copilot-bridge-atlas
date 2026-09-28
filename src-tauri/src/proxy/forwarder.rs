@@ -355,13 +355,14 @@ impl RequestForwarder {
         let outgoing_bytes = body_bytes.len();
         // Reuse the pooled transport, including the configured HTTP/SOCKS proxy.
         #[cfg(not(test))]
-        let client = super::http_client::get();
+        let client = super::http_client::get().map_err(ProxyError::Internal)?;
         #[cfg(test)]
         let client = self
             .copilot_fixture
             .as_ref()
-            .map(|fixture| fixture.client.clone())
-            .unwrap_or_else(super::http_client::get);
+            .map(|fixture| Ok(fixture.client.clone()))
+            .unwrap_or_else(super::http_client::get)
+            .map_err(ProxyError::Internal)?;
         // Retain the sent value even when the upstream returns an error.
         reasoning_effort.record_applied(&body);
         if let Some(diagnostics) = &self.diagnostics {
@@ -430,7 +431,7 @@ impl RequestForwarder {
                 }
             };
             let decompressed = encoding.as_deref().and_then(|encoding| {
-                decompress_body_with_limit(&encoding, &raw, MAX_RESPONSE_BODY_BYTES)
+                decompress_body_with_limit(encoding, &raw, MAX_RESPONSE_BODY_BYTES)
                     .ok()
                     .flatten()
             });
@@ -645,7 +646,7 @@ fn apply_codex_copilot_model(
                     .rev()
                     .find(|candidate| supported.iter().any(|s| s.eq_ignore_ascii_case(candidate)))
                     .copied()
-                    .or_else(|| supported.iter().rev().next().map(String::as_str));
+                    .or_else(|| supported.last().map(String::as_str));
                 if let Some(level) = fallback.filter(|level| *level != "none") {
                     body["reasoning"]["effort"] = json!(level);
                 } else if let Some(object) = body.as_object_mut() {
@@ -2242,7 +2243,7 @@ mod tests {
             live.endpoint = endpoint;
             live.token = token;
             live.models = vec![model];
-            live.client = crate::proxy::http_client::get();
+            live.client = crate::proxy::http_client::get().unwrap();
 
             for (name, prompt, parameters) in [
                 (

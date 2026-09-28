@@ -31,7 +31,7 @@ fn newer_release_version(tag: &str, current: &str) -> Option<String> {
 /// Check the latest published release without opening a browser or modifying settings.
 #[tauri::command]
 pub async fn get_available_release_version() -> Result<Option<String>, String> {
-    let release = crate::proxy::http_client::get()
+    let release = crate::proxy::http_client::get()?
         .get(LATEST_RELEASE_URL)
         .header(reqwest::header::USER_AGENT, "copilot-bridge-atlas")
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")

@@ -36,7 +36,6 @@ describe("request input details", () => {
         <RequestInputValue
           log={{
             ...log,
-            inputTokens: 0,
             freshInputTokens: 0,
             cacheReadTokens: 0,
             cacheCreationTokens: 0,

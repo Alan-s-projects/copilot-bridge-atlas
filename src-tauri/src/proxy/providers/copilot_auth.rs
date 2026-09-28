@@ -17,8 +17,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -550,7 +548,7 @@ struct GitHubAccountData {
     /// GitHub OAuth Token
     ///
     /// Security Note: In order to reuse login status, the token will be persisted locally.
-    /// The current implementation is not connected to the system keychain and relies on private file permissions (0600 under Unix) for protection.
+    /// Stored in Atlas's per-user data directory; not connected to the system keychain.
     pub github_token: String,
     /// User information
     pub user: GitHubUser,
@@ -745,6 +743,7 @@ impl CopilotAuthManager {
         log::info!("[CopilotAuth] Start device code process (domain: {domain})");
 
         let response = crate::proxy::http_client::get()
+            .map_err(CopilotAuthError::NetworkError)?
             .post(github_device_code_url(&domain))
             .header("Accept", "application/json")
             .header("User-Agent", COPILOT_USER_AGENT)
@@ -789,6 +788,7 @@ impl CopilotAuthManager {
         log::debug!("[CopilotAuth] Poll OAuth Token (domain: {domain})");
 
         let response = crate::proxy::http_client::get()
+            .map_err(CopilotAuthError::NetworkError)?
             .post(github_oauth_token_url(&domain))
             .header("Accept", "application/json")
             .header("User-Agent", COPILOT_USER_AGENT)
@@ -1000,6 +1000,7 @@ impl CopilotAuthManager {
         log::info!("[CopilotAuth] Get the Copilot available models for account {account_id}");
 
         let response = crate::proxy::http_client::get()
+            .map_err(CopilotAuthError::NetworkError)?
             .get(&models_url)
             .header("Authorization", format!("Bearer {copilot_token}"))
             .header("Content-Type", "application/json")
@@ -1078,6 +1079,7 @@ impl CopilotAuthManager {
         log::info!("[CopilotAuth] Get the Copilot usage of account {account_id}");
 
         let response = crate::proxy::http_client::get()
+            .map_err(CopilotAuthError::NetworkError)?
             .get(copilot_usage_url(&domain))
             .header("Authorization", format!("token {github_token}"))
             .header("Content-Type", "application/json")
@@ -1188,6 +1190,7 @@ impl CopilotAuthManager {
         log::debug!("[CopilotAuth] Lazy pull of dynamic API endpoint for account {account_id}");
 
         let response = crate::proxy::http_client::get()
+            .map_err(CopilotAuthError::NetworkError)?
             .get(copilot_usage_url(&domain))
             .header("Authorization", format!("token {github_token}"))
             .header("Content-Type", "application/json")
@@ -1378,44 +1381,6 @@ impl CopilotAuthManager {
         )
     }
 
-    fn write_store_atomic(&self, content: &str) -> Result<(), CopilotAuthError> {
-        if let Some(parent) = self.storage_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        let parent = self
-            .storage_path
-            .parent()
-            .ok_or_else(|| CopilotAuthError::IoError("Invalid storage path".to_string()))?;
-        let file_name = self
-            .storage_path
-            .file_name()
-            .ok_or_else(|| CopilotAuthError::IoError("Invalid storage file name".to_string()))?
-            .to_string_lossy()
-            .to_string();
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let tmp_path = parent.join(format!("{file_name}.tmp.{ts}"));
-
-        {
-            let mut file = fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&tmp_path)?;
-            file.write_all(content.as_bytes())?;
-            file.flush()?;
-
-            if self.storage_path.exists() {
-                let _ = fs::remove_file(&self.storage_path);
-            }
-            fs::rename(&tmp_path, &self.storage_path)?;
-        }
-
-        Ok(())
-    }
-
     /// Obtain GitHub user information using the specified token
     async fn fetch_user_info_with_token(
         &self,
@@ -1423,6 +1388,7 @@ impl CopilotAuthManager {
         domain: &str,
     ) -> Result<GitHubUser, CopilotAuthError> {
         let response = crate::proxy::http_client::get()
+            .map_err(CopilotAuthError::NetworkError)?
             .get(github_user_url(domain))
             .header("Authorization", format!("token {github_token}"))
             .header("User-Agent", COPILOT_USER_AGENT)
@@ -1460,6 +1426,7 @@ impl CopilotAuthManager {
         );
 
         let response = crate::proxy::http_client::get()
+            .map_err(CopilotAuthError::NetworkError)?
             .get(copilot_token_url(domain))
             .header("Authorization", format!("token {github_token}"))
             .header("User-Agent", COPILOT_USER_AGENT)
@@ -1554,7 +1521,8 @@ impl CopilotAuthManager {
         let content = serde_json::to_string_pretty(&store)
             .map_err(|e| CopilotAuthError::ParseError(e.to_string()))?;
 
-        self.write_store_atomic(&content)?;
+        crate::config::atomic_write(&self.storage_path, content.as_bytes())
+            .map_err(|error| CopilotAuthError::IoError(error.to_string()))?;
 
         log::info!(
             "[CopilotAuth] Saved to disk successfully ({} accounts)",
@@ -1574,6 +1542,63 @@ fn auth_header_value(value: &str) -> Result<http::HeaderValue, ProxyError> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn auth_store_replaces_existing_credentials_without_leaving_temporary_files() {
+        let directory = tempdir().unwrap();
+        let manager = CopilotAuthManager::new(directory.path().to_path_buf());
+        manager.save_to_disk().await.unwrap();
+        manager.accounts.write().await.insert(
+            "123".into(),
+            GitHubAccountData {
+                github_token: "test-token".into(),
+                user: GitHubUser {
+                    login: "alice".into(),
+                    id: 123,
+                    avatar_url: None,
+                },
+                authenticated_at: 1,
+                github_domain: DEFAULT_GITHUB_DOMAIN.into(),
+            },
+        );
+        manager.save_to_disk().await.unwrap();
+
+        let restored = CopilotAuthManager::new(directory.path().to_path_buf());
+        assert_eq!(
+            restored.accounts.read().await["123"].github_token,
+            "test-token"
+        );
+        assert_eq!(
+            restored.resolve_default_account_id().await.as_deref(),
+            Some("123")
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn failed_auth_store_replacement_preserves_credentials_and_cleans_up() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+
+        let directory = tempdir().unwrap();
+        let manager = CopilotAuthManager::new(directory.path().to_path_buf());
+        manager.save_to_disk().await.unwrap();
+        let original = std::fs::read(&manager.storage_path).unwrap();
+        let held_file = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&manager.storage_path)
+            .unwrap();
+
+        assert!(matches!(
+            manager.save_to_disk().await,
+            Err(CopilotAuthError::IoError(_))
+        ));
+        drop(held_file);
+        assert_eq!(std::fs::read(&manager.storage_path).unwrap(), original);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
 
     #[test]
     fn model_cache_expires_and_unknown_model_metadata_is_preserved() {

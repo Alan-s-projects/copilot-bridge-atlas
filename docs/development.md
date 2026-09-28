@@ -50,7 +50,7 @@ Atlas keeps one provider, GitHub Copilot, regardless of the model vendor. Respon
 - Database: `copilot-bridge-atlas.db`
 - Generated catalog: `copilot-model-catalog.json` inside the data directory
 
-The app uses its own installer identity, settings, logs, startup entry, and WebView profile. Atlas 6 creates schema 25 in a clean data directory and accepts only Atlas 6 SQL/SQLite backups. Older databases are rejected without modification. Uninstalling the MSI may leave `%USERPROFILE%\.copilot-bridge-atlas` in place; a fresh installation needs a clean folder. Atlas never deletes that folder automatically. Atlas 6 backups can be restored through Settings → Backup & Restore.
+The app uses its own installer identity, settings, logs, startup entry, and WebView profile. Atlas 6 creates its database in `%USERPROFILE%\.copilot-bridge-atlas` with its own application ID and schema version 1. Its backups can be restored through Settings → Backup & Restore.
 
 ## Develop and release
 

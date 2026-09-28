@@ -1,4 +1,3 @@
-use crate::init_status::InitErrorPayload;
 use serde::Deserialize;
 use std::time::Duration;
 use tauri::AppHandle;
@@ -97,13 +96,6 @@ pub async fn check_for_updates(handle: AppHandle) -> Result<bool, String> {
         .map_err(|e| format!("Failed to open update page: {e}"))?;
 
     Ok(true)
-}
-
-/// Get the initialization errors during application startup (if any).
-/// It is used for the front-end to actively pull in the early stage to avoid missing prompts caused by event subscription competition.
-#[tauri::command]
-pub async fn get_init_error() -> Result<Option<InitErrorPayload>, String> {
-    Ok(crate::init_status::get_init_error())
 }
 
 /// Set the Windows title-bar theme.

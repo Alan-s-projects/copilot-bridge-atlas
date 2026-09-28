@@ -17,9 +17,9 @@ use std::sync::Mutex;
 
 // DAO methods are provided through impl Database, no additional export is required
 
-/// Current Schema version number
-/// Atlas 6 starts with a new schema and does not upgrade earlier databases.
-pub(crate) const SCHEMA_VERSION: i32 = 25;
+/// Atlas 6 storage format.
+pub(crate) const SCHEMA_VERSION: i32 = 1;
+pub(crate) const APPLICATION_ID: i32 = 0x4154_4c36; // ATL6
 
 /// Safely acquire Mutex locks and avoid unwrap panics
 macro_rules! lock_conn {
@@ -89,21 +89,6 @@ impl Database {
         }
 
         Ok(db)
-    }
-
-    /// Detect an incompatible schema before opening the normal app window.
-    pub fn stored_user_version_is_incompatible(
-        db_path: &std::path::Path,
-    ) -> Result<Option<i32>, AppError> {
-        if !db_path.exists() {
-            return Ok(None);
-        }
-        let conn = Connection::open(db_path).map_err(|e| AppError::Database(e.to_string()))?;
-        let version = Self::get_user_version(&conn)?;
-        Ok(
-            (version != SCHEMA_VERSION && (version != 0 || Self::has_user_tables(&conn)?))
-                .then_some(version),
-        )
     }
 
     /// Create an in-memory database (for testing)

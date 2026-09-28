@@ -6,7 +6,6 @@ export interface Provider {
 }
 
 interface AuthBinding {
-  source: "provider_config" | "managed_account";
   authProvider?: string;
   accountId?: string;
 }

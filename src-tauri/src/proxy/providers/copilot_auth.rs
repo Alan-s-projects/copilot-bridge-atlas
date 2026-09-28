@@ -44,10 +44,6 @@ fn github_client_id(domain: &str) -> &'static str {
     }
 }
 
-fn default_github_domain() -> String {
-    DEFAULT_GITHUB_DOMAIN.to_string()
-}
-
 /// GitHub device code URL
 fn github_device_code_url(domain: &str) -> String {
     format!("https://{domain}/login/device/code")
@@ -522,12 +518,7 @@ pub struct GitHubAccount {
     /// Authentication timestamp
     pub authenticated_at: i64,
     /// GitHub domain name (github.com or GHES domain name)
-    #[serde(default = "default_github_domain")]
     pub github_domain: String,
-    /// Whether the hosting account needs to log in again to complete the missing credentials.
-    /// Codex: true for old accounts that lack persistent id_token; Copilot is always false.
-    #[serde(default)]
-    pub reauth_required: bool,
 }
 
 impl From<&GitHubAccountData> for GitHubAccount {
@@ -538,7 +529,6 @@ impl From<&GitHubAccountData> for GitHubAccount {
             avatar_url: data.user.avatar_url.clone(),
             authenticated_at: data.authenticated_at,
             github_domain: data.github_domain.clone(),
-            reauth_required: false,
         }
     }
 }
@@ -567,17 +557,15 @@ struct GitHubAccountData {
     /// Authentication timestamp
     pub authenticated_at: i64,
     /// GitHub domain name (github.com or GHES domain name)
-    #[serde(default = "default_github_domain")]
     pub github_domain: String,
 }
 
 /// Persistent storage structure for Atlas 6.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CopilotAuthStore {
     /// Storage format version
     version: u32,
     /// Multiple account data (key = GitHub user ID)
-    #[serde(default)]
     accounts: HashMap<String, GitHubAccountData>,
     /// Default account ID
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -703,7 +691,6 @@ impl CopilotAuthManager {
             avatar_url: user.avatar_url.clone(),
             authenticated_at: now,
             github_domain,
-            reauth_required: false,
         };
 
         {
@@ -930,7 +917,7 @@ impl CopilotAuthManager {
         )
     }
 
-    /// Get a valid Copilot Token (backward compatibility: use the first account)
+    /// Get a valid token for the default account.
     pub async fn get_valid_token(&self) -> Result<String, CopilotAuthError> {
         match self.resolve_default_account_id().await {
             Some(id) => self.get_valid_token_for_account(&id).await,
@@ -1057,7 +1044,7 @@ impl CopilotAuthManager {
         Ok(super::copilot_model_map::resolve_model(model_id, &models))
     }
 
-    /// Get the list of available models for Copilot (backward compatibility: use the first account)
+    /// Get available models for the default account.
     pub async fn fetch_models(&self) -> Result<Vec<CopilotModel>, CopilotAuthError> {
         match self.resolve_default_account_id().await {
             Some(id) => self.fetch_models_for_account(&id).await,
@@ -1135,7 +1122,7 @@ impl CopilotAuthManager {
         Ok(usage)
     }
 
-    /// Get Copilot usage information (backward compatibility: use first account)
+    /// Get Copilot usage for the default account.
     pub async fn fetch_usage(&self) -> Result<CopilotUsageResponse, CopilotAuthError> {
         match self.resolve_default_account_id().await {
             Some(id) => self.fetch_usage_for_account(&id).await,
@@ -1531,9 +1518,9 @@ impl CopilotAuthManager {
         let store: CopilotAuthStore = serde_json::from_str(&content)
             .map_err(|e| CopilotAuthError::ParseError(e.to_string()))?;
 
-        if store.version != 6 {
+        if store.version != 1 {
             return Err(CopilotAuthError::ParseError(format!(
-                "Unsupported Copilot auth store version {}; Atlas 6 requires version 6",
+                "Unsupported Copilot auth store version {}; expected Atlas 6 format",
                 store.version
             )));
         }
@@ -1559,7 +1546,7 @@ impl CopilotAuthManager {
         let default_account_id = self.resolve_default_account_id().await;
 
         let store = CopilotAuthStore {
-            version: 6,
+            version: 1,
             accounts,
             default_account_id,
         };
@@ -1738,7 +1725,6 @@ mod tests {
                 avatar_url: Some("https://example.com/avatar.png".to_string()),
                 authenticated_at: 1234567890,
                 github_domain: DEFAULT_GITHUB_DOMAIN.to_string(),
-                reauth_required: false,
             }],
             default_account_id: Some("12345".to_string()),
             authenticated: true,
@@ -1785,7 +1771,7 @@ mod tests {
         );
 
         let store = CopilotAuthStore {
-            version: 6,
+            version: 1,
             accounts,
             default_account_id: Some("67890".to_string()),
         };
@@ -1793,7 +1779,7 @@ mod tests {
         let json = serde_json::to_string_pretty(&store).unwrap();
         let parsed: CopilotAuthStore = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(parsed.version, 6);
+        assert_eq!(parsed.version, 1);
         assert_eq!(parsed.default_account_id, Some("67890".to_string()));
         assert_eq!(parsed.accounts.len(), 2);
         assert!(parsed.accounts.contains_key("12345"));
@@ -2164,7 +2150,7 @@ mod tests {
 
     #[test]
     fn test_composite_account_id() {
-        // github.com maintains the original format (backwards compatible)
+        // github.com uses the numeric user ID.
         assert_eq!(composite_account_id("github.com", 12345), "12345");
 
         // GHES uses composite format

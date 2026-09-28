@@ -30,7 +30,6 @@ const provider: Provider = {
   meta: {
     providerType: "github_copilot",
     authBinding: {
-      source: "managed_account",
       authProvider: "github_copilot",
       accountId: "account-1",
     },

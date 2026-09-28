@@ -1,7 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import { DatabaseUpgrade } from "./components/DatabaseUpgrade";
 import "./index.css";
 // Import internationalization configuration
 import i18n from "./i18n";
@@ -10,7 +9,6 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { queryClient } from "@/lib/query";
 import { Toaster } from "@/components/ui/sonner";
 import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
 import { message } from "@tauri-apps/plugin-dialog";
 import { exit } from "@tauri-apps/plugin-process";
 import { FrontendErrorBoundary } from "./components/FrontendErrorBoundary";
@@ -26,8 +24,6 @@ installGlobalErrorHandlers();
 interface ConfigLoadErrorPayload {
   path?: string;
   error?: string;
-  /** An incompatible database renders the recovery view. */
-  kind?: string;
 }
 
 /**
@@ -68,38 +64,7 @@ try {
   reportFrontendError("config_load_error_listener", e);
 }
 
-async function bootstrap() {
-  // Start early active query of backend initialization errors to avoid event race conditions
-  try {
-    const initError = (await invoke(
-      "get_init_error",
-    )) as ConfigLoadErrorPayload | null;
-    if (initError && initError.kind === "db_schema_incompatible") {
-      ReactDOM.createRoot(document.getElementById("root")!).render(
-        <React.StrictMode>
-          <FrontendErrorBoundary>
-            <ThemeProvider
-              defaultTheme="system"
-              storageKey="copilot-bridge-atlas-theme"
-            >
-              <DatabaseUpgrade payload={initError} />
-              <Toaster />
-            </ThemeProvider>
-          </FrontendErrorBoundary>
-        </React.StrictMode>,
-      );
-      return;
-    }
-    if (initError && (initError.path || initError.error)) {
-      await handleConfigLoadError(initError);
-      // Note: It will not be executed here because exit(1) will terminate the process
-      return;
-    }
-  } catch (e) {
-    // Ignore pull errors and continue rendering
-    reportFrontendError("get_init_error", e);
-  }
-
+function bootstrap() {
   initializeWindowActivity();
 
   ReactDOM.createRoot(document.getElementById("root")!).render(

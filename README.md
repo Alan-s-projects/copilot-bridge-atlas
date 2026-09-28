@@ -6,10 +6,7 @@ A Desktop app connecting Codex → GitHub Copilot.
 
 Download the Windows x64 MSI from [Releases](https://github.com/Alan-s-projects/copilot-bridge-atlas/releases).
 
-Atlas 6.0.0 starts with a fresh data folder at
-`%USERPROFILE%\.copilot-bridge-atlas`. An MSI uninstall may leave an older
-folder behind. Move it aside before first launch if you previously used Atlas;
-v6 does not migrate prior databases, auth stores, or backups.
+Atlas 6.0.0 stores its data in `%USERPROFILE%\.copilot-bridge-atlas`.
 
 1. Open **Settings → Accounts** to sign in to GitHub.
 2. Then **Settings → Models** to refresh your models.

@@ -98,7 +98,7 @@ mod tests {
         // Unknown imported data is not reinterpreted.
         conn.execute(
             "INSERT INTO proxy_request_logs (request_id, app_type, input_tokens, cache_read_tokens)
-             VALUES ('legacy-1', 'legacy-import', 200, 5000)",
+             VALUES ('other-1', 'other-app', 200, 5000)",
             [],
         )
         .unwrap();

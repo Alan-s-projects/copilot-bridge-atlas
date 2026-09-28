@@ -30,18 +30,8 @@ impl Provider {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum AuthBindingSource {
-    #[default]
-    ProviderConfig,
-    ManagedAccount,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AuthBinding {
-    #[serde(default)]
-    pub source: AuthBindingSource,
     #[serde(rename = "authProvider", skip_serializing_if = "Option::is_none")]
     pub auth_provider: Option<String>,
     #[serde(rename = "accountId", skip_serializing_if = "Option::is_none")]
@@ -62,10 +52,9 @@ impl ProviderMeta {
             return None;
         }
         self.auth_binding.as_ref().and_then(|binding| {
-            (binding.source == AuthBindingSource::ManagedAccount
-                && binding.auth_provider.as_deref() == Some(auth_provider))
-            .then(|| binding.account_id.clone())
-            .flatten()
+            (binding.auth_provider.as_deref() == Some(auth_provider))
+                .then(|| binding.account_id.clone())
+                .flatten()
         })
     }
 }
@@ -80,7 +69,6 @@ mod tests {
         let meta: ProviderMeta = serde_json::from_value(json!({
             "providerType": "github_copilot",
             "authBinding": {
-                "source": "managed_account",
                 "authProvider": "github_copilot",
                 "accountId": "account"
             }

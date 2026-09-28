@@ -7,7 +7,6 @@ mod config;
 mod copilot_bridge;
 mod database;
 mod error;
-mod init_status;
 mod model_capabilities;
 mod panic_hook;
 mod provider;
@@ -145,15 +144,6 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                // In the recovery mode where the database version is too new, there is no tray to recall, and you will exit immediately after closing to avoid the hidden background of the application.
-                let in_db_recovery = crate::init_status::get_init_error()
-                    .map(|p| p.kind.as_deref() == Some("db_schema_incompatible"))
-                    .unwrap_or(false);
-                if in_db_recovery {
-                    window.app_handle().exit(0);
-                    return;
-                }
-
                 let _ = window.hide();
                 let _ = window.set_skip_taskbar(true);
             }
@@ -217,34 +207,6 @@ pub fn run() {
             // Initialize database
             let app_config_dir = crate::config::get_app_config_dir();
             let db_path = app_config_dir.join("copilot-bridge-atlas.db");
-
-            // Reject incompatible databases before attempting schema writes.
-            match crate::database::Database::stored_user_version_is_incompatible(&db_path) {
-                Ok(Some(version)) => {
-                    log::warn!("Database schema v{version} is incompatible with Atlas 6; opening the recovery view");
-                    crate::init_status::set_init_error(crate::init_status::InitErrorPayload {
-                        path: db_path.display().to_string(),
-                        error: format!(
-                            "Database schema {version} is incompatible with Atlas 6 (schema {}).",
-                            crate::database::SCHEMA_VERSION
-                        ),
-                        kind: Some("db_schema_incompatible".to_string()),
-                        db_version: Some(version),
-                        supported_version: Some(crate::database::SCHEMA_VERSION),
-                    });
-                    // The main window defaults to visible:false, and the recovery interface must be forced to be displayed.
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.set_skip_taskbar(false);
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                    return Ok(());
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    log::warn!("Database schema preflight failed; proceeding to initialization: {e}");
-                }
-            }
 
             let db = loop {
                 match crate::database::Database::init() {
@@ -391,7 +353,6 @@ pub fn run() {
             commands::get_current_provider,
             commands::update_provider,
             commands::open_external,
-            commands::get_init_error,
             commands::open_app_config_folder,
             commands::open_generated_model_catalog,
             commands::get_settings,

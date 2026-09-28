@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use tempfile::{Builder, NamedTempFile};
 
-const COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER: &str = "-- Copilot Bridge Atlas SQLite export";
+const COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER: &str = "-- Copilot Bridge Atlas 6 SQLite export";
 
 /// Bound combined INSERT batches while still amortizing statement parsing.
 /// A row larger than this cap is emitted alone because it cannot be split.
@@ -37,7 +37,7 @@ fn lock_backup_file_operations() -> Result<BackupFileOperationGuard, AppError> {
 
 /// Accept only the PRAGMAs emitted by `dump_sql`. Other PRAGMAs can redirect
 /// temporary files or bypass schema integrity checks.
-const IMPORT_ALLOWED_PRAGMAS: &[&str] = &["foreign_keys", "user_version"];
+const IMPORT_ALLOWED_PRAGMAS: &[&str] = &["foreign_keys", "user_version", "application_id"];
 
 /// Reject imported SQL operations that could affect files outside the staging database.
 ///
@@ -500,10 +500,10 @@ impl Database {
     /// Require the current version and tables before accepting an import.
     fn validate_imported_schema(conn: &Connection) -> Result<(), AppError> {
         let version = Self::get_user_version(conn)?;
-        if version != super::SCHEMA_VERSION {
+        let application_id = Self::get_application_id(conn)?;
+        if version != super::SCHEMA_VERSION || application_id != super::APPLICATION_ID {
             return Err(AppError::Database(format!(
-                "Unsupported database schema {version}; Atlas 6 requires schema {}.",
-                super::SCHEMA_VERSION
+                "Unsupported database format (schema {version}, application {application_id}); expected Atlas 6 format."
             )));
         }
         const REQUIRED_TABLES: &[&str] = &[
@@ -539,12 +539,14 @@ impl Database {
         let user_version: i64 = conn
             .query_row("PRAGMA user_version;", [], |row| row.get(0))
             .unwrap_or(0);
+        let application_id = Self::get_application_id(conn)?;
 
         output.push_str(&format!(
-            "-- Copilot Bridge Atlas SQLite export\n-- Generated at: {timestamp}\n-- user_version: {user_version}\n"
+            "{COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER}\n-- Generated at: {timestamp}\n-- user_version: {user_version}\n"
         ));
         output.push_str("PRAGMA foreign_keys=OFF;\n");
         output.push_str(&format!("PRAGMA user_version={user_version};\n"));
+        output.push_str(&format!("PRAGMA application_id={application_id};\n"));
         output.push_str("BEGIN TRANSACTION;\n");
 
         // export schema
@@ -1221,7 +1223,7 @@ mod tests {
         let error = target
             .import_sql_string(&header_only)
             .expect_err("Files missing the original schema must be rejected");
-        assert!(error.to_string().contains("Atlas 6 requires schema"));
+        assert!(error.to_string().contains("expected Atlas 6 format"));
 
         let conn = crate::database::lock_conn!(target.conn);
         let provider: (i64, String) = conn.query_row(
@@ -2334,9 +2336,9 @@ mod tests {
         assert_eq!(
             error.to_string(),
             format!(
-                "Database error: Unsupported database schema {}; Atlas 6 requires schema {}.",
+                "Database error: Unsupported database format (schema {}, application {}); expected Atlas 6 format.",
                 crate::database::SCHEMA_VERSION + 1,
-                crate::database::SCHEMA_VERSION,
+                crate::database::APPLICATION_ID,
             ),
         );
 

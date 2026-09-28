@@ -1,5 +1,5 @@
 //! Atlas 6 database schema.
-use super::{lock_conn, Database, SCHEMA_VERSION};
+use super::{lock_conn, Database, APPLICATION_ID, SCHEMA_VERSION};
 use crate::error::AppError;
 use rusqlite::Connection;
 
@@ -77,15 +77,19 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
 
     pub(crate) fn initialize_schema_on_conn(conn: &Connection) -> Result<(), AppError> {
         let version = Self::get_user_version(conn)?;
-        if version != SCHEMA_VERSION && (version != 0 || Self::has_user_tables(conn)?) {
+        let application_id = Self::get_application_id(conn)?;
+        if (version, application_id) != (SCHEMA_VERSION, APPLICATION_ID)
+            && (version != 0 || application_id != 0 || Self::has_user_tables(conn)?)
+        {
             return Err(AppError::Database(format!(
-                "Unsupported database schema {version}; Atlas 6 requires a fresh database or schema {SCHEMA_VERSION}."
+                "Unsupported database format (schema {version}, application {application_id}); expected Atlas 6 format."
             )));
         }
         conn.execute_batch("SAVEPOINT atlas_schema;")
             .map_err(|error| AppError::Database(error.to_string()))?;
         let result = Self::create_tables_on_conn(conn)
-            .and_then(|_| Self::set_user_version(conn, SCHEMA_VERSION));
+            .and_then(|_| Self::set_user_version(conn, SCHEMA_VERSION))
+            .and_then(|_| Self::set_application_id(conn, APPLICATION_ID));
         match result {
             Ok(()) => conn
                 .execute_batch("RELEASE atlas_schema;")
@@ -164,8 +168,18 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
             .map_err(|error| AppError::Database(error.to_string()))
     }
 
+    pub(crate) fn get_application_id(conn: &Connection) -> Result<i32, AppError> {
+        conn.query_row("PRAGMA application_id", [], |row| row.get(0))
+            .map_err(|error| AppError::Database(error.to_string()))
+    }
+
     pub(crate) fn set_user_version(conn: &Connection, version: i32) -> Result<(), AppError> {
         conn.pragma_update(None, "user_version", version)
+            .map_err(|error| AppError::Database(error.to_string()))
+    }
+
+    pub(crate) fn set_application_id(conn: &Connection, id: i32) -> Result<(), AppError> {
+        conn.pragma_update(None, "application_id", id)
             .map_err(|error| AppError::Database(error.to_string()))
     }
 

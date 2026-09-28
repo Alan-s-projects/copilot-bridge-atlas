@@ -2,16 +2,25 @@ use crate::database::{lock_conn, Database};
 use crate::{AppError, Provider};
 use indexmap::IndexMap;
 use rusqlite::{params, OptionalExtension};
-use serde_json::Value;
+use serde::de::DeserializeOwned;
+
+fn json_column<T: DeserializeOwned>(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<T> {
+    let value: String = row.get(index)?;
+    serde_json::from_str(&value).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })
+}
 
 fn provider_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
-    let settings: String = row.get(2)?;
-    let meta: String = row.get(3)?;
     Ok(Provider {
         id: row.get(0)?,
         name: row.get(1)?,
-        settings_config: serde_json::from_str(&settings).unwrap_or(Value::Null),
-        meta: serde_json::from_str(&meta).ok(),
+        settings_config: json_column(row, 2)?,
+        meta: json_column(row, 3)?,
     })
 }
 

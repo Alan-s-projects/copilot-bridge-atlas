@@ -6,7 +6,7 @@
 use once_cell::sync::OnceCell;
 use reqwest::Client;
 use std::env;
-use std::net::IpAddr;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::RwLock;
 use std::time::Duration;
 
@@ -14,63 +14,22 @@ use std::time::Duration;
 static GLOBAL_CLIENT: OnceCell<RwLock<Client>> = OnceCell::new();
 
 /// Copilot Bridge Atlas proxy server is currently listening on the port
-static COPILOT_BRIDGE_ATLAS_PROXY_PORT: OnceCell<RwLock<u16>> = OnceCell::new();
+static COPILOT_BRIDGE_ATLAS_PROXY_PORT: AtomicU16 = AtomicU16::new(15722);
 
 /// Set the listening port of the Copilot Bridge Atlas proxy server
 ///
 /// Should be called when the proxy server starts so that the system proxy detection can correctly identify its own port
 pub fn set_proxy_port(port: u16) {
-    if let Some(lock) = COPILOT_BRIDGE_ATLAS_PROXY_PORT.get() {
-        if let Ok(mut current_port) = lock.write() {
-            *current_port = port;
-            log::debug!("[GlobalProxy] Updated Copilot Bridge Atlas proxy port to {port}");
-        }
-    } else {
-        let _ = COPILOT_BRIDGE_ATLAS_PROXY_PORT.set(RwLock::new(port));
-        log::debug!("[GlobalProxy] Initialized Copilot Bridge Atlas proxy port to {port}");
-    }
+    COPILOT_BRIDGE_ATLAS_PROXY_PORT.store(port, Ordering::Relaxed);
 }
 
 /// Get the listening port of the Copilot Bridge Atlas proxy server
 fn get_proxy_port() -> u16 {
-    COPILOT_BRIDGE_ATLAS_PROXY_PORT
-        .get()
-        .and_then(|lock| lock.read().ok())
-        .map(|port| *port)
-        .unwrap_or(15722) // Default port as fallback
+    COPILOT_BRIDGE_ATLAS_PROXY_PORT.load(Ordering::Relaxed)
 }
 
-/// Initialize the global HTTP client
-///
-/// Should be called once when the app starts.
-///
-/// # Arguments
-/// * `proxy_url` - Proxy URL, such as `http://127.0.0.1:7890` or `socks5://127.0.0.1:1080`
-///   Passing in None or an empty string indicates a direct connection
-pub fn init(proxy_url: Option<&str>) -> Result<(), String> {
-    let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
-    let client = build_client(effective_url)?;
-
-    // Try to initialize the global client, log a warning if it already exists and update it with apply_proxy
-    if GLOBAL_CLIENT.set(RwLock::new(client.clone())).is_err() {
-        log::warn!(
-            "[GlobalProxy] [GP-003] Already initialized, updating instead: {}",
-            effective_url
-                .map(mask_url)
-                .unwrap_or_else(|| "direct connection".to_string())
-        );
-        // Initialized, update using apply_proxy instead
-        return apply_proxy(proxy_url);
-    }
-
-    log::info!(
-        "[GlobalProxy] Initialized: {}",
-        effective_url
-            .map(mask_url)
-            .unwrap_or_else(|| "direct connection".to_string())
-    );
-
-    Ok(())
+fn effective_proxy_url(proxy_url: Option<&str>) -> Option<&str> {
+    proxy_url.map(str::trim).filter(|url| !url.is_empty())
 }
 
 /// Verify proxy configuration (do not apply)
@@ -84,34 +43,21 @@ pub fn init(proxy_url: Option<&str>) -> Result<(), String> {
 /// # Returns
 /// Ok(()) is returned if the verification is successful, and an error message is returned if it fails.
 pub fn validate_proxy(proxy_url: Option<&str>) -> Result<(), String> {
-    let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
     // Just call build_client to verify, but not apply
-    build_client(effective_url)?;
+    build_client(effective_proxy_url(proxy_url))?;
     Ok(())
 }
 
-/// Apply proxy configuration (assuming verified)
-///
-/// Apply proxy configuration directly to the global client without additional verification.
-/// Should be called after validate_proxy succeeds.
-///
-/// # Arguments
-/// * `proxy_url` - proxy URL, None or empty string indicates direct connection
+/// Build and install the shared transport at startup or after a settings change.
+/// Empty settings follow the system proxy, with Atlas loop prevention.
 pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
-    let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
+    let effective_url = effective_proxy_url(proxy_url);
     let new_client = build_client(effective_url)?;
-
-    // Update client
-    if let Some(lock) = GLOBAL_CLIENT.get() {
-        let mut client = lock.write().map_err(|e| {
-            log::error!("[GlobalProxy] [GP-001] Failed to acquire write lock: {e}");
-            "Failed to update proxy: lock poisoned".to_string()
-        })?;
-        *client = new_client;
-    } else {
-        // If it has not been initialized yet, initialize it
-        return init(proxy_url);
-    }
+    let lock = GLOBAL_CLIENT.get_or_init(|| RwLock::new(new_client.clone()));
+    let mut client = lock
+        .write()
+        .map_err(|_| "Failed to update proxy: HTTP client lock poisoned".to_string())?;
+    *client = new_client;
 
     log::info!(
         "[GlobalProxy] Applied: {}",
@@ -126,15 +72,15 @@ pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
 /// Get the global HTTP client
 ///
 /// Returns clients with a proxy configured if a proxy is configured, otherwise returns clients following the system proxy.
-pub fn get() -> Client {
-    GLOBAL_CLIENT
-        .get()
-        .and_then(|lock| lock.read().ok())
-        .map(|c| c.clone())
-        .unwrap_or_else(|| {
-            log::warn!("[GlobalProxy] [GP-004] Client not initialized, using fallback");
-            build_client(None).unwrap_or_default()
-        })
+pub fn get() -> Result<Client, String> {
+    client_from(&GLOBAL_CLIENT)
+}
+
+fn client_from(cell: &OnceCell<RwLock<Client>>) -> Result<Client, String> {
+    let lock = cell.get_or_try_init(|| build_client(None).map(RwLock::new))?;
+    lock.read()
+        .map(|client| client.clone())
+        .map_err(|_| "Failed to read proxy: HTTP client lock poisoned".to_string())
 }
 
 /// Building an HTTP client
@@ -156,6 +102,9 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
         // First verify the URL format and scheme
         let parsed = url::Url::parse(url)
             .map_err(|e| format!("Invalid proxy URL '{}': {}", mask_url(url), e))?;
+        if !parsed.has_host() {
+            return Err("Invalid proxy URL: a scheme and host are required".to_string());
+        }
 
         let scheme = parsed.scheme();
         if !["http", "https", "socks5", "socks5h"].contains(&scheme) {
@@ -212,43 +161,32 @@ fn system_proxy_points_to_loopback() -> bool {
 }
 
 fn proxy_points_to_loopback(value: &str) -> bool {
-    fn host_is_loopback(host: &str) -> bool {
-        if host.eq_ignore_ascii_case("localhost") {
-            return true;
-        }
-        host.parse::<IpAddr>()
-            .map(|ip| ip.is_loopback())
-            .unwrap_or(false)
-    }
-
-    // Check if it points to Copilot Bridge Atlas' own proxy port
-    // Only the proxy pointing to yourself needs to be skipped to avoid recursion.
-    fn is_copilot_bridge_atlas_proxy_port(port: Option<u16>) -> bool {
-        let copilot_bridge_atlas_port = get_proxy_port();
-        port == Some(copilot_bridge_atlas_port)
-    }
-
-    if let Ok(parsed) = url::Url::parse(value) {
-        if let Some(host) = parsed.host_str() {
-            // Returns true only if the host is a loopback and the port is the port of the Copilot Bridge Atlas
-            return host_is_loopback(host) && is_copilot_bridge_atlas_proxy_port(parsed.port());
-        }
-        return false;
-    }
-
-    let with_scheme = format!("http://{value}");
-    if let Ok(parsed) = url::Url::parse(&with_scheme) {
-        if let Some(host) = parsed.host_str() {
-            return host_is_loopback(host) && is_copilot_bridge_atlas_proxy_port(parsed.port());
-        }
-    }
-
-    false
+    // Environment variables may use a bare host:port, including localhost or IPv6.
+    let parsed = url::Url::parse(value)
+        .ok()
+        .filter(url::Url::has_host)
+        .or_else(|| url::Url::parse(&format!("http://{value}")).ok());
+    parsed.is_some_and(|url| {
+        let loopback = match url.host() {
+            Some(url::Host::Domain(host)) => {
+                host.eq_ignore_ascii_case("localhost")
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            }
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => {
+                ip.is_loopback() || ip.to_ipv4_mapped().is_some_and(|ip| ip.is_loopback())
+            }
+            None => false,
+        };
+        loopback && url.port_or_known_default() == Some(get_proxy_port())
+    })
 }
 
 /// Hide sensitive information in URLs (for logging)
 pub fn mask_url(url: &str) -> String {
-    if let Ok(parsed) = url::Url::parse(url) {
+    if let Some(parsed) = url::Url::parse(url).ok().filter(url::Url::has_host) {
         // Hide username and password, retain scheme, host and port
         let host = parsed.host_str().unwrap_or("?");
         match parsed.port() {
@@ -256,17 +194,8 @@ pub fn mask_url(url: &str) -> String {
             None => format!("{}://{}", parsed.scheme(), host),
         }
     } else {
-        // URL parsing failed, partial content returned. The truncation point falls back to the nearest character boundary,
-        // Avoid panic caused by cutting in the middle of multi-byte UTF-8 characters.
-        if url.len() > 20 {
-            let cut = (0..=20)
-                .rev()
-                .find(|&i| url.is_char_boundary(i))
-                .unwrap_or(0);
-            format!("{}...", &url[..cut])
-        } else {
-            url.to_string()
-        }
+        // An unparseable prefix may itself contain credentials.
+        "[invalid proxy URL]".to_string()
     }
 }
 
@@ -303,13 +232,42 @@ mod tests {
     }
 
     #[test]
-    fn test_mask_url_does_not_panic_on_multibyte_boundary() {
-        // A string that cannot be parsed by Url::parse and is cut exactly in the middle of a multibyte character at byte 20.
-        // Regression: URL masking must not split multi-byte characters.
-        let bad = format!("{}€invalid", "x".repeat(19));
-        assert!(bad.len() > 20 && !bad.is_char_boundary(20));
-        let masked = mask_url(&bad);
-        assert!(masked.ends_with("..."));
+    fn malformed_proxy_urls_never_expose_credential_prefixes() {
+        for invalid in [
+            "user:secret",
+            "user:secret@proxy:bad-port",
+            "http://user:secret@proxy:bad-port",
+            "http://user:secret@[broken",
+            "xxxxxxxxxxxxxxxxxxx€invalid",
+        ] {
+            assert_eq!(mask_url(invalid), "[invalid proxy URL]");
+        }
+        let error = build_client(Some("http://user:secret@proxy:bad-port")).unwrap_err();
+        assert!(!error.contains("user"));
+        assert!(!error.contains("secret"));
+    }
+
+    #[test]
+    fn shared_client_initialization_is_cached_and_poisoning_is_reported() {
+        let cell = OnceCell::new();
+        assert!(client_from(&cell).is_ok());
+        assert!(cell.get().is_some());
+        assert!(client_from(&cell).is_ok());
+
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = cell.get().unwrap().write().unwrap();
+            panic!("simulate a failed client update");
+        });
+        assert_eq!(
+            client_from(&cell).unwrap_err(),
+            "Failed to read proxy: HTTP client lock poisoned"
+        );
+    }
+
+    #[test]
+    fn proxy_settings_trim_surrounding_whitespace() {
+        assert!(validate_proxy(Some("  http://127.0.0.1:7890 \n")).is_ok());
+        assert_eq!(effective_proxy_url(Some(" \n ")), None);
     }
 
     #[test]
@@ -346,11 +304,18 @@ mod tests {
         // Only the loopback address pointing to the Copilot Bridge Atlas' own port returns true
         assert!(proxy_points_to_loopback("http://127.0.0.1:15722"));
         assert!(proxy_points_to_loopback("socks5://localhost:15722"));
+        assert!(proxy_points_to_loopback("socks5://127.0.0.1:15722"));
         assert!(proxy_points_to_loopback("127.0.0.1:15722"));
+        assert!(proxy_points_to_loopback("localhost:15722"));
+        assert!(proxy_points_to_loopback("http://[::1]:15722"));
+        assert!(proxy_points_to_loopback("socks5://[::1]:15722"));
+        assert!(proxy_points_to_loopback("[::1]:15722"));
+        assert!(proxy_points_to_loopback("http://[::ffff:127.0.0.1]:15722"));
 
         // Other loopback ports should not be skipped (allowing use of other local proxy tools)
         assert!(!proxy_points_to_loopback("http://127.0.0.1:7890"));
         assert!(!proxy_points_to_loopback("socks5://localhost:1080"));
+        assert!(!proxy_points_to_loopback("http://[::1]:7890"));
 
         // Non-loopback addresses should not be skipped
         assert!(!proxy_points_to_loopback("http://192.168.1.10:7890"));

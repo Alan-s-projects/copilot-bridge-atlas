@@ -164,7 +164,7 @@ pub struct RequestLogDetail {
     pub created_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_source: Option<String>,
-    /// The name of the model actually used for pricing when writing. None = historical rows before v11, "" = unpriced error rows.
+    /// The model used for pricing when writing; absent or empty when no price was recorded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pricing_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1186,14 +1186,12 @@ impl Database {
         cache: &mut HashMap<String, PricingInfo>,
         log: &RequestLogDetail,
     ) -> Result<Option<PricingInfo>, AppError> {
-        let total_input = log.fresh_input_tokens as u64
+        let total_input = log.fresh_input_tokens
             + log.cache_read_tokens as u64
             + log.cache_creation_tokens as u64;
-        // The pricing basis at the time of writing has been dropped into the library (v11+): backfill only recalculates according to it, and if it is not found, the cost is kept at 0
-        // Waiting for premium. Cannot use model/request_model instead. Guess - routing takeover + request pricing mode
-        // The three may be different (model=upstream echo, request_model=client alias,
-        // pricing_model=actual outbound model), changing the benchmark will permanently fix the wrong price.
-        // The placeholder ("" = unpriced error row / "unknown") is regarded as missing, and the historical row logic is followed.
+        // Preserve the recorded pricing model when filling a previously unpriced row.
+        // It may differ from the response model and the client's requested alias.
+        // Only rows without a recorded model may use the request/response lookup below.
         if let Some(pricing_model) = log
             .pricing_model
             .as_deref()

@@ -1,10 +1,10 @@
 import {
   getReadCacheHitRate,
-  type CacheNormalizableLog,
+  type InputTokenUsage,
   type RequestLog,
 } from "@/types/usage";
 
-export function formatReadCacheHitRate(log: CacheNormalizableLog): string {
+export function formatReadCacheHitRate(log: InputTokenUsage): string {
   const rate = getReadCacheHitRate(log);
   return rate == null ? "--" : `${(rate * 100).toFixed(1)}%`;
 }

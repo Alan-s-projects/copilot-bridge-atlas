@@ -1,4 +1,4 @@
-import { getFreshInputTokens, type CacheNormalizableLog } from "@/types/usage";
+import type { InputTokenUsage } from "@/types/usage";
 import { fmtInt, formatTokensShort, formatReadCacheHitRate } from "./format";
 
 export function InputUsageHeading({ inline = false }: { inline?: boolean }) {
@@ -56,14 +56,14 @@ export function RequestInputValue({
   log,
   compact = false,
 }: {
-  log: CacheNormalizableLog;
+  log: InputTokenUsage;
   compact?: boolean;
 }) {
   return (
     <span className="text-xs">
       <InputUsageValue
-        fresh={getFreshInputTokens(log)}
-        cached={log.cacheReadTokens ?? 0}
+        fresh={log.freshInputTokens}
+        cached={log.cacheReadTokens}
         hit={formatReadCacheHitRate(log)}
         compact={compact}
       />

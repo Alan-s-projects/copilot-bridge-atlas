@@ -89,6 +89,7 @@ const snapshot = {
         statusCode: 400,
         latencyMs: 180,
         inputTokens: 0,
+        freshInputTokens: 0,
         outputTokens: 0,
         totalCostUsd: "0",
       },

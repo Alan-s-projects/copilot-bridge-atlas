@@ -62,6 +62,9 @@ jobs:
       - name: Run frontend tests
         run: pnpm test:unit --maxWorkers=4 --minWorkers=1
 
+      - name: Check catalog validation scripts
+        run: python -m unittest discover -s scripts/tests -v
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 

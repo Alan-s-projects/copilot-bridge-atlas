@@ -82,6 +82,7 @@ describe("RequestLogTable", () => {
             createdAt: 1790400000,
             latencyMs: 1000,
             inputTokens: 0,
+            freshInputTokens: 0,
             outputTokens: 0,
             cacheReadTokens: 0,
             cacheCreationTokens: 0,

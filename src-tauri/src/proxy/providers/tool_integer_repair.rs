@@ -281,7 +281,7 @@ fn schemas_require_integer(schemas: &[SchemaView<'_>]) -> bool {
             Value::Array(types) => types.iter().filter_map(Value::as_str).collect(),
             _ => return false,
         };
-        if types.iter().any(|kind| *kind == "integer") {
+        if types.contains(&"integer") {
             if types
                 .iter()
                 .any(|kind| *kind != "integer" && *kind != "null")

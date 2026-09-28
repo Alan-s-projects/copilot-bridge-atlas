@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CopilotAuthSection } from "@/components/providers/forms/CopilotAuthSection";
 
 const authMocks = vi.hoisted(() => ({
-  refetchCodex: vi.fn(),
   refetchCopilot: vi.fn(),
 }));
 
@@ -28,17 +27,12 @@ const failedStatus = (refetchStatus: () => void) => ({
   refetchStatus,
 });
 
-vi.mock("@/components/providers/forms/hooks/useCodexOauth", () => ({
-  useCodexOauth: () => failedStatus(authMocks.refetchCodex),
-}));
-
 vi.mock("@/components/providers/forms/hooks/useCopilotAuth", () => ({
   useCopilotAuth: () => failedStatus(authMocks.refetchCopilot),
 }));
 
 describe("managed auth status failures", () => {
   beforeEach(() => {
-    authMocks.refetchCodex.mockResolvedValue(undefined);
     authMocks.refetchCopilot.mockResolvedValue(undefined);
   });
 

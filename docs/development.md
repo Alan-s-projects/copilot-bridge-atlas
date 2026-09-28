@@ -71,6 +71,17 @@ $env:COPILOT_BRIDGE_ATLAS_TEST_HOME = $atlasTestHome
 cargo test --manifest-path src-tauri/Cargo.toml --locked --offline -- --test-threads=1
 ```
 
+Run the catalog validation script tests with `python -m unittest discover -s scripts/tests -v`.
+The release workflow runs these alongside the frontend and Rust checks.
+
+The renderer and Rust backend ship together: request logs always include
+`freshInputTokens`, normalized in Rust using the stored token semantics. Keep
+that calculation in the backend. Copilot authentication uses the shared atomic
+file writer, and HTTP client initialization or lock errors propagate to callers.
+Malformed saved provider JSON is reported instead of being replaced with empty
+settings. Protocol adapters and message-ID repairs remain necessary for existing
+Codex conversations and Copilot's supported transports.
+
 The local build writes the MSI and SHA256 file to `release/`. A reviewed PR targets `atlas` and includes matching versions in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, plus `docs/releases/<version>.md`. The Atlas Release workflow builds and checks each PR on Windows. After squash merge, push an `atlas-<version>` tag pointing to the merged commit. The workflow verifies that the tag is on `atlas` and matches the package version, then builds the MSI, verifies its SHA256 file, and publishes both assets with the checked-in release notes. The description begins with the pipeline run, UTC time, branch, and commit. No manual upload is needed. Remove temporary PR branches after merge.
 
 [MIT license and copyright notice](../LICENSE).

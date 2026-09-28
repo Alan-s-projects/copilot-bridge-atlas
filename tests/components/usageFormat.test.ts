@@ -6,7 +6,6 @@ import {
   formatReadCacheHitRate,
   formatCostBreakdown,
 } from "@/components/usage/format";
-import { getFreshInputTokens } from "@/types/usage";
 
 describe("usage format helpers", () => {
   it("uses server-normalized fresh input and excludes output from read hit rate", () => {
@@ -18,14 +17,12 @@ describe("usage format helpers", () => {
       cacheCreationTokens: 100,
       outputTokens: 9000,
     };
-    expect(getFreshInputTokens(log)).toBe(100);
     expect(formatReadCacheHitRate(log)).toBe("80.0%");
     const withoutOutput = { ...log, outputTokens: 0 };
     expect(formatReadCacheHitRate(withoutOutput)).toBe("80.0%");
     expect(
       formatReadCacheHitRate({
         ...log,
-        inputTokens: 0,
         freshInputTokens: 0,
         cacheReadTokens: 0,
         cacheCreationTokens: 0,
@@ -33,29 +30,21 @@ describe("usage format helpers", () => {
     ).toBe("--");
   });
 
-  it("preserves explicit zero and legacy fresh-input fallbacks", () => {
+  it("preserves normalized zero input and counts cache writes as misses", () => {
     expect(
-      getFreshInputTokens({
-        appType: "codex",
-        inputTokens: 1000,
+      formatReadCacheHitRate({
         freshInputTokens: 0,
         cacheReadTokens: 800,
+        cacheCreationTokens: 200,
       }),
-    ).toBe(0);
+    ).toBe("80.0%");
     expect(
-      getFreshInputTokens({
-        appType: "codex",
-        inputTokens: 1000,
+      formatReadCacheHitRate({
+        freshInputTokens: 0,
         cacheReadTokens: 800,
+        cacheCreationTokens: 0,
       }),
-    ).toBe(200);
-    expect(
-      getFreshInputTokens({
-        appType: "codex",
-        inputTokens: 100,
-        cacheReadTokens: 800,
-      }),
-    ).toBe(100);
+    ).toBe("100.0%");
   });
 
   it("shows all stored cost components and the multiplier without repricing", () => {

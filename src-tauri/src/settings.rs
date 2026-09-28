@@ -59,7 +59,7 @@ impl UsageDateRange {
 }
 
 /// Device preferences live alongside Atlas's database.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
     pub launch_on_startup: bool,
@@ -71,18 +71,6 @@ pub struct AppSettings {
     pub backup_interval_hours: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backup_retain_count: Option<u32>,
-}
-
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            launch_on_startup: false,
-            usage_dashboard_refresh_interval_ms: None,
-            current_provider_codex: None,
-            backup_interval_hours: None,
-            backup_retain_count: None,
-        }
-    }
 }
 
 impl AppSettings {

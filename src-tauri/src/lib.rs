@@ -47,8 +47,8 @@ fn set_windows_app_user_model_id(app: &tauri::AppHandle) {
     }
 }
 
-/// 无 scheme 的裸 authority 形态(如 `user:pass@host/path`)剥掉 userinfo：
-/// 仅当 `@` 出现在第一个 `/` 之前时才视为凭据。
+/// Strip the userinfo of the bare authority form without scheme (such as `user:pass@host/path`):
+/// `@` is considered a credential only if it appears before the first `/`.
 fn strip_bare_userinfo(input: &str) -> &str {
     let authority_end = input.find('/').unwrap_or(input.len());
     match input[..authority_end].rfind('@') {
@@ -84,8 +84,8 @@ pub(crate) fn redact_url_for_log(url_str: &str) -> String {
             }
         }
         _ => {
-            // 解析失败(相对路径、含裸 userinfo 的非法 URL 等)：丢掉 query/fragment，
-            // 尽力剥掉 userinfo，其余原样保留。
+            // Parsing failure (relative path, illegal URL with naked userinfo, etc.): discard query/fragment,
+            // Strip the userinfo as best you can, leaving the rest as is.
             let without_tail = url_str.split(['?', '#']).next().unwrap_or(url_str);
             strip_bare_userinfo(without_tail).to_string()
         }
@@ -96,7 +96,7 @@ fn runtime_log_level_allows(level: log::Level) -> bool {
     level <= log::Level::Info
 }
 
-/// 更新托盘菜单的Tauri命令
+/// Update Tauri command for tray menu
 #[tauri::command]
 async fn update_tray_menu(
     app: tauri::AppHandle,
@@ -145,7 +145,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                // 数据库版本过新的恢复模式下没有托盘可唤回，关闭即退出，避免应用隐身后台
+                // In the recovery mode where the database version is too new, there is no tray to recall, and you will exit immediately after closing to avoid the hidden background of the application.
                 let in_db_recovery = crate::init_status::get_init_error()
                     .map(|p| p.kind.as_deref() == Some("db_version_too_new"))
                     .unwrap_or(false);
@@ -172,13 +172,13 @@ pub fn run() {
             crate::config::initialize_legacy_app_config_dir(&app.path().app_data_dir()?);
             panic_hook::init_app_config_dir(crate::config::get_app_config_dir());
 
-            // 初始化日志（输出到 <app_config_dir>/logs/copilot-bridge-atlas.log）
+            // Initialization log (output to <app_config_dir>/logs/copilot-bridge-atlas.log)
             {
                 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 
                 let log_dir = panic_hook::get_log_dir();
 
-                // 确保日志目录存在
+                // Make sure the log directory exists
                 if let Err(e) = std::fs::create_dir_all(&log_dir) {
                     eprintln!("Failed to create log directory: {e}");
                 }
@@ -196,8 +196,8 @@ pub fn run() {
                                 file_name: Some("copilot-bridge-atlas".into()),
                             }),
                         ])
-                        // KeepSome(4) 保留 4 个轮转归档，加上当前文件最多约 100 MiB。
-                        // 轮转仅按大小触发；跨重启继续追加，不再丢失上一次运行的日志。
+                        // KeepSome(4) Keeps 4 rotating archives, plus the current file up to about 100 MiB.
+                        // Rotation is only triggered by size; appending continues across reboots and logs from the last run are no longer lost.
                         .rotation_strategy(RotationStrategy::KeepSome(4))
                         .max_file_size(20 * 1024 * 1024)
                         .timezone_strategy(TimezoneStrategy::UseLocal)
@@ -210,12 +210,12 @@ pub fn run() {
 
             set_windows_app_user_model_id(app.handle());
 
-            // 注入 AppHandle 给 usage_events，让无 AppHandle 持有的写日志路径
-            // 也能向前端推送 `usage-log-recorded`。
-            // 放在日志系统初始化之后，确保 init 的日志能正常输出。
+            // Inject AppHandle into usage_events so that no AppHandle holds the log path
+            // It is also possible to push `usage-log-recorded` to the front end.
+            // Place it after the log system is initialized to ensure that the init log can be output normally.
             usage_events::init(app.handle().clone());
 
-            // 初始化数据库
+            // Initialize database
             let app_config_dir = crate::config::get_app_config_dir();
             let db_path = app_config_dir.join("copilot-bridge-atlas.db");
 
@@ -233,7 +233,7 @@ pub fn run() {
                         db_version: Some(version),
                         supported_version: Some(crate::database::SCHEMA_VERSION),
                     });
-                    // 主窗口默认 visible:false，恢复界面必须强制显示
+                    // The main window defaults to visible:false, and the recovery interface must be forced to be displayed.
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.set_skip_taskbar(false);
                         let _ = window.show();
@@ -273,13 +273,13 @@ pub fn run() {
                 log::warn!("Copilot model catalog initialization failed: {error}");
             }
 
-            // 创建动态托盘菜单
+            // Create a dynamic tray menu
             let menu = tray::create_tray_menu(app.handle(), &app_state)?;
 
-            // 构建托盘
+            // build pallet
             let mut tray_builder = TrayIconBuilder::with_id(tray::TRAY_ID)
                 .menu(&menu)
-                .tooltip("Copilot Bridge Atlas") // 鼠标悬停提示
+                .tooltip("Copilot Bridge Atlas") // Mouseover tips
                 .on_menu_event(|app, event| {
                     tray::handle_tray_menu_event(app, &event.id.0);
                 })
@@ -292,10 +292,10 @@ pub fn run() {
             }
 
             let _tray = tray_builder.build(app)?;
-            // 将同一个实例注入到全局状态，避免重复创建导致的不一致
+            // Inject the same instance into the global state to avoid inconsistencies caused by repeated creation
             app.manage(app_state);
 
-            // 初始化 CopilotAuthManager
+            // Initialize CopilotAuthManager
             {
                 use crate::proxy::providers::copilot_auth::CopilotAuthManager;
                 use commands::CopilotAuthState;
@@ -307,7 +307,7 @@ pub fn run() {
                 log::info!("✓ CopilotAuthManager initialized");
             }
 
-            // 初始化全局出站代理 HTTP 客户端
+            // Initialize the global outbound proxy HTTP client
             {
                 let db = &app.state::<AppState>().db;
                 let proxy_url = db.get_global_proxy_url().ok().flatten();
@@ -317,7 +317,7 @@ pub fn run() {
                         "[GlobalProxy] [GP-005] Failed to initialize with saved config: {e}"
                     );
 
-                    // 清除无效的代理配置
+                    // Clear invalid proxy configuration
                     if proxy_url.is_some() {
                         log::warn!(
                             "[GlobalProxy] [GP-006] Clearing invalid proxy config from database"
@@ -329,7 +329,7 @@ pub fn run() {
                         }
                     }
 
-                    // 使用直连模式重新初始化
+                    // Reinitialize using direct mode
                     if let Err(fallback_err) = crate::proxy::http_client::init(None) {
                         log::error!(
                             "[GlobalProxy] [GP-008] Failed to initialize direct connection: {fallback_err}"
@@ -338,12 +338,12 @@ pub fn run() {
                 }
             }
 
-            // 异常退出恢复 + 代理状态自动恢复
+            // Abnormal exit recovery + automatic recovery of agent status
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state = app_handle.state::<AppState>();
 
-                // 检查 settings 表中的代理状态，自动恢复代理服务
+                // Check the proxy status in the settings table and automatically restore the proxy service
                 restore_proxy_state_on_startup(&state).await;
 
                 let auth_state = app_handle.state::<commands::CopilotAuthState>();
@@ -424,6 +424,7 @@ pub fn run() {
             commands::get_model_stats,
             commands::get_unpriced_model_usage,
             commands::get_request_logs,
+            commands::get_request_diagnostics,
             commands::get_model_pricing,
             commands::update_model_pricing,
             commands::delete_model_pricing,
@@ -482,7 +483,7 @@ pub fn run() {
 }
 
 // ============================================================
-// 应用退出清理
+// Application exit cleanup
 // ============================================================
 
 /// Stop the listener without changing its saved switch or any client files.
@@ -494,15 +495,15 @@ pub(crate) async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
     }
 }
 
-/// 主动从系统托盘移除托盘图标。
+/// Proactively remove tray icons from the system tray.
 ///
-/// `std::process::exit` 会绕过 Tauri 运行时，触发不了 `TrayIcon::drop()`，
-/// 也就不会向 Windows Shell 发 `NIM_DELETE`。结果是进程退出后托盘里
-/// 仍保留一个死图标的缓存占位（Shell 不会主动重绘，需要鼠标悬停才刷新）。
+/// `std::process::exit` will bypass the Tauri runtime and `TrayIcon::drop()` cannot be triggered.
+/// Therefore, `NIM_DELETE` will not be sent to the Windows Shell. The result is that after the process exits, the tray
+/// A cache occupancy of a dead icon is still retained (Shell will not actively redraw and requires mouse hovering to refresh).
 ///
-/// 通过 `set_visible(false)` 走 `WM_USER_HIDE_TRAYICON` 消息路径，
-/// 触发 tray-icon 内部的 `remove_tray_icon` → `Shell_NotifyIconW(NIM_DELETE)`，
-/// 在进程结束前干净地把图标摘掉。
+/// Take the `WM_USER_HIDE_TRAYICON` message path through `set_visible(false)`,
+/// Trigger `remove_tray_icon` → `Shell_NotifyIconW(NIM_DELETE)` inside tray-icon,
+/// Cleanly remove the icon before the process ends.
 pub(crate) fn remove_tray_icon_before_exit(app_handle: &tauri::AppHandle) {
     if let Some(tray) = app_handle.tray_by_id(tray::TRAY_ID) {
         if let Err(e) = tray.set_visible(false) {
@@ -514,7 +515,7 @@ pub(crate) fn remove_tray_icon_before_exit(app_handle: &tauri::AppHandle) {
 }
 
 // ============================================================
-// 启动时恢复代理状态
+// Restore agent state on startup
 // ============================================================
 
 /// Read the one saved listener switch. No client files are written.
@@ -550,24 +551,24 @@ fn show_database_init_error_dialog(
 }
 
 // ============================================================
-// 退出请求分类
+// Exit request classification
 // ============================================================
 
-/// `RunEvent::ExitRequested` 的三类来源，处理方式必须区分。
+/// The three types of sources of `RunEvent::ExitRequested` must be treated differently.
 ///
-/// 关键约束：重启请求（`code == RESTART_EXIT_CODE`）上 `prevent_exit()` 会被
-/// Tauri 静默忽略（见 `ExitRequestApi::prevent_exit` 文档），事件循环必定继续
-/// 退出并触发各插件的 `RunEvent::Exit` 钩子；任何与之并发的自定义清理任务都
-/// 可能与插件退出钩子争用同一状态而死锁。
+/// Key constraint: `prevent_exit()` on restart request (`code == RESTART_EXIT_CODE`) will be
+/// Tauri is silently ignored (see `ExitRequestApi::prevent_exit` documentation) and the event loop must continue
+/// Exit and trigger the `RunEvent::Exit` hook of each plug-in; any concurrent custom cleaning tasks will
+/// Possible deadlock with plugin exit hook contending for the same state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExitRequestAction {
-    /// `code` 为 `None`：运行时自动触发（如隐藏窗口的 WebView 被回收导致无存活
-    /// 窗口），阻止退出、保持托盘后台运行。
+    /// `code` is `None`: automatically triggered at runtime (such as the WebView that hides the window is recycled, resulting in no survival
+    /// window), prevent exit, and keep the tray running in the background.
     StayInTray,
-    /// `code` 为 `RESTART_EXIT_CODE`：`app.restart()` / 自更新 relaunch 发起的
-    /// 重启，不拦截、不做自定义清理，交还 Tauri 默认 re-exec 流程。
+    /// `code` is initiated by `RESTART_EXIT_CODE`:`app.restart()`/self-update relaunch
+    /// Restart without interception or custom cleanup, and return Tauri's default re-exec process.
     DeferToTauriRestart,
-    /// 其它 `Some(_)`：用户主动退出（托盘「退出」等），执行完整异步清理后结束进程。
+    /// Others `Some(_)`: The user actively exits (tray "exits", etc.), and the process ends after performing a complete asynchronous cleanup.
     CleanupAndExit,
 }
 
@@ -580,15 +581,15 @@ fn classify_exit_request(code: Option<i32>) -> ExitRequestAction {
 }
 
 // ============================================================
-// 在应用主动退出前显式持久化窗口状态
+// Explicitly persist window state before the app actively exits
 // ============================================================
 
 fn window_state_flags() -> StateFlags {
     StateFlags::POSITION | StateFlags::SIZE | StateFlags::MAXIMIZED
 }
 
-/// 当前应用的退出路径会拦截 `ExitRequested` 并最终直接 `std::process::exit(0)`，
-/// 这里需要在真正结束进程前手动落盘，避免 window-state 插件的默认退出钩子被绕过。
+/// The exit path of the current application will intercept `ExitRequested` and eventually directly `std::process::exit(0)`.
+/// Here you need to manually drop the disk before actually ending the process to prevent the default exit hook of the window-state plug-in from being bypassed.
 pub(crate) fn save_window_state_before_exit(app_handle: &tauri::AppHandle) {
     if let Err(err) = app_handle.save_window_state(window_state_flags()) {
         log::error!("Failed to save window state before exit: {err}");
@@ -607,29 +608,29 @@ mod tests {
 
     #[test]
     fn log_url_redaction_strips_credentials_and_query_keeps_path() {
-        // userinfo 与整个 query 剥离，path 保留用于诊断 base_url 配错。
+        // userinfo is stripped from the entire query, and path is retained for diagnosing base_url mismatches.
         assert_eq!(
             redact_url_for_log(
                 "https://user:secret@example.com:8443/v1/models?key=top-secret&alt=sse#private"
             ),
             "https://example.com:8443/v1/models"
         );
-        // scheme-relative 保持形态，userinfo 去掉。
+        // scheme-relative keeps the form, userinfo is removed.
         assert_eq!(
             redact_url_for_log("//user:sk-secret@gw.example.com/v1"),
             "//gw.example.com/v1"
         );
-        // 无 scheme 的裸 userinfo。
+        // Bare userinfo without scheme.
         assert_eq!(
             redact_url_for_log("user:sk-secret@gw.example.com/v1?token=hidden#private"),
             "gw.example.com/v1"
         );
-        // 无法解析为绝对 URL 时：丢 query，其余原样保留。
+        // When it cannot be resolved to an absolute URL: discard the query and keep the rest as is.
         assert_eq!(
             redact_url_for_log("not-a-url?token=secret#private"),
             "not-a-url"
         );
-        // 不再对 path 段做“看起来像密钥”的形状猜测，正常路径完整保留。
+        // No more "look-like-key" shape guesses are made for the path segment, the normal path is preserved intact.
         assert_eq!(
             redact_url_for_log("https://host.example/v1/models/gpt-6-astra"),
             "https://host.example/v1/models/gpt-6-astra"

@@ -51,8 +51,8 @@ const isRefreshIntervalOption = (
 const normalizeRefreshInterval = (value: number | undefined) =>
   isRefreshIntervalOption(value) ? value : DEFAULT_REFRESH_INTERVAL_MS;
 
-// Select 的 "all" 哨兵和用户自定义名称同处一个值域——真有模型叫 "all"
-// 就会撞名（重复 value、选中即清空筛选）。动态选项统一加前缀编码隔离值域。
+// The "all" sentinel of Select and the user-defined name are in the same value range - there is really a model called "all"
+// There will be name collision (duplicate value, clear the filter when selected). Dynamic options are uniformly prefixed to encode isolated value ranges.
 const DYNAMIC_OPTION_PREFIX = "v:";
 const encodeOptionValue = (name: string) => `${DYNAMIC_OPTION_PREFIX}${name}`;
 const decodeOptionValue = (value: string) =>
@@ -98,8 +98,8 @@ export function UsageDashboard({
     setRefreshIntervalMs(normalizeRefreshInterval(savedRefreshIntervalMs));
   }, [savedRefreshIntervalMs]);
 
-  // 后端写入新日志时 emit `usage-log-recorded`，本 hook 立刻 invalidate 所有
-  // usage 查询，实现实时刷新（仅在 Dashboard 挂载时生效，离开页面自动取消监听）
+  // When the backend writes a new log, emit `usage-log-recorded`, this hook immediately invalidates all
+  // usage query to achieve real-time refresh (only takes effect when the Dashboard is mounted, and monitoring is automatically canceled when leaving the page)
   useUsageEventBridge();
 
   const changeRefreshInterval = async (next: number) => {

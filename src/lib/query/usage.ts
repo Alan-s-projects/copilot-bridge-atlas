@@ -131,7 +131,7 @@ export const usageKeys = {
   pricing: () => [...usageKeys.all, "pricing"] as const,
 };
 
-/** 把 UI 侧的 "all" 哨兵归一成 undefined（后端语义：不过滤）。 */
+/** Normalize the "all" sentinel on the UI side to undefined (backend semantics: no filtering). */
 function normalizeScopeFilters(filters?: UsageScopeFilters): UsageScopeFilters {
   return {
     appType: filters?.appType === "all" ? undefined : filters?.appType,
@@ -285,7 +285,7 @@ export function useRequestLogs({
       const effectiveFilters = { ...filters, ...resolveUsageRange(range) };
       return usageApi.getRequestLogs(effectiveFilters, page, pageSize);
     },
-    refetchInterval: options?.refetchInterval ?? DEFAULT_REFETCH_INTERVAL_MS, // 每30秒自动刷新
+    refetchInterval: options?.refetchInterval ?? DEFAULT_REFETCH_INTERVAL_MS, // Automatically refresh every 30 seconds
     refetchIntervalInBackground: options?.refetchIntervalInBackground ?? false,
   });
 }

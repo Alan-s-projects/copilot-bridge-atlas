@@ -20,6 +20,7 @@ fn fresh_database_creates_only_bridge_tables() {
             "model_pricing",
             "providers",
             "proxy_config",
+            "proxy_request_diagnostics",
             "proxy_request_logs",
             "settings",
             "usage_daily_rollups"
@@ -41,6 +42,51 @@ fn fresh_database_creates_only_bridge_tables() {
             .unwrap(),
         1
     );
+}
+
+#[test]
+fn failed_request_snapshots_follow_request_detail_retention() -> Result<(), AppError> {
+    let db = Database::memory()?;
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO proxy_request_logs
+                (request_id, provider_id, app_type, model, latency_ms, status_code, created_at)
+             VALUES ('atlas_failure', 'copilot', 'codex', 'gpt-6-sol', 100, 502, 1)",
+            [],
+        )?;
+    }
+    let detail = RequestDiagnosticDetail {
+        upstream_status: Some(200),
+        failure_stage: Some("stream".into()),
+        request_headers: Some("authorization: [redacted]".into()),
+        request_body: Some("{\"model\":\"gpt-6-sol\"}".into()),
+        response_headers: Some("content-type: text/event-stream".into()),
+        response_body: Some("event: response.failed".into()),
+    };
+    db.save_request_diagnostics("atlas_failure", &detail)?;
+    let saved = db.get_request_diagnostics("atlas_failure")?.unwrap();
+    assert_eq!(saved.upstream_status, Some(200));
+    assert_eq!(
+        saved.response_body.as_deref(),
+        Some("event: response.failed")
+    );
+
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM proxy_request_logs WHERE request_id = 'atlas_failure'",
+            [],
+        )?;
+        let remaining: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM proxy_request_diagnostics",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(remaining, 0);
+    }
+    assert!(db.get_request_diagnostics("atlas_failure")?.is_none());
+    Ok(())
 }
 
 #[test]

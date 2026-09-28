@@ -199,8 +199,11 @@ fn read_file_unlocked() -> Result<Option<ModelPricingFile>, AppError> {
 
 fn write_file_unlocked(file: &ModelPricingFile) -> Result<(), AppError> {
     let path = model_pricing_file_path();
-    let mut data = serde_json::to_vec_pretty(file)
-        .map_err(|error| AppError::Config(format!("序列化模型定价配置失败: {error}")))?;
+    let mut data = serde_json::to_vec_pretty(file).map_err(|error| {
+        AppError::Config(format!(
+            "Serialized model pricing configuration failed: {error}"
+        ))
+    })?;
     data.push(b'\n');
     atomic_write(&path, &data)
 }
@@ -254,7 +257,7 @@ fn upsert_pricing(
                     .map_err(|e| AppError::Config(e.to_string()))?
             ],
         )
-        .map_err(|error| AppError::Database(format!("更新模型定价失败: {error}")))
+        .map_err(|error| AppError::Database(format!("Failed to update model pricing: {error}")))
 }
 
 fn apply_file_to_database(
@@ -281,9 +284,9 @@ fn apply_file_to_database(
 /// Load all model overrides from Atlas's own model-pricing.json.
 pub fn sync_local_model_pricing(db: &Database) -> Result<usize, AppError> {
     let (upserted, deleted) = {
-        let _file_guard = file_lock()
-            .lock()
-            .map_err(|error| AppError::Config(format!("模型定价文件锁失败: {error}")))?;
+        let _file_guard = file_lock().lock().map_err(|error| {
+            AppError::Config(format!("Model pricing file lock failed: {error}"))
+        })?;
         let file = load_or_create_file_unlocked()?;
         apply_file_to_database(db, &file)?
     };
@@ -293,7 +296,7 @@ pub fn sync_local_model_pricing(db: &Database) -> Result<usize, AppError> {
     // deleted on every startup; they must not trigger a full-table backfill.
     if upserted > 0 {
         if let Err(error) = db.backfill_missing_usage_costs() {
-            log::warn!("本地模型定价同步后回填历史用量成本失败: {error}");
+            log::warn!("Failed to backfill historical usage cost after local model pricing synchronization: {error}");
         }
     }
     Ok(upserted + deleted)
@@ -305,9 +308,9 @@ pub fn update_model_pricing(db: &Database, entry: ModelPricingInfo) -> Result<us
 
     sync_local_model_pricing(db)?;
     let changed = {
-        let _file_guard = file_lock()
-            .lock()
-            .map_err(|error| AppError::Config(format!("模型定价文件锁失败: {error}")))?;
+        let _file_guard = file_lock().lock().map_err(|error| {
+            AppError::Config(format!("Model pricing file lock failed: {error}"))
+        })?;
         let mut file = load_or_create_file_unlocked()?;
         let mut file_models = file
             .models
@@ -349,7 +352,7 @@ pub fn delete_model_pricing(db: &Database, model_id: &str) -> Result<(), AppErro
     sync_local_model_pricing(db)?;
     let _file_guard = file_lock()
         .lock()
-        .map_err(|error| AppError::Config(format!("模型定价文件锁失败: {error}")))?;
+        .map_err(|error| AppError::Config(format!("Model pricing file lock failed: {error}")))?;
     let mut file = load_or_create_file_unlocked()?;
     file.models.retain(|entry| entry.model_id != model_id);
     if !file
@@ -377,7 +380,7 @@ pub fn delete_model_pricing(db: &Database, model_id: &str) -> Result<(), AppErro
 pub fn reset_model_pricing_to_defaults(db: &Database) -> Result<(), AppError> {
     let _file_guard = file_lock()
         .lock()
-        .map_err(|error| AppError::Config(format!("模型定价文件锁失败: {error}")))?;
+        .map_err(|error| AppError::Config(format!("Model pricing file lock failed: {error}")))?;
     let mut file = read_file_unlocked()?.unwrap_or_default();
     file.models.clear();
     file.deleted_model_ids.clear();

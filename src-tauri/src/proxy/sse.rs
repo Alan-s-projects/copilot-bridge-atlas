@@ -149,15 +149,15 @@ mod tests {
     fn complete_multibyte_in_single_chunk() {
         let mut buf = String::new();
         let mut rem = Vec::new();
-        append_utf8_safe(&mut buf, &mut rem, "你好世界".as_bytes());
-        assert_eq!(buf, "你好世界");
+        append_utf8_safe(&mut buf, &mut rem, "Héllo Wørld".as_bytes());
+        assert_eq!(buf, "Héllo Wørld");
         assert!(rem.is_empty());
     }
 
     #[test]
     fn split_multibyte_across_two_chunks() {
-        // "你" = E4 BD A0 (3 bytes)
-        let bytes = "你".as_bytes();
+        // "€" = E2 82 AC (3 bytes)
+        let bytes = "€".as_bytes();
         assert_eq!(bytes.len(), 3);
 
         let mut buf = String::new();
@@ -170,7 +170,7 @@ mod tests {
 
         // Chunk 2: last byte completes the character
         append_utf8_safe(&mut buf, &mut rem, &bytes[2..]);
-        assert_eq!(buf, "你");
+        assert_eq!(buf, "€");
         assert!(rem.is_empty());
     }
 
@@ -203,40 +203,40 @@ mod tests {
 
     #[test]
     fn mixed_ascii_and_split_multibyte() {
-        // "hi你" = 68 69 E4 BD A0
-        let all = "hi你".as_bytes();
+        // "hi€" = 68 69 E2 82 AC
+        let all = "hi€".as_bytes();
         assert_eq!(all.len(), 5);
 
         let mut buf = String::new();
         let mut rem = Vec::new();
 
-        // Chunk 1: "hi" + first byte of "你"
+        // Chunk 1: "hi" + first byte of "€"
         append_utf8_safe(&mut buf, &mut rem, &all[..3]);
         assert_eq!(buf, "hi");
         assert_eq!(rem.len(), 1);
 
-        // Chunk 2: remaining 2 bytes of "你"
+        // Chunk 2: remaining 2 bytes of "€"
         append_utf8_safe(&mut buf, &mut rem, &all[3..]);
-        assert_eq!(buf, "hi你");
+        assert_eq!(buf, "hi€");
         assert!(rem.is_empty());
     }
 
     #[test]
     fn multiple_split_characters_in_sequence() {
-        let text = "你好";
-        let bytes = text.as_bytes(); // E4 BD A0 E5 A5 BD
+        let text = "€≈";
+        let bytes = text.as_bytes(); // E2 82 AC E2 89 88
 
         let mut buf = String::new();
         let mut rem = Vec::new();
 
         // Split in the middle: first char complete + 1 byte of second
         append_utf8_safe(&mut buf, &mut rem, &bytes[..4]);
-        assert_eq!(buf, "你");
+        assert_eq!(buf, "€");
         assert_eq!(rem.len(), 1);
 
         // Remaining 2 bytes complete second char
         append_utf8_safe(&mut buf, &mut rem, &bytes[4..]);
-        assert_eq!(buf, "你好");
+        assert_eq!(buf, "€≈");
         assert!(rem.is_empty());
     }
 
@@ -257,14 +257,14 @@ mod tests {
     }
 
     #[test]
-    fn sse_json_with_chinese_split_at_boundary() {
-        // Simulates an SSE data line with Chinese content split across chunks
-        let json_line = "data: {\"text\":\"你好\"}\n\n";
+    fn sse_json_with_multibyte_split_at_boundary() {
+        // Simulate an SSE data line with multibyte UTF-8 split across chunks.
+        let json_line = "data: {\"text\":\"€≈\"}\n\n";
         let bytes = json_line.as_bytes();
 
-        // Find where "你" starts in the byte stream and split there
-        let ni_start = bytes.windows(3).position(|w| w == "你".as_bytes()).unwrap();
-        let split_point = ni_start + 1; // split inside "你"
+        // Find where "€" starts in the byte stream and split there.
+        let euro_start = bytes.windows(3).position(|w| w == "€".as_bytes()).unwrap();
+        let split_point = euro_start + 1; // split inside "€"
 
         let mut buf = String::new();
         let mut rem = Vec::new();
@@ -278,7 +278,7 @@ mod tests {
         // Verify the buffer can be parsed as SSE with valid JSON
         let data = strip_sse_field(buf.lines().next().unwrap(), "data").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(data).unwrap();
-        assert_eq!(parsed["text"], "你好");
+        assert_eq!(parsed["text"], "€≈");
     }
 
     #[test]
@@ -304,8 +304,8 @@ mod tests {
         let mut buf = String::new();
         let mut rem = Vec::new();
 
-        // Prime remainder with an incomplete sequence (first byte of "你")
-        append_utf8_safe(&mut buf, &mut rem, &"你".as_bytes()[..1]);
+        // Prime remainder with an incomplete sequence (first byte of "€").
+        append_utf8_safe(&mut buf, &mut rem, &"€".as_bytes()[..1]);
         assert_eq!(rem.len(), 1);
 
         // Next chunk starts with an invalid byte – the stale remainder and the

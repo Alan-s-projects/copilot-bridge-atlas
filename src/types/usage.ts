@@ -7,7 +7,7 @@ export interface RequestLog {
   requestModel?: string;
   requestedReasoningEffort?: string;
   appliedReasoningEffort?: string;
-  /** 写入时实际用于计价的模型名；路由接管 + request 计价模式下可能与 model 不同 */
+  /** The name of the model actually used for pricing when writing; it may be different from model in routing takeover + request pricing mode */
   pricingModel?: string;
   pricingTier?: "default" | "long_context";
   costMultiplier: string;
@@ -30,6 +30,15 @@ export interface RequestLog {
   errorMessage?: string;
   createdAt: number;
   dataSource?: string;
+}
+
+export interface RequestDiagnosticDetail {
+  upstreamStatus?: number | null;
+  failureStage?: string | null;
+  requestHeaders?: string | null;
+  requestBody?: string | null;
+  responseHeaders?: string | null;
+  responseBody?: string | null;
 }
 
 export interface PendingRequestLog
@@ -152,11 +161,11 @@ export interface LogFilters {
 }
 
 /**
- * Dashboard 顶栏的全局筛选维度，作用于 Hero / 趋势图 / 三个统计 Tab。
+ * The global filtering dimension of the top bar of the Dashboard applies to Hero/Trend Chart/Three Statistical Tabs.
  *
  * - `providerName` matches the recorded provider name.
- * - `model` 按「有效计价模型」匹配（pricing_model 优先、回落 model，
- *   与模型统计的分组口径一致）。
+ * - `model` matches according to "effective pricing model" (pricing_model takes priority, fallback model,
+ *   Consistent with the grouping caliber of model statistics).
  */
 export interface UsageScopeFilters {
   appType?: string;

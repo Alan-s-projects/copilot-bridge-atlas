@@ -15,29 +15,29 @@ use std::sync::Arc;
 use tokio::sync::{oneshot, RwLock};
 use tokio::task::JoinHandle;
 
-/// 代理服务器状态（共享）
+/// Proxy server status (shared)
 #[derive(Clone)]
 pub struct ProxyState {
     pub db: Arc<Database>,
     pub config: Arc<RwLock<ProxyConfig>>,
     pub status: Arc<RwLock<ProxyStatus>>,
     pub start_time: Arc<RwLock<Option<std::time::Instant>>>,
-    /// 每个应用类型当前使用的 provider (app_type -> (provider_id, provider_name))
+    /// The provider currently used by each app type (app_type -> (provider_id, provider_name))
     pub current_providers: Arc<RwLock<std::collections::HashMap<String, (String, String)>>>,
     /// The selected Copilot provider is resolved once per request.
     pub provider_router: Arc<ProviderRouter>,
-    /// Codex Chat bridge history，用于恢复 previous_response_id 指向的 tool call
+    /// Codex Chat bridge history, used to restore the tool call pointed to by previous_response_id
     pub codex_chat_history: Arc<CodexChatHistoryStore>,
-    /// AppHandle，用于发射事件和更新托盘菜单
+    /// AppHandle, used to fire events and update the tray menu
     pub app_handle: Option<tauri::AppHandle>,
 }
 
-/// 代理HTTP服务器
+/// Proxy HTTP server
 pub struct ProxyServer {
     config: ProxyConfig,
     state: ProxyState,
     shutdown_tx: Arc<RwLock<Option<oneshot::Sender<()>>>>,
-    /// 服务器任务句柄，用于等待服务器实际关闭
+    /// Server task handle, used to wait for the server to actually shut down
     server_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
 }
 
@@ -70,7 +70,7 @@ impl ProxyServer {
     }
 
     pub async fn start(&self) -> Result<ProxyServerInfo, ProxyError> {
-        // 检查是否已在运行
+        // Check if it is already running
         if self.shutdown_tx.read().await.is_some() {
             return Err(ProxyError::AlreadyRunning);
         }
@@ -78,15 +78,15 @@ impl ProxyServer {
         let addr: SocketAddr =
             format!("{}:{}", self.config.listen_address, self.config.listen_port)
                 .parse()
-                .map_err(|e| ProxyError::BindFailed(format!("无效的地址: {e}")))?;
+                .map_err(|e| ProxyError::BindFailed(format!("Invalid address: {e}")))?;
 
-        // 创建关闭通道
+        // Create a closed channel
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        // 构建路由
+        // Build route
         let app = self.build_router();
 
-        // 绑定监听器
+        // Bind listener
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
             .map_err(|e| ProxyError::BindFailed(e.to_string()))?;
@@ -95,26 +95,29 @@ impl ProxyServer {
             .map_err(|e| ProxyError::BindFailed(e.to_string()))?;
         let actual_port = local_addr.port();
 
-        log::info!("[{}] 代理服务器启动于 {local_addr}", log_srv::STARTED);
+        log::info!(
+            "[{}] Proxy server started at {local_addr}",
+            log_srv::STARTED
+        );
 
-        // 更新全局代理端口，用于系统代理检测
+        // Update global proxy port for system proxy detection
         crate::proxy::http_client::set_proxy_port(actual_port);
 
-        // 保存关闭句柄
+        // Save close handle
         *self.shutdown_tx.write().await = Some(shutdown_tx);
 
-        // 更新状态
+        // update status
         let mut status = self.state.status.write().await;
         status.running = true;
         status.address = self.config.listen_address.clone();
         status.port = actual_port;
         drop(status);
 
-        // 记录启动时间
+        // Record startup time
         *self.state.start_time.write().await = Some(std::time::Instant::now());
 
-        // 启动服务器 — 使用手动 hyper HTTP/1.1 accept loop
-        // 开启 preserve_header_case 以捕获客户端请求头的原始大小写
+        // Starting the server - using manual hyper HTTP/1.1 accept loop
+        // Turn on preserve_header_case to capture the original case of client request headers
         let state = self.state.clone();
         let handle = tokio::spawn(async move {
             let mut shutdown_rx = shutdown_rx;
@@ -124,7 +127,7 @@ impl ProxyServer {
                         let (stream, _remote_addr) = match result {
                             Ok(v) => v,
                             Err(e) => {
-                                log::error!("[{SRV}] accept 失败: {e}", SRV = log_srv::ACCEPT_ERR);
+                                log::error!("[{SRV}] accept failed: {e}", SRV = log_srv::ACCEPT_ERR);
                                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                                 continue;
                             }
@@ -132,11 +135,11 @@ impl ProxyServer {
 
                         let app = app.clone();
                         tokio::spawn(async move {
-                            // service_fn 将 axum Router（tower::Service）桥接到 hyper
+                            // service_fn bridges axum Router (tower::Service) to hyper
                             let service = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
                                 let mut router = app.clone();
                                 async move {
-                                    // 将 hyper::body::Incoming 转为 axum::body::Body，保留 extensions
+                                    // Convert hyper::body::Incoming to axum::body::Body and keep extensions
                                     let (parts, body) = req.into_parts();
 
 
@@ -151,7 +154,7 @@ impl ProxyServer {
                                 .serve_connection(TokioIo::new(stream), service)
                                 .await
                             {
-                                // Connection reset / broken pipe 等在代理场景下很常见，debug 级别
+                                // Connection reset / broken pipe, etc. are very common in proxy scenarios, debug level
                                 log::debug!("[{SRV}] connection error: {e}", SRV = log_srv::CONN_ERR);
                             }
                         });
@@ -162,12 +165,12 @@ impl ProxyServer {
                 }
             }
 
-            // 服务器停止后更新状态
+            // Update status after server is stopped
             state.status.write().await.running = false;
             *state.start_time.write().await = None;
         });
 
-        // 保存服务器任务句柄
+        // Save server task handle
         *self.server_handle.write().await = Some(handle);
 
         Ok(ProxyServerInfo {
@@ -178,27 +181,33 @@ impl ProxyServer {
     }
 
     pub async fn stop(&self) -> Result<(), ProxyError> {
-        // 1. 发送关闭信号
+        // 1. Send a shutdown signal
         if let Some(tx) = self.shutdown_tx.write().await.take() {
             let _ = tx.send(());
         } else {
             return Err(ProxyError::NotRunning);
         }
 
-        // 2. 等待服务器任务结束（带 5 秒超时保护）
+        // 2. Wait for the server task to end (with 5-second timeout protection)
         if let Some(handle) = self.server_handle.write().await.take() {
             match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
                 Ok(Ok(())) => {
-                    log::info!("[{}] 代理服务器已完全停止", log_srv::STOPPED);
+                    log::info!(
+                        "[{}] The proxy server has completely stopped",
+                        log_srv::STOPPED
+                    );
                     Ok(())
                 }
                 Ok(Err(e)) => {
-                    log::warn!("[{}] 代理服务器任务异常终止: {e}", log_srv::TASK_ERROR);
+                    log::warn!(
+                        "[{}] Proxy server task terminated abnormally: {e}",
+                        log_srv::TASK_ERROR
+                    );
                     Err(ProxyError::StopFailed(e.to_string()))
                 }
                 Err(_) => {
                     log::warn!(
-                        "[{}] 代理服务器停止超时（5秒），强制继续",
+                        "[{}] Proxy server stop timeout (5 seconds), forced to continue",
                         log_srv::STOP_TIMEOUT
                     );
                     Err(ProxyError::StopTimeout)
@@ -213,12 +222,12 @@ impl ProxyServer {
         let mut status = self.state.status.read().await.clone();
         status.active_requests.truncate(5);
 
-        // 计算运行时间
+        // Calculate running time
         if let Some(start) = *self.state.start_time.read().await {
             status.uptime_seconds = start.elapsed().as_secs();
         }
 
-        // 从 current_providers HashMap 获取每个应用类型当前正在使用的 provider
+        // Get the providers currently used by each application type from the current_providers HashMap
         let current_providers = self.state.current_providers.read().await;
         status.active_targets = current_providers
             .iter()
@@ -234,18 +243,18 @@ impl ProxyServer {
 
     fn build_router(&self) -> Router {
         Router::new()
-            // 健康检查
+            // health check
             .route("/health", get(handlers::health_check))
             .route("/status", get(handlers::get_status))
             // OpenAI Models API (Codex CLI reachability check)
             .route("/models", get(handlers::handle_models))
             .route("/v1/models", get(handlers::handle_models))
-            // OpenAI Responses API (Codex CLI，支持带前缀和不带前缀)
+            // OpenAI Responses API (Codex CLI, supports prefix and non-prefix)
             .route("/responses", post(handlers::handle_responses))
             .route("/v1/responses", post(handlers::handle_responses))
             .route("/v1/v1/responses", post(handlers::handle_responses))
             .route("/codex/v1/responses", post(handlers::handle_responses))
-            // OpenAI Responses Compact API (Codex CLI 远程压缩，透传)
+            // OpenAI Responses Compact API (Codex CLI remote compression, transparent transmission)
             .route(
                 "/responses/compact",
                 post(handlers::handle_responses_compact),
@@ -299,7 +308,7 @@ impl ProxyServer {
             .with_state(self.state.clone())
     }
 
-    /// 在不重启服务的情况下更新运行时配置
+    /// Update runtime configuration without restarting the service
     pub async fn apply_runtime_config(&self, config: &ProxyConfig) {
         *self.state.config.write().await = config.clone();
     }

@@ -106,7 +106,7 @@ pub(crate) fn path_is_within(base: &Path, path: &Path) -> bool {
     path_key.starts_with(&prefix)
 }
 
-/// 递归排序 JSON 对象的键（按字母顺序），确保序列化输出是确定性的
+/// Recursively sort the JSON object's keys (alphabetical order), ensuring that the serialized output is deterministic
 fn sort_json_keys(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
@@ -125,7 +125,7 @@ fn sort_json_keys(value: &Value) -> Value {
 
 /// Write stable JSON into Atlas's own storage using atomic replacement.
 pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
-    // 确保目录存在
+    // Make sure the directory exists
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
     }
@@ -138,7 +138,7 @@ pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppErr
     atomic_write(path, json.as_bytes())
 }
 
-/// 原子写入：写入临时文件后 rename 替换，避免半写状态
+/// Atomic write: Rename replacement after writing to temporary file to avoid half-write state
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
@@ -146,10 +146,10 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
 
     let parent = path
         .parent()
-        .ok_or_else(|| AppError::Config("无效的路径".to_string()))?;
+        .ok_or_else(|| AppError::Config("Invalid path".to_string()))?;
     let file_name = path
         .file_name()
-        .ok_or_else(|| AppError::Config("无效的文件名".to_string()))?
+        .ok_or_else(|| AppError::Config("Invalid file name".to_string()))?
         .to_string_lossy()
         .to_string();
     let ts = std::time::SystemTime::now()
@@ -259,7 +259,11 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
             let source = last_error.unwrap_or_else(std::io::Error::last_os_error);
             let _ = fs::remove_file(&tmp);
             return Err(AppError::IoContext {
-                context: format!("原子替换失败: {} -> {}", tmp.display(), path.display()),
+                context: format!(
+                    "Atomic replacement failed: {} -> {}",
+                    tmp.display(),
+                    path.display()
+                ),
                 source,
             });
         }
@@ -471,7 +475,7 @@ mod tests {
 
     #[test]
     fn sort_json_keys_produces_identical_output_for_different_insertion_orders() {
-        // 核心保证：同一逻辑配置无论键的插入顺序如何，写出的字节序列必须一致。
+        // Core guarantee: Regardless of the insertion order of keys in the same logical configuration, the written byte sequence must be consistent.
         let mut a = Map::new();
         a.insert("env".to_string(), serde_json::json!({"PATH": "/usr/bin"}));
         a.insert("model".to_string(), serde_json::json!("gpt-6-astra"));

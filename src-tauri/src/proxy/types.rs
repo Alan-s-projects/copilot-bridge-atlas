@@ -27,12 +27,12 @@ impl ReasoningEffort {
     }
 }
 
-/// 代理服务器配置
+/// Proxy server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyConfig {
-    /// 监听地址
+    /// listening address
     pub listen_address: String,
-    /// 监听端口
+    /// listening port
     pub listen_port: u16,
 }
 
@@ -40,43 +40,43 @@ impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
             listen_address: "127.0.0.1".to_string(),
-            listen_port: 15722, // 使用较少占用的高位端口
+            listen_port: 15722, // Use less occupied high-order ports
         }
     }
 }
 
-/// 代理服务器状态
+/// Proxy server status
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProxyStatus {
     #[serde(default)]
     pub active_requests: Vec<ActiveProxyRequest>,
-    /// 是否运行中
+    /// Is it running?
     pub running: bool,
-    /// 监听地址
+    /// listening address
     pub address: String,
-    /// 监听端口
+    /// listening port
     pub port: u16,
-    /// 活跃连接数
+    /// Number of active connections
     pub active_connections: usize,
-    /// 总请求数
+    /// Total requests
     pub total_requests: u64,
-    /// 成功请求数
+    /// Number of successful requests
     pub success_requests: u64,
-    /// 失败请求数
+    /// Number of failed requests
     pub failed_requests: u64,
-    /// 成功率 (0-100)
+    /// Success rate (0-100)
     pub success_rate: f32,
-    /// 运行时间（秒）
+    /// Run time (seconds)
     pub uptime_seconds: u64,
-    /// 当前使用的Provider名称
+    /// Provider name currently in use
     pub current_provider: Option<String>,
-    /// 当前Provider的ID
+    /// ID of the current provider
     pub current_provider_id: Option<String>,
-    /// 最后一次请求时间
+    /// Last request time
     pub last_request_at: Option<String>,
-    /// 最后一次错误信息
+    /// Last error message
     pub last_error: Option<String>,
-    /// 当前活跃的代理目标列表
+    /// List of currently active proxy targets
     #[serde(default)]
     pub active_targets: Vec<ActiveTarget>,
 }
@@ -93,7 +93,7 @@ pub struct ActiveProxyRequest {
     pub created_at: i64,
 }
 
-/// 活跃的代理目标信息
+/// Active agent target information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActiveTarget {
     pub app_type: String, // "codex"
@@ -101,7 +101,7 @@ pub struct ActiveTarget {
     pub provider_id: String,
 }
 
-/// 代理服务器信息
+/// Proxy server information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyServerInfo {
     pub address: String,
@@ -113,11 +113,11 @@ pub struct ProxyServerInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalProxyConfig {
-    /// 代理总开关
+    /// Agent main switch
     pub proxy_enabled: bool,
-    /// 监听地址
+    /// listening address
     pub listen_address: String,
-    /// 监听端口
+    /// listening port
     pub listen_port: u16,
 }
 

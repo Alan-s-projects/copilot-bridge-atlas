@@ -20,7 +20,7 @@ struct CodexCatalogTemplate {
 const OPENAI_INSTRUCTION_PROFILES: [&str; 3] = ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol"];
 const OPENAI_FALLBACK_PROFILE: &str = "gpt-6-astra";
 
-/// 获取 Codex 配置目录路径
+/// Get Codex configuration directory path
 pub fn get_codex_config_dir() -> PathBuf {
     if let Some(custom) = crate::settings::get_codex_override_dir() {
         return custom;
@@ -29,7 +29,7 @@ pub fn get_codex_config_dir() -> PathBuf {
     get_home_dir().join(".codex")
 }
 
-/// 获取 Codex config.toml 路径
+/// Get Codex config.toml path
 pub fn get_codex_config_path() -> PathBuf {
     get_codex_config_dir().join("config.toml")
 }
@@ -453,12 +453,12 @@ pub(crate) fn codex_model_catalog_from_settings(
 
 const MAX_CODEX_CATALOG_BYTES: u64 = 32 * 1024 * 1024;
 
-/// 安全地读取文件为字符串，并在超过字节上限时返回错误。
+/// Safely read the file as a string and return an error if the byte limit is exceeded.
 pub(crate) fn read_limited_string(path: &Path, max_bytes: u64) -> Result<String, AppError> {
     let metadata = fs::metadata(path).map_err(|error| AppError::io(path, error))?;
     if metadata.len() > max_bytes {
         return Err(AppError::Config(format!(
-            "文件 {} 超过大小上限 {} 字节",
+            "File {} exceeds size limit {} bytes",
             path.display(),
             max_bytes
         )));

@@ -5,15 +5,15 @@ use std::sync::{OnceLock, RwLock};
 pub struct InitErrorPayload {
     pub path: String,
     pub error: String,
-    /// 错误类别。`Some("db_version_too_new")` 表示数据库版本过新（应用过旧），
-    /// 前端据此展示「升级应用」恢复界面而非直接退出。
+    /// Error category. `Some("db_version_too_new")` indicates that the database version is too new (the application is too old),
+    /// Accordingly, the front end displays the "Upgrade Application" recovery interface instead of exiting directly.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-    /// 磁盘上数据库的 user_version（数据库版本过新时填充）
+    /// user_version of the database on disk (populated when the database version is out of date)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub db_version: Option<i32>,
-    /// 当前应用支持的 SCHEMA_VERSION（数据库版本过新时填充）。
-    /// 当升级到最新版后 db_version 仍 > supported_version，说明可能由第三方客户端创建。
+    /// SCHEMA_VERSION supported by the current application (populated when the database version is out of date).
+    /// After upgrading to the latest version, db_version is still > supported_version, indicating that it may have been created by a third-party client.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supported_version: Option<i32>,
 }

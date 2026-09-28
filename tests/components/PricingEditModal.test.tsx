@@ -51,10 +51,10 @@ const model: ModelPricing = {
 };
 
 const PRICE_FIELDS = [
-  { id: "inputCost", label: "输入成本" },
-  { id: "outputCost", label: "输出成本" },
-  { id: "cacheReadCost", label: "缓存读取成本" },
-  { id: "cacheCreationCost", label: "缓存写入成本" },
+  { id: "inputCost", label: "Enter cost" },
+  { id: "outputCost", label: "Output cost" },
+  { id: "cacheReadCost", label: "Cache read cost" },
+  { id: "cacheCreationCost", label: "cache write cost" },
 ] as const;
 
 describe("PricingEditModal", () => {

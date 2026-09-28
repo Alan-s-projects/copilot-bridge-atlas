@@ -1,6 +1,6 @@
 [package]
 name = "copilot-bridge-atlas"
-version = "5.1.4"
+version = "5.2.0"
 description = "Codex GitHub Copilot bridge with usage dashboard"
 authors = ["Alan's Projects"]
 license = "MIT"
@@ -72,7 +72,7 @@ windows-sys = { version = "0.61", features = [
 codegen-units = 1
 lto = "thin"
 opt-level = "s"
-# 使用 unwind 以便 panic hook 能捕获 backtrace（abort 会直接终止无法捕获）
+# Use unwind so that panic hook can capture backtrace (abort will terminate directly and cannot be captured)
 panic = "unwind"
 strip = "symbols"
 

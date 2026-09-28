@@ -45,6 +45,12 @@ CREATE INDEX IF NOT EXISTS idx_request_logs_model ON proxy_request_logs(model);
 CREATE INDEX IF NOT EXISTS idx_request_logs_session ON proxy_request_logs(session_id);
 CREATE INDEX IF NOT EXISTS idx_request_logs_status ON proxy_request_logs(status_code);
 CREATE INDEX IF NOT EXISTS idx_request_logs_app_created_at ON proxy_request_logs(app_type, created_at DESC);
+CREATE TABLE IF NOT EXISTS proxy_request_diagnostics (
+    request_id TEXT PRIMARY KEY REFERENCES proxy_request_logs(request_id) ON DELETE CASCADE,
+    upstream_status INTEGER, failure_stage TEXT,
+    request_headers TEXT, request_body TEXT,
+    response_headers TEXT, response_body TEXT
+);
 CREATE TABLE IF NOT EXISTS model_pricing (
     model_id TEXT PRIMARY KEY, display_name TEXT NOT NULL,
     input_cost_per_million TEXT NOT NULL, output_cost_per_million TEXT NOT NULL,

@@ -1,30 +1,30 @@
-//! 请求体过滤模块
+//! Request body filtering module
 //!
-//! 过滤不应透传到上游的私有参数，防止内部信息泄露。
+//! Filter private parameters that should not be transparently transmitted to the upstream to prevent leakage of internal information.
 //!
-//! ## 过滤规则
-//! - 以 `_` 开头的字段被视为私有参数，会被递归过滤
-//! - 支持嵌套对象和数组的深度过滤
-//! - JSON Schema 的 properties / patternProperties / definitions / $defs 名称
-//!   是用户定义的字段名，不按私有参数过滤
+//! ## Filter rules
+//! - Fields starting with `_` are considered private parameters and will be filtered recursively
+//! - Supports deep filtering of nested objects and arrays
+//! - JSON Schema's properties / patternProperties / definitions / $defs names
+//!   It is a user-defined field name and is not filtered by private parameters.
 //!
-//! ## 使用场景
-//! - `_internal_id`: 内部追踪 ID
-//! - `_debug_mode`: 调试标记
-//! - `_session_token`: 会话令牌
-//! - `_client_version`: 客户端版本
+//! ## Usage scenarios
+//! - `_internal_id`: Internal tracking ID
+//! - `_debug_mode`: Debug flag
+//! - `_session_token`: session token
+//! - `_client_version`: client version
 
 use serde_json::Value;
 
-/// 过滤私有参数（以 `_` 开头的字段）
+/// Filter private parameters (fields starting with `_`)
 ///
-/// 递归遍历 JSON 结构，移除所有以下划线开头的字段。
+/// Recursively traverse the JSON structure, removing all fields starting with an underscore.
 ///
 /// # Arguments
-/// * `body` - 原始请求体
+/// * `body` - original request body
 ///
 /// # Returns
-/// 过滤后的请求体
+/// Filtered request body
 ///
 /// # Example
 /// ```ignore
@@ -34,13 +34,13 @@ use serde_json::Value;
 ///     "messages": [{"role": "user", "content": "hello", "_token": "secret"}]
 /// });
 /// let output = filter_private_params(input);
-/// // output 中不包含 _internal_id 和 _token
+/// // output does not contain _internal_id and _token
 /// ```
 pub fn filter_private_params(body: Value) -> Value {
     filter_recursive(body, &mut Vec::new(), &mut Vec::new())
 }
 
-/// 递归过滤实现
+/// Recursive filtering implementation
 fn filter_recursive(value: Value, path: &mut Vec<String>, removed_keys: &mut Vec<String>) -> Value {
     match value {
         Value::Object(map) => {
@@ -60,9 +60,9 @@ fn filter_recursive(value: Value, path: &mut Vec<String>, removed_keys: &mut Vec
                 })
                 .collect();
 
-            // 仅在有过滤时记录日志（避免每次请求都打印）
+            // Only log when filtered (avoid printing on every request)
             if !removed_keys.is_empty() {
-                log::debug!("[BodyFilter] 过滤私有参数: {removed_keys:?}");
+                log::debug!("[BodyFilter] Filter private parameters: {removed_keys:?}");
                 removed_keys.clear();
             }
 
@@ -125,18 +125,18 @@ mod tests {
 
         let output = filter_private_params(input);
 
-        // 顶级字段保留
+        // Top-level fields reserved
         assert!(output.get("model").is_some());
         assert!(output.get("messages").is_some());
         assert!(output.get("metadata").is_some());
 
-        // messages 数组中的私有参数被过滤
+        // Private parameters in messages array are filtered
         let messages = output.get("messages").unwrap().as_array().unwrap();
         assert!(messages[0].get("role").is_some());
         assert!(messages[0].get("content").is_some());
         assert!(messages[0].get("_session_token").is_none());
 
-        // metadata 对象中的私有参数被过滤
+        // Private parameters in metadata objects are filtered
         let metadata = output.get("metadata").unwrap();
         assert!(metadata.get("user_id").is_some());
         assert!(metadata.get("_tracking_id").is_none());
@@ -197,7 +197,7 @@ mod tests {
 
         let output = filter_private_params(input.clone());
 
-        // 无私有参数时，输出应与输入相同
+        // Without private parameters, the output should be the same as the input
         assert_eq!(input, output);
     }
 
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn test_primitive_values() {
-        // 原始值不应被修改
+        // The original value should not be modified
         assert_eq!(filter_private_params(json!(42)), json!(42));
         assert_eq!(filter_private_params(json!("string")), json!("string"));
         assert_eq!(filter_private_params(json!(true)), json!(true));

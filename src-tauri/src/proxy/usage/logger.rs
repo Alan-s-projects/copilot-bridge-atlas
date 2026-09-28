@@ -1,4 +1,4 @@
-//! Usage Logger - 记录 API 请求使用情况
+//! Usage Logger - records API request usage
 
 use super::calculator::{CostBreakdown, CostCalculator, ModelPricing};
 use super::parser::TokenUsage;
@@ -59,7 +59,7 @@ impl UsageSemantic {
     }
 }
 
-/// 请求日志
+/// Request log
 #[derive(Debug, Clone)]
 pub struct RequestLog {
     pub request_id: String,
@@ -68,10 +68,10 @@ pub struct RequestLog {
     pub model: String,
     pub request_model: String,
     pub reasoning_effort: ReasoningEffort,
-    /// 写入时实际用于计价的模型名（pricing_model_source 解析后的结果）。
-    /// 落库供回填使用：缺价行补价后必须按写入时的基准重算，而不是
-    /// 用 model/request_model 猜——路由接管下三者可能各不相同。
-    /// 错误行（未计价）为空字符串。
+    /// The name of the model actually used for pricing when writing (the result of parsing pricing_model_source).
+    /// Dropped into inventory for backfilling: after filling up the missing price line, it must be recalculated based on the basis at the time of writing, not
+    /// Use model/request_model to guess - the three may be different under routing takeover.
+    /// Error rows (unpriced) are empty strings.
     pub pricing_model: String,
     pub usage: TokenUsage,
     pub cost: Option<CostBreakdown>,
@@ -82,13 +82,13 @@ pub struct RequestLog {
     pub session_id: Option<String>,
     /// Provider identity stored with the request log.
     pub provider_type: Option<String>,
-    /// 是否为流式请求
+    /// Whether it is a streaming request
     pub is_streaming: bool,
-    /// 成本倍数
+    /// cost multiple
     pub cost_multiplier: String,
 }
 
-/// 使用量记录器
+/// Usage logger
 pub struct UsageLogger<'a> {
     db: &'a Database,
 }
@@ -98,7 +98,7 @@ impl<'a> UsageLogger<'a> {
         Self { db }
     }
 
-    /// 记录成功的请求
+    /// Log successful requests
     pub fn log_request(&self, log: &RequestLog) -> Result<(), AppError> {
         let conn = crate::database::lock_conn!(self.db.conn);
 
@@ -155,7 +155,7 @@ impl<'a> UsageLogger<'a> {
                         return Ok(());
                     }
                     return Err(AppError::Database(format!(
-                        "usage collision fallback 主键发生 SHA-256 冲突: {fallback}"
+                        "usage collision fallback SHA-256 conflict occurs on primary key: {fallback}"
                     )));
                 }
                 (fallback, false, true)
@@ -212,7 +212,7 @@ impl<'a> UsageLogger<'a> {
                     log.cost.as_ref().map(|cost| cost.pricing_tier),
                 ],
             )
-            .map_err(|e| AppError::Database(format!("记录请求日志失败: {e}")))?;
+            .map_err(|e| AppError::Database(format!("Failed to log request: {e}")))?;
 
         if affected_rows > 0 {
             if collision {
@@ -255,10 +255,10 @@ impl<'a> UsageLogger<'a> {
             },
         )
         .optional()
-        .map_err(|error| AppError::Database(format!("查询 usage request_id 失败: {error}")))
+        .map_err(|error| AppError::Database(format!("Query usage request_id failed: {error}")))
     }
 
-    /// 记录失败的请求（带更多上下文信息）
+    /// Logging failed requests (with more contextual information)
     #[allow(clippy::too_many_arguments)]
     pub fn log_error_with_context(
         &self,
@@ -282,7 +282,7 @@ impl<'a> UsageLogger<'a> {
             model,
             request_model,
             reasoning_effort,
-            // 错误行未经过计价，留空（回填的 has_usage 闸门也不会碰全 0 行）
+            // Error rows are not priced and are left blank (the backfilled has_usage gate will not touch all 0 rows)
             pricing_model: String::new(),
             usage: TokenUsage::default(),
             cost: None,
@@ -299,7 +299,7 @@ impl<'a> UsageLogger<'a> {
         self.log_request(&log)
     }
 
-    /// 获取模型定价
+    /// Get model pricing
     pub fn get_model_pricing(
         &self,
         model_id: &str,
@@ -320,12 +320,12 @@ impl<'a> UsageLogger<'a> {
                     pricing.pricing_tier = tier;
                     Some(pricing)
                 })
-                .map_err(|e| AppError::Database(format!("解析定价数据失败: {e}"))),
+                .map_err(|e| AppError::Database(format!("Failed to parse pricing data: {e}"))),
             None => Ok(None),
         }
     }
 
-    /// 计算并记录请求
+    /// Count and log requests
     #[allow(clippy::too_many_arguments)]
     pub fn log_with_calculation(
         &self,
@@ -360,7 +360,9 @@ impl<'a> UsageLogger<'a> {
             || usage.cache_creation_tokens > 0;
 
         if pricing.is_none() && has_usage && !is_placeholder_pricing_model(&pricing_model) {
-            log::warn!("[USG-002] 模型定价未找到，成本将记录为 0: {pricing_model}");
+            log::warn!(
+                "[USG-002] Model pricing not found, cost will be recorded as 0: {pricing_model}"
+            );
         }
 
         let cost = CostCalculator::try_calculate_for_app(
@@ -433,7 +435,7 @@ mod tests {
     fn test_log_request() -> Result<(), AppError> {
         let db = Database::memory()?;
 
-        // 插入测试定价
+        // Insert test pricing
         {
             let conn = crate::database::lock_conn!(db.conn);
             conn.execute(
@@ -473,7 +475,7 @@ mod tests {
             ReasoningEffort::default(),
         )?;
 
-        // 验证记录已插入
+        // Verify record has been inserted
         let conn = crate::database::lock_conn!(db.conn);
         let (count, request_model): (i64, String) = conn
             .query_row(
@@ -740,7 +742,7 @@ mod tests {
             },
         )?;
 
-        // 验证错误记录已插入
+        // Verify error record inserted
         let conn = crate::database::lock_conn!(db.conn);
         let (status, error, streaming, session, provider_type): (
             i64,

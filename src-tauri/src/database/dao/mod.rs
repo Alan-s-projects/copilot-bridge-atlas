@@ -4,5 +4,6 @@
 
 pub mod providers;
 pub mod proxy;
+pub mod request_diagnostics;
 pub mod settings;
 pub mod usage_rollup;

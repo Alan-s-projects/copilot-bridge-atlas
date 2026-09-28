@@ -128,7 +128,7 @@ impl ActiveConnectionGuard {
 }
 impl Drop for ActiveConnectionGuard {
     fn drop(&mut self) {
-        // Drop 不能 await：把减量操作调度到 tokio runtime
+        // Drop cannot await: schedule the decrement operation to tokio runtime
         let status = self.status.clone();
         let request_id = self.request_id.clone();
         let app = self.app_handle.clone();
@@ -143,7 +143,7 @@ impl Drop for ActiveConnectionGuard {
                 }
             });
         }
-        // 没有 runtime 时静默丢失计数（仅 UI 展示用，可接受最终一致性）
+        // Silently lose count when there is no runtime (only for UI display, eventual consistency is acceptable)
     }
 }
 
@@ -362,14 +362,6 @@ impl RequestForwarder {
             .as_ref()
             .map(|fixture| fixture.client.clone())
             .unwrap_or_else(super::http_client::get);
-        let mut request = client.request(method, &url);
-        if streaming {
-            request = request.timeout(std::time::Duration::from_secs(24 * 60 * 60));
-        }
-        for (name, value) in &outgoing {
-            request = request.header(name, value);
-        }
-        let request = request.body(body_bytes);
         // Retain the sent value even when the upstream returns an error.
         reasoning_effort.record_applied(&body);
         if let Some(diagnostics) = &self.diagnostics {
@@ -386,8 +378,18 @@ impl RequestForwarder {
                 reasoning_effort,
                 outgoing_bytes,
                 &body,
+                &outgoing,
+                &body_bytes,
             );
         }
+        let mut request = client.request(method, &url);
+        if streaming {
+            request = request.timeout(std::time::Duration::from_secs(24 * 60 * 60));
+        }
+        for (name, value) in &outgoing {
+            request = request.header(name, value);
+        }
+        let request = request.body(body_bytes);
         if let Some(active) = active {
             active
                 .update(outbound_model.as_deref(), reasoning_effort)
@@ -680,11 +682,17 @@ fn build_copilot_unversioned_url(base_url: &str, endpoint: &str) -> String {
 
 fn map_reqwest_send_error(error: reqwest::Error) -> ProxyError {
     if error.is_timeout() {
-        ProxyError::Timeout(format!("上游请求超时: {}", error.without_url()))
+        ProxyError::Timeout(format!("Upstream request timeout: {}", error.without_url()))
     } else if error.is_connect() {
-        ProxyError::ForwardFailed(format!("上游连接失败: {}", error.without_url()))
+        ProxyError::ForwardFailed(format!(
+            "Upstream connection failed: {}",
+            error.without_url()
+        ))
     } else {
-        ProxyError::ForwardFailed(format!("上游请求发送失败: {}", error.without_url()))
+        ProxyError::ForwardFailed(format!(
+            "Failed to send upstream request: {}",
+            error.without_url()
+        ))
     }
 }
 

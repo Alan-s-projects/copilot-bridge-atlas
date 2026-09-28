@@ -17,13 +17,13 @@ pub fn codex_stream_usage_event_filter(data: &str) -> bool {
 }
 
 fn codex_auto_model_extractor(events: &[Value], fallback_model: &str) -> String {
-    // 首先尝试从解析的 usage 中获取模型
+    // First try to get the model from the parsed usage
     if let Some(usage) = TokenUsage::from_codex_stream_events_auto(events) {
         if let Some(model) = usage.model.filter(|m| !m.is_empty()) {
             return model;
         }
     }
-    // 回退：从 response.completed 事件中提取
+    // Fallback: Extracted from response.completed event
     events
         .iter()
         .find_map(|e| {
@@ -37,7 +37,7 @@ fn codex_auto_model_extractor(events: &[Value], fallback_model: &str) -> String 
             }
         })
         .or_else(|| {
-            // 再回退：从 OpenAI 格式事件中提取
+            // Falling Back Again: Extracting from OpenAI Format Events
             events
                 .iter()
                 .find_map(|e| e.get("model")?.as_str().filter(|m| !m.is_empty()))

@@ -1,6 +1,6 @@
-//! 通用设置数据访问对象
+//! Common Settings Data Access Object
 //!
-//! 提供键值对形式的通用设置存储。
+//! Provides a common settings store in the form of key-value pairs.
 
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
@@ -86,7 +86,7 @@ impl Database {
         Ok(settings)
     }
 
-    /// 获取设置值
+    /// Get setting value
     pub fn get_setting(&self, key: &str) -> Result<Option<String>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
@@ -106,7 +106,7 @@ impl Database {
         }
     }
 
-    /// 设置值
+    /// Set value
     pub fn set_setting(&self, key: &str, value: &str) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
         conn.execute(
@@ -117,30 +117,30 @@ impl Database {
         Ok(())
     }
 
-    // --- 全局出站代理 ---
+    // --- Global outbound proxy ---
 
-    /// 全局代理 URL 的存储键名
+    /// Storage key name for the global proxy URL
     const GLOBAL_PROXY_URL_KEY: &'static str = "global_proxy_url";
 
-    /// 获取全局出站代理 URL
+    /// Get global outbound proxy URL
     ///
-    /// 返回 None 表示未配置或已清除代理（直连）
-    /// 返回 Some(url) 表示已配置代理
+    /// Return None to indicate that the proxy is not configured or has been cleared (direct connection)
+    /// Returns Some(url) indicating that the proxy has been configured
     pub fn get_global_proxy_url(&self) -> Result<Option<String>, AppError> {
         self.get_setting(Self::GLOBAL_PROXY_URL_KEY)
     }
 
-    /// 设置全局出站代理 URL
+    /// Set global outbound proxy URL
     ///
-    /// - 传入非空字符串：启用代理
-    /// - 传入空字符串或 None：清除代理设置（直连）
+    /// - Pass in a non-empty string: enable proxy
+    /// - Pass in empty string or None: clear proxy settings (direct connection)
     pub fn set_global_proxy_url(&self, url: Option<&str>) -> Result<(), AppError> {
         match url {
             Some(u) if !u.trim().is_empty() => {
                 self.set_setting(Self::GLOBAL_PROXY_URL_KEY, u.trim())
             }
             _ => {
-                // 清除代理设置
+                // Clear proxy settings
                 let conn = lock_conn!(self.conn);
                 conn.execute(
                     "DELETE FROM settings WHERE key = ?1",
@@ -152,17 +152,20 @@ impl Database {
         }
     }
 
-    // --- Copilot 优化器配置 ---
+    // --- Copilot optimizer configuration ---
 
-    /// 获取 Copilot 优化器配置
+    /// Get Copilot optimizer configuration
     ///
-    /// 返回配置，如果不存在则返回默认值（默认开启）
+    /// Returns the configuration, or returns the default value if it does not exist (enabled by default)
     pub fn get_copilot_optimizer_config(
         &self,
     ) -> Result<crate::proxy::types::CopilotOptimizerConfig, AppError> {
         match self.get_setting("copilot_optimizer_config")? {
-            Some(json) => serde_json::from_str(&json)
-                .map_err(|e| AppError::Database(format!("解析 Copilot 优化器配置失败: {e}"))),
+            Some(json) => serde_json::from_str(&json).map_err(|e| {
+                AppError::Database(format!(
+                    "Failed to parse Copilot optimizer configuration: {e}"
+                ))
+            }),
             None => Ok(crate::proxy::types::CopilotOptimizerConfig::default()),
         }
     }

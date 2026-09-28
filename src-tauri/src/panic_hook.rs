@@ -1,7 +1,7 @@
-//! Panic Hook 模块
+//! Panic Hook module
 //!
 //! Crash reports are stored under the application's own data directory.
-//! 便于用户和开发者诊断闪退问题。
+//! It is convenient for users and developers to diagnose crash problems.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -9,7 +9,7 @@ use std::panic;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-/// 应用版本号（从 Cargo.toml 读取）
+/// Application version number (read from Cargo.toml)
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const CRASH_LOG_MAX_SIZE: u64 = 5 * 1024 * 1024;
 const CRASH_LOG_ARCHIVES_TO_KEEP: usize = 2;
@@ -21,14 +21,14 @@ pub fn init_app_config_dir(dir: PathBuf) {
     let _ = APP_CONFIG_DIR.set(dir);
 }
 
-/// 获取默认应用配置目录（不会 panic）
+/// Get the default application configuration directory (no panic)
 fn default_app_config_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".copilot-bridge-atlas")
 }
 
-/// 获取应用配置目录（优先使用初始化时写入的值；不会 panic）
+/// Get the application configuration directory (the value written during initialization will be used first; there will be no panic)
 fn get_app_config_dir() -> PathBuf {
     APP_CONFIG_DIR
         .get()
@@ -36,7 +36,7 @@ fn get_app_config_dir() -> PathBuf {
         .unwrap_or_else(default_app_config_dir)
 }
 
-/// 获取崩溃日志文件路径
+/// Get crash log file path
 fn get_crash_log_path() -> PathBuf {
     get_app_config_dir().join("crash.log")
 }
@@ -85,23 +85,23 @@ fn rotate_crash_log_if_needed(path: &Path) -> std::io::Result<()> {
     rotate_crash_log_if_needed_with_limit(path, CRASH_LOG_MAX_SIZE, CRASH_LOG_ARCHIVES_TO_KEEP)
 }
 
-/// 获取日志目录路径
+/// Get log directory path
 pub fn get_log_dir() -> PathBuf {
     get_app_config_dir().join("logs")
 }
 
-/// 安全获取环境信息（不会 panic）
+/// Get environment information safely (no panic)
 fn get_system_info() -> String {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
     let family = std::env::consts::FAMILY;
 
-    // 安全获取当前工作目录
+    // Safely obtain the current working directory
     let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
 
-    // 安全获取当前线程信息
+    // Safely obtain current thread information
     let thread = std::thread::current();
     let thread_name = thread.name().unwrap_or("unnamed");
     let thread_id = format!("{:?}", thread.id());
@@ -115,17 +115,17 @@ fn get_system_info() -> String {
     )
 }
 
-/// 设置 panic hook，捕获崩溃信息并写入日志文件
+/// Set up a panic hook, capture crash information and write it to a log file
 ///
-/// 在应用启动时调用此函数，确保任何 panic 都会被记录。
-/// 日志格式包含：
-/// - 时间戳
-/// - 应用版本和系统信息
-/// - Panic 信息
-/// - 发生位置（文件:行号）
-/// - Backtrace（完整调用栈）
+/// Call this function when the application starts to ensure that any panics are logged.
+/// The log format contains:
+/// - timestamp
+/// - App version and system information
+/// - Panic messages
+/// - Location of occurrence (file: line number)
+/// - Backtrace (complete call stack)
 pub fn setup_panic_hook() {
-    // 启用 backtrace（确保 release 模式也能捕获）
+    // Enable backtrace (make sure release mode also captures)
     if std::env::var("RUST_BACKTRACE").is_err() {
         std::env::set_var("RUST_BACKTRACE", "1");
     }
@@ -135,40 +135,40 @@ pub fn setup_panic_hook() {
     panic::set_hook(Box::new(move |panic_info| {
         let log_path = get_crash_log_path();
 
-        // 确保目录存在
+        // Make sure the directory exists
         if let Some(parent) = log_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        // 构建崩溃信息（使用 catch_unwind 保护时间格式化，避免嵌套 panic）
+        // Construct crash information (use catch_unwind to protect time formatting and avoid nested panics)
         let timestamp = std::panic::catch_unwind(|| {
             chrono::Local::now()
                 .format("%Y-%m-%d %H:%M:%S%.3f")
                 .to_string()
         })
         .unwrap_or_else(|_| {
-            // chrono panic 时回退到 unix timestamp
+            // Fallback to unix timestamp when chrono panics
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| format!("unix:{}.{:03}", d.as_secs(), d.subsec_millis()))
                 .unwrap_or_else(|_| "unknown".to_string())
         });
 
-        // 获取系统信息
+        // Get system information
         let system_info = std::panic::catch_unwind(get_system_info)
             .unwrap_or_else(|_| "Failed to get system info".to_string());
 
-        // 获取 panic 消息（尝试多种方式提取）
+        // Get the panic message (try multiple ways to extract it)
         let message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
             s.to_string()
         } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
             s.clone()
         } else {
-            // 尝试使用 Display trait
+            // Try using the Display trait
             format!("{panic_info}")
         };
 
-        // 获取位置信息
+        // Get location information
         let location = if let Some(loc) = panic_info.location() {
             format!(
                 "File: {}\n         Line: {}\n         Column: {}",
@@ -180,11 +180,11 @@ pub fn setup_panic_hook() {
             "Unknown location".to_string()
         };
 
-        // 捕获 backtrace（完整调用栈）
+        // Capture backtrace (full call stack)
         let backtrace = std::backtrace::Backtrace::force_capture();
         let backtrace_str = format!("{backtrace}");
 
-        // 格式化日志条目
+        // Format log entries
         let separator = "=".repeat(80);
         let sub_separator = "-".repeat(40);
         let crash_entry = format!(
@@ -214,8 +214,8 @@ Stack Trace (Backtrace)
 "#
         );
 
-        // 将 size check、轮转和追加合成同一个临界区，避免多线程同时 panic
-        // 时两个 hook 竞争 rename 而丢失归档。
+        // Combine size check, rotation and append into the same critical section to avoid simultaneous panic of multiple threads
+        // When two hooks compete for rename, the archive is lost.
         let crash_log_guard = CRASH_LOG_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -237,10 +237,10 @@ Stack Trace (Backtrace)
             );
         }
 
-        // 同时输出到 stderr（便于开发调试）
+        // At the same time, it is output to stderr (convenient for development and debugging)
         eprintln!("{crash_entry}");
 
-        // 调用默认 hook
+        // Call default hook
         default_hook(panic_info);
     }));
 }

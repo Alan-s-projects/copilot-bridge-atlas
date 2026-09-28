@@ -3,9 +3,14 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useRequestLogs } from "@/lib/query/usage";
-import type { LogFilters, UsageRangeSelection } from "@/types/usage";
+import type {
+  LogFilters,
+  RequestLog,
+  UsageRangeSelection,
+} from "@/types/usage";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { RequestLogsGrid } from "./RequestLogsGrid";
+import { RequestErrorDialog } from "./RequestErrorDialog";
 
 interface RequestLogTableProps {
   columns?: string[];
@@ -29,6 +34,7 @@ export function RequestLogTable({
   // Model and range selection are shared with the dashboard.
   const [page, setPage] = useState(0);
   const [pageInput, setPageInput] = useState("");
+  const [selectedError, setSelectedError] = useState<RequestLog | null>(null);
   const pageSize = 20;
 
   const effectiveFilters: LogFilters = {
@@ -87,7 +93,11 @@ export function RequestLogTable({
         <div className="h-[400px] animate-pulse rounded bg-gray-100" />
       ) : (
         <>
-          <RequestLogsGrid logs={logs} columns={columns} />
+          <RequestLogsGrid
+            logs={logs}
+            columns={columns}
+            onInspectError={setSelectedError}
+          />
 
           <div className="flex items-center justify-between text-sm text-muted-foreground">
             <span>{t("usage.totalRecords", { total })}</span>
@@ -167,6 +177,12 @@ export function RequestLogTable({
             </div>
           </div>
         </>
+      )}
+      {selectedError && (
+        <RequestErrorDialog
+          log={selectedError}
+          onClose={() => setSelectedError(null)}
+        />
       )}
     </div>
   );

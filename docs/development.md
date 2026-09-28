@@ -14,6 +14,8 @@ Connection proposals use the generated per-model catalog for context limits and 
 
 An upstream HTTP 408 is reported separately from Atlas's own timeout. For repeated request-body timeouts in a long conversation, reduce the context or continue in a new chat with a short handoff. Atlas does not silently remove conversation content or change Codex's compaction settings.
 
+In Usage → Request Logs, failed status codes open a centered detail dialog. New failed requests retain up to 32 KiB each of the outbound Copilot request body and upstream response body, plus up to 8 KiB of headers on each side. A `response.failed` event inside an HTTP 200 stream is saved as the response body and shown with upstream status 200 and history status 502. Long request bodies retain the first and last 16 KiB with an omission marker. Common credential-bearing headers are redacted; bodies and other headers can contain conversation text or credentials. Bounded snapshots are stored in Atlas's local database and written as escaped lines under the same Atlas ID in the file log. Database backups include the snapshots; the usual 30-day request-detail pruning removes their database rows. Treat the file log and backups as sensitive. Older history has no snapshots and displays its recorded diagnostic when available.
+
 ### Pages
 
 - **Overview:** Provider, Today's usage, and Requests cards; proxy status, endpoint, quota ring, estimated cost, cache reuse, active requests, and the latest five requests. Connection warnings appear above Provider.
@@ -27,11 +29,11 @@ The application log is always enabled at Info level and rotates locally. Each
 upstream HTTP request records an `atlas_id`, status, elapsed time, endpoint path,
 requested/upstream models, transport, streaming and reasoning metadata, request
 shape counts, response size, and allowlisted upstream correlation IDs. Failures
-also record a bounded, redacted body summary at Warn level. The same `atlas_id`
-identifies the failed request in Usage history. Old `log_config` database rows
-remain untouched but no longer control logging. Prompts, tool output, credentials,
-and arbitrary headers are excluded. A bare upstream “Bad Request” cannot identify
-which field the provider rejected.
+also record a bounded diagnostic summary and four escaped request/response
+snapshot lines at Warn level. The same `atlas_id` identifies the failed request
+in Usage history. Old `log_config` database rows remain untouched but no longer
+control logging. Request and response bodies in the file log can include prompts,
+tool output, or echoed credentials; handle logs and backups as sensitive data.
 
 Overview and Usage share the same summary component. Request logs, stored costs, and editable per-model prices retain precision. Average latency includes individual requests and weighted daily rollups for the selected range.
 
@@ -70,6 +72,6 @@ $env:COPILOT_BRIDGE_ATLAS_TEST_HOME = $atlasTestHome
 cargo test --manifest-path src-tauri/Cargo.toml --locked --offline -- --test-threads=1
 ```
 
-The local build writes the MSI and SHA256 file to `release/`. Use a reviewed PR and squash merge into `atlas`, verify that the built source matches the merged tree, then publish an `atlas-<version>` tag and upload those two explicit files. There is no cloud build workflow. Only `atlas` remains after temporary PR branches are removed.
+The local build writes the MSI and SHA256 file to `release/`. A reviewed PR targets `atlas` and includes matching versions in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, plus `docs/releases/<version>.md`. The Atlas Release workflow builds and checks each PR on Windows. After squash merge, push an `atlas-<version>` tag pointing to the merged commit. The workflow verifies that the tag is on `atlas` and matches the package version, then builds the MSI, verifies its SHA256 file, and publishes both assets with the checked-in release notes. The description begins with the pipeline run, UTC time, branch, and commit. No manual upload is needed. Remove temporary PR branches after merge.
 
 [MIT license and copyright notice](../LICENSE).

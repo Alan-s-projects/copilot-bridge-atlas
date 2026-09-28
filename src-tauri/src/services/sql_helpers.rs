@@ -3,7 +3,7 @@
 //! OpenAI input tokens include cached tokens. Normalize Codex rows once while
 //! retaining opaque imported rows without reinterpreting their token counts.
 
-/// `app_type` 的存储 `input_tokens` 是否已包含 cache read/write。
+/// Whether the storage `input_tokens` of `app_type` already contains cache read/write.
 pub(crate) fn is_cache_inclusive_app(app_type: &str) -> bool {
     app_type == "codex"
 }

@@ -130,8 +130,7 @@ export function ProviderForm({
   const [enableUltraReasoning, setEnableUltraReasoning] = useState<boolean>(
     () => {
       return (
-        ((settings as Record<string, unknown>).enableUltraReasoning ??
-          (settings as Record<string, unknown>).enable_ultra_reasoning) === true
+        (settings as Record<string, unknown>).enableUltraReasoning === true
       );
     },
   );

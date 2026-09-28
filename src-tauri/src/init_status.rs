@@ -5,15 +5,13 @@ use std::sync::{OnceLock, RwLock};
 pub struct InitErrorPayload {
     pub path: String,
     pub error: String,
-    /// Error category. `Some("db_version_too_new")` indicates that the database version is too new (the application is too old),
-    /// Accordingly, the front end displays the "Upgrade Application" recovery interface instead of exiting directly.
+    /// An incompatible database opens the recovery view.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-    /// user_version of the database on disk (populated when the database version is out of date)
+    /// user_version of the database on disk.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub db_version: Option<i32>,
-    /// SCHEMA_VERSION supported by the current application (populated when the database version is out of date).
-    /// After upgrading to the latest version, db_version is still > supported_version, indicating that it may have been created by a third-party client.
+    /// Schema version required by Atlas 6.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supported_version: Option<i32>,
 }
@@ -45,7 +43,7 @@ mod tests {
         let payload = InitErrorPayload {
             path: r"C:\Atlas\copilot-bridge-atlas.db".into(),
             error: "database version is newer than supported".into(),
-            kind: Some("db_version_too_new".into()),
+            kind: Some("db_schema_incompatible".into()),
             db_version: Some(999),
             supported_version: Some(crate::database::SCHEMA_VERSION),
         };

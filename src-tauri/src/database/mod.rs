@@ -91,12 +91,8 @@ impl Database {
         Ok(db)
     }
 
-    /// Read the `user_version` of the database on disk; only if it is larger than the [`SCHEMA_VERSION`] supported by the application
-    /// Return `Some(version)` when updating.
-    ///
-    /// Used to determine whether the "database version is too new (the application is too old and needs to be upgraded)" after initialization failure.
-    /// Scenario - At this time, invalid retry dialog boxes should not pop up repeatedly, but users should be guided to upgrade within the application.
-    pub fn stored_user_version_exceeds_supported(
+    /// Detect an incompatible schema before opening the normal app window.
+    pub fn stored_user_version_is_incompatible(
         db_path: &std::path::Path,
     ) -> Result<Option<i32>, AppError> {
         if !db_path.exists() {
@@ -104,7 +100,10 @@ impl Database {
         }
         let conn = Connection::open(db_path).map_err(|e| AppError::Database(e.to_string()))?;
         let version = Self::get_user_version(&conn)?;
-        Ok((version > SCHEMA_VERSION).then_some(version))
+        Ok(
+            (version != SCHEMA_VERSION && (version != 0 || Self::has_user_tables(&conn)?))
+                .then_some(version),
+        )
     }
 
     /// Create an in-memory database (for testing)

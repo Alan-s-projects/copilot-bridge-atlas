@@ -147,7 +147,7 @@ pub fn run() {
                 api.prevent_close();
                 // In the recovery mode where the database version is too new, there is no tray to recall, and you will exit immediately after closing to avoid the hidden background of the application.
                 let in_db_recovery = crate::init_status::get_init_error()
-                    .map(|p| p.kind.as_deref() == Some("db_version_too_new"))
+                    .map(|p| p.kind.as_deref() == Some("db_schema_incompatible"))
                     .unwrap_or(false);
                 if in_db_recovery {
                     window.app_handle().exit(0);
@@ -218,17 +218,17 @@ pub fn run() {
             let app_config_dir = crate::config::get_app_config_dir();
             let db_path = app_config_dir.join("copilot-bridge-atlas.db");
 
-            // Reject databases from a newer app before attempting schema writes.
-            match crate::database::Database::stored_user_version_exceeds_supported(&db_path) {
+            // Reject incompatible databases before attempting schema writes.
+            match crate::database::Database::stored_user_version_is_incompatible(&db_path) {
                 Ok(Some(version)) => {
-                    log::warn!("Database schema v{version} is newer than supported; opening the recovery view");
+                    log::warn!("Database schema v{version} is incompatible with Atlas 6; opening the recovery view");
                     crate::init_status::set_init_error(crate::init_status::InitErrorPayload {
                         path: db_path.display().to_string(),
                         error: format!(
-                            "Database schema {version} is newer than this app supports ({}). Install a newer version of Copilot Bridge Atlas.",
+                            "Database schema {version} is incompatible with Atlas 6 (schema {}).",
                             crate::database::SCHEMA_VERSION
                         ),
-                        kind: Some("db_version_too_new".to_string()),
+                        kind: Some("db_schema_incompatible".to_string()),
                         db_version: Some(version),
                         supported_version: Some(crate::database::SCHEMA_VERSION),
                     });
@@ -242,7 +242,7 @@ pub fn run() {
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    log::warn!("Database version preflight failed; proceeding to initialization: {e}");
+                    log::warn!("Database schema preflight failed; proceeding to initialization: {e}");
                 }
             }
 
@@ -542,7 +542,7 @@ fn show_database_init_error_dialog(
     error: &str,
 ) -> bool {
     app.dialog()
-        .message(format!("Database initialization failed: {error}\n\nDatabase: {}\n\nYour database has been preserved. Back up the data folder before trying a compatible app version.", db_path.display()))
+        .message(format!("Database initialization failed: {error}\n\nDatabase: {}\n\nAtlas has not deleted your data. Check the data folder before retrying.", db_path.display()))
         .title("Database Initialization Failed")
         .kind(MessageDialogKind::Error)
         .buttons(MessageDialogButtons::OkCancelCustom("Retry".into(), "Exit".into()))

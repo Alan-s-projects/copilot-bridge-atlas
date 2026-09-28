@@ -26,7 +26,7 @@ installGlobalErrorHandlers();
 interface ConfigLoadErrorPayload {
   path?: string;
   error?: string;
-  /** "db_version_too_new" indicates that the database version is too new, rendering the in-application upgrade recovery interface */
+  /** An incompatible database renders the recovery view. */
   kind?: string;
 }
 
@@ -74,8 +74,7 @@ async function bootstrap() {
     const initError = (await invoke(
       "get_init_error",
     )) as ConfigLoadErrorPayload | null;
-    if (initError && initError.kind === "db_version_too_new") {
-      // The database version is too new: the "Upgrade Application" recovery interface in the rendering application does not enter the normal App
+    if (initError && initError.kind === "db_schema_incompatible") {
       ReactDOM.createRoot(document.getElementById("root")!).render(
         <React.StrictMode>
           <FrontendErrorBoundary>

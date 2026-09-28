@@ -113,28 +113,23 @@ describe("Codex Copilot provider form", () => {
   });
 
   it.each([
-    [{ enableUltraReasoning: false, enable_ultra_reasoning: true }, false],
-    [{ enableUltraReasoning: true, enable_ultra_reasoning: false }, true],
-    [{ enable_ultra_reasoning: true }, true],
+    [{ enableUltraReasoning: false }, false],
+    [{ enableUltraReasoning: true }, true],
     [{}, false],
-  ])(
-    "loads and saves Ultra with canonical precedence: %j",
-    async (settings, enabled) => {
-      const onSubmit = renderForm(undefined, true, settings);
-      const toggle = screen.getByRole("switch", {
-        name: "Ultra reasoning effort",
-      });
-      expect(toggle.getAttribute("data-state")).toBe(
-        enabled ? "checked" : "unchecked",
-      );
-      fireEvent.click(toggle);
-      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-      expect(
-        JSON.parse(onSubmit.mock.calls[0][0].settingsConfig)
-          .enableUltraReasoning,
-      ).toBe(!enabled);
-    },
-  );
+  ])("loads and saves Ultra: %j", async (settings, enabled) => {
+    const onSubmit = renderForm(undefined, true, settings);
+    const toggle = screen.getByRole("switch", {
+      name: "Ultra reasoning effort",
+    });
+    expect(toggle.getAttribute("data-state")).toBe(
+      enabled ? "checked" : "unchecked",
+    );
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(
+      JSON.parse(onSubmit.mock.calls[0][0].settingsConfig).enableUltraReasoning,
+    ).toBe(!enabled);
+  });
 
   it("keeps total context metadata when an unrelated model toggle is saved", async () => {
     const onSubmit = renderForm(undefined, true, {

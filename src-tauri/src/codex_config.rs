@@ -241,7 +241,6 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
     };
     let ultra_enabled = settings
         .get("enableUltraReasoning")
-        .or_else(|| settings.get("enable_ultra_reasoning"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
@@ -270,29 +269,18 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
 
         let display_name = model_config
             .get("displayName")
-            .or_else(|| model_config.get("display_name"))
             .and_then(|value| value.as_str())
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .map(str::to_string);
-        let context_window = parse_codex_positive_u64(
-            model_config
-                .get("contextWindow")
-                .or_else(|| model_config.get("context_window")),
-        );
-        let max_context_window = parse_codex_positive_u64(
-            model_config
-                .get("maxContextWindow")
-                .or_else(|| model_config.get("max_context_window")),
-        );
+        let context_window = parse_codex_positive_u64(model_config.get("contextWindow"));
+        let max_context_window = parse_codex_positive_u64(model_config.get("maxContextWindow"));
 
         let supports_parallel_tool_calls = model_config
             .get("supportsParallelToolCalls")
-            .or_else(|| model_config.get("supports_parallel_tool_calls"))
             .and_then(|value| value.as_bool());
         let input_modalities = model_config
             .get("inputModalities")
-            .or_else(|| model_config.get("input_modalities"))
             .and_then(|value| value.as_array())
             .map(|items| {
                 items
@@ -303,23 +291,19 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
             })
             .filter(|items| !items.is_empty());
 
-        let mut reasoning_levels = ["reasoningLevels", "reasoning_levels"]
-            .into_iter()
-            .find_map(|key| {
-                model_config
-                    .get(key)?
-                    .as_array()
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .map(str::trim)
-                            .filter(|level| !level.is_empty())
-                            .map(str::to_owned)
-                            .collect::<Vec<_>>()
-                    })
-                    .filter(|levels| !levels.is_empty())
-            });
+        let mut reasoning_levels = model_config
+            .get("reasoningLevels")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|level| !level.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|levels| !levels.is_empty());
         if let Some(supported) = model_config
             .get("supportedReasoningLevels")
             .and_then(Value::as_array)
@@ -338,16 +322,12 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
                 }
             }
         }
-        let default_reasoning_level = ["defaultReasoningLevel", "default_reasoning_level"]
-            .into_iter()
-            .find_map(|key| {
-                model_config
-                    .get(key)?
-                    .as_str()
-                    .map(str::trim)
-                    .filter(|level| !level.is_empty())
-                    .map(str::to_owned)
-            });
+        let default_reasoning_level = model_config
+            .get("defaultReasoningLevel")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|level| !level.is_empty())
+            .map(str::to_owned);
 
         specs.push(CodexCatalogModelSpec {
             model: model.to_string(),
@@ -504,23 +484,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_reasoning_values_are_not_masked_by_empty_canonical_values() {
-        let settings = json!({"modelCatalog": {"models": [{
-            "model": "gpt-6-astra",
-            "reasoningLevels": [],
-            "reasoning_levels": ["high", "ultra"],
-            "defaultReasoningLevel": "",
-            "default_reasoning_level": "ultra"
-        }]}});
-        let specs = codex_catalog_model_specs(&settings);
-        assert_eq!(
-            specs[0].reasoning_levels,
-            Some(vec!["high".into(), "ultra".into()])
-        );
-        assert_eq!(specs[0].default_reasoning_level.as_deref(), Some("ultra"));
-    }
-
-    #[test]
     fn enabled_available_models_from_any_vendor_are_published_without_mutating_saved_rows() {
         let settings = json!({"modelCatalog": {"models": [
             {"model": "gpt-6-astra"}, {"model": "future-vendor/model"},
@@ -588,21 +551,19 @@ mod tests {
 
     #[test]
     fn catalog_keeps_input_and_total_context_limits_distinct() {
-        for total_key in ["maxContextWindow", "max_context_window"] {
-            let mut row = json!({"model":"grok-4.7", "contextWindow":372000});
-            row[total_key] = json!(500000);
-            let settings = json!({"modelCatalog":{"models":[row]}});
-            let catalog = codex_model_catalog_from_settings(&settings, "")
-                .unwrap()
-                .unwrap();
-            assert_eq!(catalog["models"][0]["context_window"], 372000);
-            assert_eq!(catalog["models"][0]["max_context_window"], 500000);
-            assert_eq!(catalog["models"][0]["effective_context_window_percent"], 95);
-        }
+        let settings = json!({"modelCatalog":{"models":[{
+            "model":"grok-4.7", "contextWindow":372000, "maxContextWindow":500000
+        }]}});
+        let catalog = codex_model_catalog_from_settings(&settings, "")
+            .unwrap()
+            .unwrap();
+        assert_eq!(catalog["models"][0]["context_window"], 372000);
+        assert_eq!(catalog["models"][0]["max_context_window"], 500000);
+        assert_eq!(catalog["models"][0]["effective_context_window_percent"], 95);
     }
 
     #[test]
-    fn ultra_toggle_extends_live_efforts_without_overriding_canonical_false() {
+    fn ultra_toggle_extends_live_efforts() {
         let models = json!([
             {"model":"reasoning", "reasoningLevels":["low","high"], "supportedReasoningLevels":["low","high","max"]},
             {"model":"none-only", "supportedReasoningLevels":["none"]},
@@ -610,7 +571,7 @@ mod tests {
         ]);
         for enabled in [false, true] {
             let settings = json!({
-                "enableUltraReasoning":enabled, "enable_ultra_reasoning":true,
+                "enableUltraReasoning":enabled,
                 "modelCatalog":{"models":models}
             });
             let before = settings.clone();

@@ -13,32 +13,18 @@ use crate::proxy::{
 };
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use http::HeaderValue;
 use serde_json::Value;
 use std::collections::HashMap;
 
-pub(crate) fn normalize_response(response: ProxyResponse, model: Option<&str>) -> ProxyResponse {
+pub(crate) fn normalize_response(response: ProxyResponse) -> ProxyResponse {
     if !response.status().is_success() || !response.is_sse() {
         return response;
     }
 
     let status = response.status();
     let mut headers = response.headers().clone();
-    // Copilot counts replayed encrypted reasoning in input_tokens for these
-    // native Responses models, but omits Codex's accounting marker. Without it
-    // Codex adds an estimate of the same history again, triggering early
-    // compaction. Preserve the actual usage and encrypted items verbatim.
-    // Scope this to verified models; other vendors may use different semantics.
-    // See OpenAI Codex's codex-api/src/sse/responses.rs (x-reasoning-included).
-    if model.is_some_and(|model| {
-        model.eq_ignore_ascii_case("gpt-6-astra") || model.eq_ignore_ascii_case("gpt-6-luna")
-    }) {
-        headers
-            .entry("x-reasoning-included")
-            .or_insert(HeaderValue::from_static("true"));
-    }
     // Identity encoding is requested upstream. If it is ignored, pass through
-    // the original encoded body and entity headers; accounting is independent.
+    // the original encoded body and entity headers.
     if get_content_encoding(&headers).is_some() {
         return ProxyResponse::streamed(status, headers, response.bytes_stream());
     }
@@ -340,14 +326,11 @@ mod tests {
             if let Some(encoding) = encoding {
                 headers.insert("content-encoding", HeaderValue::from_static(encoding));
             }
-            let response = normalize_response(
-                ProxyResponse::buffered(
-                    status,
-                    headers.clone(),
-                    Bytes::from_static(CAPTURE.as_bytes()),
-                ),
-                None,
-            );
+            let response = normalize_response(ProxyResponse::buffered(
+                status,
+                headers.clone(),
+                Bytes::from_static(CAPTURE.as_bytes()),
+            ));
             assert_eq!(response.status(), status);
             if rewrite {
                 assert!(!response.headers().contains_key("content-length"));
@@ -363,25 +346,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verified_copilot_models_signal_inclusive_reasoning_without_changing_usage() {
+    async fn preserves_upstream_reasoning_header_and_usage() {
         let input = "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":125,\"input_tokens_details\":{\"cached_tokens\":60},\"output_tokens\":5,\"total_tokens\":130}}}\n\n";
-        for model in ["gpt-6-astra", "gpt-6-luna", "grok-4.7", "unknown"] {
+        for upstream_header in [None, Some("true"), Some("false")] {
             let mut headers = HeaderMap::new();
             headers.insert(
                 "content-type",
                 HeaderValue::from_static("text/event-stream"),
             );
-            let response = normalize_response(
-                ProxyResponse::buffered(
-                    StatusCode::OK,
-                    headers,
-                    Bytes::copy_from_slice(input.as_bytes()),
-                ),
-                Some(model),
-            );
+            if let Some(value) = upstream_header {
+                headers.insert(
+                    "x-reasoning-included",
+                    HeaderValue::from_str(value).expect("valid upstream header"),
+                );
+            }
+            let response = normalize_response(ProxyResponse::buffered(
+                StatusCode::OK,
+                headers.clone(),
+                Bytes::copy_from_slice(input.as_bytes()),
+            ));
             assert_eq!(
-                response.headers().contains_key("x-reasoning-included"),
-                model.starts_with("gpt-6-")
+                response.headers().get("x-reasoning-included"),
+                headers.get("x-reasoning-included")
             );
             assert_eq!(collect(response.bytes_stream()).await, input);
         }

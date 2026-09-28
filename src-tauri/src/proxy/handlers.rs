@@ -251,12 +251,7 @@ pub async fn handle_responses(
                     | super::forwarder::CodexUpstreamFormat::CompatibleResponses
             )
         ) {
-        streaming_copilot_responses::normalize_response(
-            response,
-            ctx.outbound_model
-                .as_deref()
-                .or(Some(ctx.request_model.as_str())),
-        )
+        streaming_copilot_responses::normalize_response(response)
     } else {
         response
     };

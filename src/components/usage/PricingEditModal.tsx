@@ -42,7 +42,7 @@ export function PricingEditModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // 验证模型 ID
+    // Validate model ID
     if (isNew && !formData.modelId.trim()) {
       toast.error(t("usage.modelIdRequired", "Model ID is required"));
       return;
@@ -62,7 +62,7 @@ export function PricingEditModal({
       return;
     }
 
-    // 验证非负数
+    // Verify non-negative number
     const values = [
       formData.inputCost,
       formData.outputCost,

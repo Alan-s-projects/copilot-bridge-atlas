@@ -1,16 +1,16 @@
-//! HTTP content-encoding 工具。
+//! HTTP content-encoding tools.
 //!
-//! reqwest 的自动解压已禁用（为了透传 accept-encoding），需要手动解压。
-//! 请求侧（如 Codex Desktop 在登录态发压缩请求体）与响应侧（上游压缩响应体）
-//! 共用同一套解压逻辑。
+//! The automatic decompression of reqwest is disabled (in order to pass through accept-encoding), and manual decompression is required.
+//! The request side (for example, Codex Desktop sends a compressed request body in the login state) and the response side (upstream compresses the response body)
+//! Share the same set of decompression logic.
 
 use axum::http::header::HeaderMap;
 use std::io::Read;
 
-/// 把 content-encoding 值拆成有序 coding 列表（去掉 identity 与空值）。
+/// Split the content-encoding value into an ordered coding list (removing identity and null values).
 ///
-/// HTTP 允许堆叠编码（如 `gzip, zstd`），各 coding 以逗号分隔；亦允许重复
-/// content-encoding 头，语义等同逗号拼接（见 [`get_content_encoding`]）。
+/// HTTP allows stacked coding (such as `gzip, zstd`), each coding is separated by commas; repetition is also allowed
+/// content-encoding header, semantically equivalent to comma splicing (see [`get_content_encoding`]).
 fn split_codings(content_encoding: &str) -> Vec<&str> {
     content_encoding
         .split(',')
@@ -19,7 +19,7 @@ fn split_codings(content_encoding: &str) -> Vec<&str> {
         .collect()
 }
 
-/// 单个 coding 是否可被解压。
+/// Whether a single coding can be decompressed.
 fn is_single_supported(coding: &str) -> bool {
     matches!(
         coding,
@@ -27,13 +27,13 @@ fn is_single_supported(coding: &str) -> bool {
     )
 }
 
-/// 解压失败原因。把「输出超预算」与「数据损坏」区分开：前者是安全拒绝信号，
-/// 响应侧调用方应据此拒绝响应（502），而不是当成普通解压失败静默回退。
+/// Reason for decompression failure. Distinguish "output over budget" from "data corruption": the former is a security rejection signal,
+/// The caller on the response side should reject the response (502) accordingly, instead of silently falling back as a normal decompression failure.
 #[derive(Debug)]
 pub(crate) enum DecompressError {
-    /// 底层解码失败（数据损坏 / 格式不符）。
+    /// The underlying decoding failed (data corruption/format mismatch).
     Io(std::io::Error),
-    /// 解压输出超过 `limit` 字节即中止；此时真实输出大小未知，只会大于 limit。
+    /// The decompression output will be terminated if it exceeds `limit` bytes; at this time, the actual output size is unknown and will only be larger than the limit.
     TooLarge { limit: usize },
 }
 
@@ -41,7 +41,10 @@ impl std::fmt::Display for DecompressError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(e) => write!(f, "{e}"),
-            Self::TooLarge { limit } => write!(f, "解压输出超过上限 {limit} 字节"),
+            Self::TooLarge { limit } => write!(
+                f,
+                "The decompression output exceeds the upper limit of {limit} bytes"
+            ),
         }
     }
 }
@@ -54,14 +57,14 @@ impl From<std::io::Error> for DecompressError {
     }
 }
 
-/// 从解码器读取解压输出，最多 `max_bytes`；一旦输出超过预算立即中止读取并返回
-/// [`DecompressError::TooLarge`] —— 压缩炸弹在预算耗尽处被截停，而不是先在内存里
-/// 完整展开再比较大小。
+/// Read the decompressed output from the decoder, up to `max_bytes`; abort the read and return as soon as the output exceeds the budget
+/// [`DecompressError::TooLarge`] - Compression bombs are stopped at budget exhaustion instead of in memory first
+/// Expand it completely and compare the sizes.
 fn read_with_output_limit<R: Read>(
     reader: R,
     max_bytes: usize,
 ) -> Result<Vec<u8>, DecompressError> {
-    // saturating_add：无界调用（max_bytes = usize::MAX）时预算保持 usize::MAX
+    // saturating_add: budget preservation when calling unbounded (max_bytes = usize::MAX) usize::MAX
     let budget = max_bytes.saturating_add(1) as u64;
     let mut limited = reader.take(budget);
     let mut out = Vec::new();
@@ -72,7 +75,7 @@ fn read_with_output_limit<R: Read>(
     Ok(out)
 }
 
-/// 解压单个 content-coding，输出上限 `max_output_bytes`。未知编码返回 `Ok(None)`。
+/// Decompress a single content-coding and output the upper limit `max_output_bytes`. Unknown encoding returns `Ok(None)`.
 fn decompress_single(
     coding: &str,
     body: &[u8],
@@ -84,9 +87,9 @@ fn decompress_single(
             Ok(Some(read_with_output_limit(decoder, max_output_bytes)?))
         }
         "deflate" => {
-            // RFC 9110: deflate 指 zlib 包裹格式；但部分上游 / 客户端发 raw deflate 流。
-            // 先按规范尝试 zlib，失败再回退 raw —— 否则合规来源必然解压失败，
-            // 原始压缩字节会被 fail-open 透传给 JSON 解析（#2234 形态 C 之一）。
+            // RFC 9110: deflate refers to the zlib wrapper format; but some upstream/clients send raw deflate streams.
+            // First try zlib according to the specification, and then fall back to raw if it fails - otherwise the decompression of the compliant source will inevitably fail.
+            // Raw compressed bytes are fail-opened to JSON parsers (#2234 Form C one).
             let zlib = flate2::read::ZlibDecoder::new(body);
             match read_with_output_limit(zlib, max_output_bytes) {
                 Ok(decompressed) => Ok(Some(decompressed)),
@@ -94,7 +97,7 @@ fn decompress_single(
                 // A raw fallback can hide this rejection behind a decode error.
                 Err(error @ DecompressError::TooLarge { .. }) => Err(error),
                 Err(DecompressError::Io(zlib_err)) => {
-                    log::debug!("deflate 按 zlib 解压失败（{zlib_err}），回退 raw deflate");
+                    log::debug!("deflate failed to decompress according to zlib ({zlib_err}), and fell back to raw deflate");
                     let raw = flate2::read::DeflateDecoder::new(body);
                     Ok(Some(read_with_output_limit(raw, max_output_bytes)?))
                 }
@@ -105,7 +108,7 @@ fn decompress_single(
             Ok(Some(read_with_output_limit(decoder, max_output_bytes)?))
         }
         "zstd" | "zst" => {
-            // Codex 登录态对请求体启用 zstd（Compression::Zstd）；上游也可能 zstd 压缩响应。
+            // The Codex login state enables zstd (Compression::Zstd) for the request body; the upstream may also zstd compress the response.
             let decoder = zstd::stream::read::Decoder::new(std::io::Cursor::new(body))?;
             Ok(Some(read_with_output_limit(decoder, max_output_bytes)?))
         }
@@ -113,13 +116,13 @@ fn decompress_single(
     }
 }
 
-/// 根据 content-encoding 解压 body 字节，支持堆叠编码（如 `gzip, zstd`），
-/// 且每个 coding 的解压输出（含堆叠编码的中间产物）都受 `max_output_bytes`
-/// 限制，超限即中止并返回 [`DecompressError::TooLarge`]，用于防御响应侧压缩炸弹。
+/// Decompress body bytes according to content-encoding, supporting stacked encodings (such as `gzip, zstd`),
+/// And the decompression output of each coding (including the intermediate products of stacked coding) is subject to `max_output_bytes`
+/// Limit, if the limit is exceeded, it will abort and return [`DecompressError::TooLarge`], which is used to defend against response side compression bombs.
 ///
-/// RFC 9110 §8.4：codings 按**应用顺序**列出，故解压须**反向**（最后应用的先解）。
-/// 返回 `Ok(None)` 表示存在不受支持的编码、原样透传——此时调用方必须保留
-/// content-encoding 头，否则下游（诊断 / 客户端）会把压缩字节误当明文。
+/// RFC 9110 §8.4: codings are listed in **application order**, so decompression must be **reverse** (last applied first).
+/// Returning `Ok(None)` indicates that there is an unsupported encoding and is transparently transmitted as is - the caller must retain
+/// content-encoding header, otherwise downstream (diagnostics/clients) will mistake compressed bytes for plaintext.
 pub(crate) fn decompress_body_with_limit(
     content_encoding: &str,
     body: &[u8],
@@ -129,37 +132,37 @@ pub(crate) fn decompress_body_with_limit(
     if codings.is_empty() {
         return Ok(None);
     }
-    // 任一 coding 不支持就整体放弃解压、保头透传，避免半解码的脏数据。
+    // If any coding is not supported, decompression and header-preserving transparent transmission will be completely abandoned to avoid half-decoded dirty data.
     if !codings.iter().all(|c| is_single_supported(c)) {
-        log::warn!("不支持的 content-encoding: {content_encoding}，跳过解压");
+        log::warn!("Unsupported content-encoding: {content_encoding}, skip decompression");
         return Ok(None);
     }
 
-    // 反向解码：列表末尾是最后应用的编码，须最先解。
+    // Reverse decoding: The end of the list is the last encoding applied and must be solved first.
     let mut data: Option<Vec<u8>> = None;
     for coding in codings.iter().rev() {
         let input = data.as_deref().unwrap_or(body);
         match decompress_single(coding, input, max_output_bytes)? {
             Some(decompressed) => data = Some(decompressed),
-            // 上面 is_single_supported 已校验，理论不会发生；防御性兜底。
+            // The above is_single_supported has been verified, the theory will not happen; defensive cover.
             None => return Ok(None),
         }
     }
     Ok(data)
 }
 
-/// 该 content-encoding（含堆叠，如 `gzip, zstd`）是否全部可被解压。
+/// Whether the content-encoding (including stacking, such as `gzip, zstd`) can all be decompressed.
 ///
-/// 请求侧用它做闸门：无法解压的压缩体不能透传给 JSON 解析，需直接拒绝。
+/// It is used as a gate on the request side: compressed bodies that cannot be decompressed cannot be passed through to JSON parsing and must be rejected directly.
 pub(crate) fn is_supported_content_encoding(content_encoding: &str) -> bool {
     let codings = split_codings(content_encoding);
     !codings.is_empty() && codings.iter().all(|c| is_single_supported(c))
 }
 
-/// 从 header 提取 content-encoding（合并重复头，忽略 identity 与空值）。
+/// Extract content-encoding from header (merge duplicate headers, ignore identity and null values).
 ///
-/// HTTP 允许重复 content-encoding 头，语义等同逗号拼接，故用 `get_all` 合并；
-/// 返回值可能含多个逗号分隔的 coding，交由 [`decompress_body_with_limit`] 反向解码。
+/// HTTP allows repeated content-encoding headers, and the semantics are equivalent to comma splicing, so use `get_all` to merge;
+/// The return value may contain multiple comma-separated codings, which are reversely decoded by [`decompress_body_with_limit`].
 pub(crate) fn get_content_encoding(headers: &HeaderMap) -> Option<String> {
     let combined = headers
         .get_all("content-encoding")
@@ -183,7 +186,7 @@ mod tests {
 
     #[test]
     fn decompress_body_deflate_handles_zlib_wrapped_per_rfc9110() {
-        // RFC 9110 规范的 deflate = zlib 包裹格式（合规来源发的就是这个）
+        // RFC 9110 standard deflate = zlib package format (this is what the compliance source sends)
         let payload = br#"{"ok":true}"#;
         let mut encoder =
             flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
@@ -198,7 +201,7 @@ mod tests {
 
     #[test]
     fn decompress_body_deflate_falls_back_to_raw_stream() {
-        // 部分来源违规发 raw deflate 流，保持兼容
+        // Some sources illegally send raw deflate streams to maintain compatibility.
         let payload = br#"{"ok":true}"#;
         let mut encoder =
             flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
@@ -213,7 +216,7 @@ mod tests {
 
     #[test]
     fn decompress_body_zstd_roundtrip() {
-        // Codex 登录态发的就是 zstd 压缩请求体
+        // What is sent in the Codex login state is the zstd compressed request body.
         let payload = br#"{"hello":"world","n":42}"#;
         let compressed = zstd::stream::encode_all(std::io::Cursor::new(&payload[..]), 0).unwrap();
         let decompressed = decompress_body_with_limit("zstd", &compressed, 1024)
@@ -224,7 +227,7 @@ mod tests {
 
     #[test]
     fn decompress_body_stacked_gzip_then_zstd_decodes_in_reverse() {
-        // Content-Encoding: gzip, zstd 表示先 gzip 后 zstd，解压须反向（先 zstd 后 gzip）
+        // Content-Encoding: gzip, zstd means gzip first and then zstd, decompression must be reversed (zstd first and then gzip)
         let payload = br#"{"stacked":true}"#;
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         std::io::Write::write_all(&mut gz, payload).unwrap();
@@ -239,20 +242,20 @@ mod tests {
 
     #[test]
     fn decompress_body_stacked_with_unsupported_returns_none() {
-        // 堆叠里只要有一个不支持，就整体保头透传
+        // As long as one of the stacks does not support it, the entire head-protected transparent transmission will be implemented.
         let result = decompress_body_with_limit("snappy, zstd", b"\x00\x01\x02\x03", 1024).unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn decompress_body_unknown_encoding_returns_none_to_keep_headers() {
-        // 未知编码必须返回 None（而非伪装成"已解码"），否则 content-encoding
-        // 头被剥掉，下游诊断会把压缩字节误报成明文
+        // Unknown encoding must return None (instead of pretending to be "decoded"), otherwise content-encoding
+        // header is stripped off, downstream diagnostics will misreport compressed bytes as clear text
         let result = decompress_body_with_limit("snappy", b"\x00\x01\x02\x03", 1024).unwrap();
         assert!(result.is_none());
     }
 
-    /// 生成确定性伪随机字节（LCG），避免测试引入 rand 依赖。
+    /// Generate deterministic pseudo-random bytes (LCG) to avoid testing introducing rand dependencies.
     fn pseudo_random_bytes(len: usize) -> Vec<u8> {
         let mut state: u64 = 0x243F_6A88_85A3_08D3;
         (0..len)
@@ -296,10 +299,10 @@ mod tests {
 
     #[test]
     fn decompress_body_with_limit_aborts_gzip_bomb_mid_stream() {
-        // 4 MiB 伪随机数据（压缩率约 1:1）gzip 后截断到 2 MiB：流在产出约 2 MiB
-        // 解压数据后 abrupt 结束。有界读取应在 1 MiB 预算耗尽处报 TooLarge；
-        // 无界读取会一路读到残缺的流尾报 UnexpectedEof（Io）——两者可区分，
-        // 因此该测试能识别"先完整展开再比较"的退化。
+        // 4 MiB of pseudo-random data (~1:1 compression) truncated to 2 MiB after gzip: stream yields ~2 MiB
+        // Ends abruptly after decompressing the data. Bounded reads should report TooLarge at 1 MiB budget exhaustion;
+        // Unbounded reading will read all the way to the incomplete stream tail report UnexpectedEof (Io) - the two can be distinguished,
+        // This test therefore identifies the degradation of "complete expansion first and then comparison".
         let payload = pseudo_random_bytes(4 * 1024 * 1024);
         let compressed = gzip_compress(&payload);
         assert!(compressed.len() > 2 * 1024 * 1024);
@@ -308,14 +311,14 @@ mod tests {
         let result = decompress_body_with_limit("gzip", truncated, 1024 * 1024);
         assert!(
             matches!(result, Err(DecompressError::TooLarge { .. })),
-            "应在预算耗尽处截停（TooLarge），而不是读到流尾才报错: {:?}",
+            "It should be stopped when the budget is exhausted (TooLarge), rather than reporting an error after reading the end of the stream: {:?}",
             result.as_ref().map(|o| o.as_ref().map(Vec::len))
         );
     }
 
     #[test]
     fn decompress_body_with_limit_rejects_zstd_bomb() {
-        // 高压缩比 payload：8 MiB 全零 → zstd 压缩后仅数 KiB，完整展开必然超限
+        // High compression ratio payload: 8 MiB, all zeros → zstd is only a few KiB after compression, and full expansion must exceed the limit
         let payload = vec![0u8; 8 * 1024 * 1024];
         let compressed = zstd::stream::encode_all(std::io::Cursor::new(&payload[..]), 0).unwrap();
         assert!(compressed.len() < 1024 * 1024);
@@ -323,7 +326,7 @@ mod tests {
         let result = decompress_body_with_limit("zstd", &compressed, 1024 * 1024);
         assert!(
             matches!(result, Err(DecompressError::TooLarge { .. })),
-            "zstd 压缩炸弹应在预算耗尽处截停: {:?}",
+            "zstd compression bomb should be stopped at budget exhaustion: {:?}",
             result.as_ref().map(|o| o.as_ref().map(Vec::len))
         );
     }
@@ -341,15 +344,15 @@ mod tests {
         let result = decompress_body_with_limit("br", &compressed, 1024 * 1024);
         assert!(
             matches!(result, Err(DecompressError::TooLarge { .. })),
-            "brotli 压缩炸弹应在预算耗尽处截停: {:?}",
+            "brotli compression bombs should be stopped at budget exhaustion: {:?}",
             result.as_ref().map(|o| o.as_ref().map(Vec::len))
         );
     }
 
     #[test]
     fn decompress_body_with_limit_bounds_intermediate_stage_of_stacked_encodings() {
-        // 堆叠编码 gzip, zstd：zstd 先解出 gzip 流（小），gzip 再展开成 8 MiB。
-        // 中间产物同样受预算约束，不能只在最后一级设防。
+        // Stacked encoding gzip, zstd: zstd first decomposes the gzip stream (small), and then gzip expands it into 8 MiB.
+        // Intermediate products are also subject to budget constraints and cannot be defended only at the last level.
         let payload = vec![0u8; 8 * 1024 * 1024];
         let gzipped = gzip_compress(&payload);
         let stacked = zstd::stream::encode_all(std::io::Cursor::new(&gzipped[..]), 0).unwrap();
@@ -357,7 +360,7 @@ mod tests {
         let result = decompress_body_with_limit("gzip, zstd", &stacked, 1024 * 1024);
         assert!(
             matches!(result, Err(DecompressError::TooLarge { .. })),
-            "堆叠编码的中间解压产物也应受预算约束: {:?}",
+            "Stacked encoded intermediate decompression products should also be subject to budget constraints: {:?}",
             result.as_ref().map(|o| o.as_ref().map(Vec::len))
         );
     }
@@ -373,16 +376,22 @@ mod tests {
             "zst",
             "gzip, zstd",
         ] {
-            assert!(is_supported_content_encoding(enc), "{enc} 应受支持");
+            assert!(
+                is_supported_content_encoding(enc),
+                "{enc} should be supported"
+            );
         }
         for enc in ["identity", "snappy", "compress", "", "gzip, snappy"] {
-            assert!(!is_supported_content_encoding(enc), "{enc} 不应受支持");
+            assert!(
+                !is_supported_content_encoding(enc),
+                "{enc} should not be supported"
+            );
         }
     }
 
     #[test]
     fn get_content_encoding_combines_repeated_headers() {
-        // 重复的 content-encoding 头等同逗号拼接，须用 get_all 合并
+        // Duplicate content-encoding headers are equivalent to comma splicing and must be merged with get_all
         let mut headers = HeaderMap::new();
         headers.append("content-encoding", HeaderValue::from_static("gzip"));
         headers.append("content-encoding", HeaderValue::from_static("zstd"));

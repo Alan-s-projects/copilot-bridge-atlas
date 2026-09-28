@@ -20,7 +20,6 @@ pub struct ManagedAuthStatus {
     pub provider: &'static str,
     pub authenticated: bool,
     pub default_account_id: Option<String>,
-    pub migration_error: Option<String>,
     pub accounts: Vec<ManagedAuthAccount>,
 }
 
@@ -111,7 +110,6 @@ pub async fn auth_get_status(
     Ok(ManagedAuthStatus {
         provider: GITHUB_COPILOT,
         authenticated: status.authenticated,
-        migration_error: status.migration_error,
         accounts: status
             .accounts
             .into_iter()

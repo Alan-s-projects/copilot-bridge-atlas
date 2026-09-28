@@ -121,9 +121,9 @@ describe("ProviderForm Codex catalog helpers", () => {
         displayName: "GPT-6 Luna",
         reasoningLevels: ["high", "max"],
       },
-      // 手写/旧数据可能是 snake_case，加载侧兼容后保存侧同样要留住
+      // Handwritten/old data may be snake_case, and the loading side must be compatible and the saving side must also be retained.
       { model: "gpt-6-astra", reasoning_levels: ["low", "high", "max"] },
-      { model: "gpt-test" }, // toggle 型：无表，全程不得凭空造表
+      { model: "gpt-test" }, // Toggle type: no watch, no watch can be made out of thin air during the whole process
     ];
 
     const roundTripped = normalizeCodexCatalogModelsForSave(
@@ -159,7 +159,7 @@ describe("ProviderForm Codex catalog helpers", () => {
   });
 
   it("trims reasoning level values on save", () => {
-    // 手编 JSON 里的 " high " 不得原样落库/发给上游。
+    // The "high" in the hand-coded JSON must not be dropped into the library/sent to the upstream as it is.
     expect(
       normalizeCodexCatalogModelsForSave([
         { model: "gpt-6-luna", reasoningLevels: [" high ", "max"] },

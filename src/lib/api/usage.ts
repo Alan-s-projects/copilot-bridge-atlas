@@ -8,6 +8,7 @@ import type {
   LogFilters,
   ModelPricing,
   PaginatedLogs,
+  RequestDiagnosticDetail,
 } from "@/types/usage";
 
 export const usageApi = {
@@ -89,6 +90,11 @@ export const usageApi = {
       pageSize,
     });
   },
+
+  getRequestDiagnostics: async (
+    requestId: string,
+  ): Promise<RequestDiagnosticDetail | null> =>
+    invoke("get_request_diagnostics", { requestId }),
 
   getModelPricing: async (): Promise<ModelPricing[]> => {
     return invoke("get_model_pricing");

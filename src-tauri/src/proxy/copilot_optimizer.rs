@@ -109,7 +109,7 @@ mod tests {
     }
     #[test]
     fn test_interaction_id_empty_session_is_none() {
-        // 无 session 时不应生成 interaction ID（避免碎片化）
+        // Interaction ID should not be generated when there is no session (to avoid fragmentation)
         assert!(deterministic_interaction_id("").is_none());
     }
     #[test]

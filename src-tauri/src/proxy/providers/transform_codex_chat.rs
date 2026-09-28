@@ -426,10 +426,10 @@ pub fn responses_to_chat_completions(body: Value) -> Result<Value, ProxyError> {
             obj.remove("parallel_tool_calls");
         }
     }
-    // OpenAI 兼容上游在流式下默认不在 SSE 里返回 usage，必须显式声明
-    // include_usage 才会在末尾吐 usage chunk。Codex CLI 用 Responses 协议、
-    // 自身不带 stream_options，缺这一注入会导致 GPT 流式请求的
-    // token/成本/缓存命中率全部漏记（input/output/cache 全为 0）。
+    // OpenAI compatible upstream does not return usage in SSE by default under streaming, and must be explicitly declared.
+    // include_usage will spit out the usage chunk at the end. Codex CLI uses Responses protocol,
+    // It does not have stream_options. The lack of this injection will cause GPT streaming requests.
+    // The token/cost/cache hit rate are all missing (input/output/cache are all 0).
     inject_openai_stream_include_usage(&mut result);
 
     Ok(result)
@@ -554,10 +554,10 @@ fn append_responses_input_as_chat_messages(
         &mut pending_reasoning,
         &mut last_assistant_index,
     );
-    // 整个 input 处理完毕后仍剩余的 pending reasoning 属于「真正的尾部」思考
-    // （其后已没有任何可前向附挂的 message / function_call），回溯附挂到最后一条
-    // assistant；目标已有 reasoning_content 时追加，以保留同一 turn 的 embedded
-    // reasoning 与 trailing reasoning。
+    // The pending reasoning that remains after the entire input is processed belongs to the "real tail" thinking.
+    // (There are no further message/function_calls that can be attached forward), and the attachment is traced back to the last one.
+    // assistant; appended when the target already has reasoning_content to retain the embedded of the same turn
+    // reasoning and trailing reasoning.
     attach_pending_reasoning_to_previous_assistant(
         messages,
         last_assistant_index,
@@ -663,13 +663,13 @@ fn append_responses_item_as_chat_message(
             }));
         }
         Some("reasoning") => {
-            // reasoning 一律先进入 pending_reasoning，前向附挂到其后的
-            // message / function_call（后者经 flush_pending_tool_calls 消费）。
-            // 此前这里在 pending_tool_calls 为空时直接回溯附挂到上一条 assistant，
-            // 会把新一轮的思考错拼进旧消息，导致紧跟的纯文本 assistant 丢失
-            // reasoning_content，从而丢失多轮对话中的思考历史。
-            // 真正的尾部剩余由 input 结束时的收尾逻辑、或回合边界消息（user 等）
-            // 到达时回溯附挂，见 attach_pending_reasoning_to_previous_assistant。
+            // reasoning always enters pending_reasoning first, and is forward-attached to the subsequent
+            // message / function_call (the latter is consumed by flush_pending_tool_calls).
+            // Previously, when pending_tool_calls was empty, it was directly traced back to the previous assistant.
+            // A new round of thinking will be mistakenly spelled into the old message, resulting in the loss of the following plain text assistant
+            // reasoning_content, thereby losing the thinking history across multiple rounds of dialogue.
+            // The real tail remainder is determined by the closing logic at the end of the input, or the round boundary message (user, etc.)
+            // Backtracking attachment on arrival, see attach_pending_reasoning_to_previous_assistant.
             append_pending_reasoning(pending_reasoning, responses_reasoning_item_text(item));
         }
         // An `additional_tools` carrier declares tools for this request; its
@@ -709,10 +709,10 @@ fn append_responses_item_as_chat_message(
                 messages.push(message);
                 return Ok(());
             } else {
-                // 非 assistant 的回合边界消息（user 等）：pending reasoning 不再直接
-                // 丢弃，优先回溯附挂到上一条 assistant；其已有 reasoning_content 时
-                // 追加尾部 reasoning。reasoning 不允许跨 user 回合泄漏到之后的
-                // assistant 消息；无上一条 assistant 可附挂时自然丢弃（等同原行为）。
+                // Turn boundary messages for non-assistants (user, etc.): pending reasoning is no longer straightforward
+                // Discard, give priority to backtracking and attach to the previous assistant; when it already has reasoning_content
+                // Append tail reasoning. reasoning does not allow cross-user turns to leak into subsequent
+                // assistant message; no previous assistant can be discarded naturally when attached (equivalent to the original behavior).
                 attach_pending_reasoning_to_previous_assistant(
                     messages,
                     *last_assistant_index,
@@ -926,9 +926,9 @@ fn responses_message_item_to_chat_message(
         append_pending_reasoning(pending_reasoning, responses_message_reasoning_text(item));
         attach_pending_reasoning_to_assistant(&mut message, pending_reasoning);
     } else {
-        // 非 assistant 的回合边界消息（user 等）：pending reasoning 不再直接丢弃，
-        // 回溯附挂到上一条 assistant；其已有 reasoning_content 时追加尾部
-        // reasoning，同时防止 reasoning 跨 user 回合泄漏到之后的 assistant 消息。
+        // Non-assistant turn boundary messages (user, etc.): pending reasoning is no longer directly discarded.
+        // Backtrack and attach to the previous assistant; if it already has reasoning_content, append the tail
+        // reasoning, while preventing reasoning from leaking to subsequent assistant messages across user rounds.
         attach_pending_reasoning_to_previous_assistant(
             messages,
             last_assistant_index,
@@ -1025,18 +1025,18 @@ fn attach_pending_reasoning_to_assistant(
     }
 }
 
-/// 将仍未消费的 pending reasoning 回溯附挂到上一条 assistant 消息。
+/// Attach the pending reasoning that has not been consumed back to the previous assistant message.
 ///
-/// 只允许两种「真正的尾部」场景调用：
-/// 1. 整个 input 处理完毕后 pending_reasoning 仍有剩余——其后已没有任何可
-///    前向附挂的 message / function_call；
-/// 2. user 等回合边界消息到达时 pending_reasoning 非空——reasoning 不允许
-///    跨 user 回合泄漏到之后的 assistant 消息，也不能直接丢弃可归属的思考。
+/// Only two "real tail" scenario calls are allowed:
+/// 1. After the entire input is processed, there is still pending_reasoning left - nothing can be done after that.
+///    Forward attached message/function_call;
+/// 2. When the user waits for the round boundary message to arrive, pending_reasoning is not empty - reasoning is not allowed
+///    Cross-user rounds leak to subsequent assistant messages, and attributable thoughts cannot be discarded directly.
 ///
-/// 这里已经处于尾部/边界收尾点，不是普通 reasoning 的前向归属路径；
-/// 若目标已有 reasoning_content，追加尾部 reasoning 以保留同一 assistant turn
-/// 中同时出现的 embedded reasoning 与尾随 reasoning。无论是否附挂成功，
-/// pending 都会被消费（拿走），绝不留到下一条 assistant。
+/// This is already at the tail/boundary ending point, not the forward belonging path of ordinary reasoning;
+/// If the target already has reasoning_content, append the tail reasoning to keep the same assistant turn
+/// Embedded reasoning and trailing reasoning appear simultaneously in . Regardless of whether the attachment is successful or not,
+/// Pending will be consumed (taken away) and will never be left to the next assistant.
 fn attach_pending_reasoning_to_previous_assistant(
     messages: &mut [Value],
     last_assistant_index: Option<usize>,
@@ -1461,14 +1461,14 @@ pub(crate) fn chat_completion_to_response_with_context(
     let tool_calls =
         chat_tool_calls_to_response_output_items(message, reasoning.as_deref(), tool_context);
 
-    // 丢弃过工具调用、且最终一个工具调用都没剩下时，Codex 会收到一个
-    // "status=completed 但 output 里没有任何工具调用" 的回合，agent loop 必然静默
-    // 收尾（#4341）。此时如实报错，而不是谎报成功。只要还剩下任何一个合法工具
-    // 调用，Codex 本来就会继续，判据不成立，行为保持不变。
+    // When tool calls have been discarded and no tool calls are left at the end, the Codex will receive a
+    // For rounds with "status=completed but no tool calls in the output", the agent loop must be silent.
+    // Closing (#4341). At this time, report the error truthfully instead of lying about the success. As long as there is any legal tool left
+    // Called, Codex would have continued, the criterion would not hold, and the behavior would remain unchanged.
     //
-    // 🔴 与流式分支一致，只对本应 `completed` 的回合生效：`finish_reason=length`
-    // 是截断，工具调用缺 name 是截断的后果而非上游发了畸形数据，报成
-    // tool_call_dropped 会给出错误的归因。
+    // 🔴 Consistent with the streaming branch, only takes effect on the round that should be `completed`: `finish_reason=length`
+    // It is truncation. The missing name in the tool call is the result of truncation instead of the upstream sending malformed data. The report is successful.
+    // tool_call_dropped will give wrong attribution.
     if response_status_from_finish_reason(finish_reason) == "completed"
         && tool_calls.dropped > 0
         && tool_calls.items.is_empty()
@@ -1580,8 +1580,8 @@ fn chat_message_to_response_output_item(message: &Value, response_id: &str) -> O
     }))
 }
 
-/// 非流式工具调用转换结果。`dropped` 记录因缺少合法函数名而被丢弃的条数，
-/// 供调用方判断本回合是否已经不可能让 Codex 继续（见 #4341）。
+/// Non-streaming tools call the conversion results. `dropped` records the number of items discarded due to lack of legal function names.
+/// For the caller to determine whether it is impossible for the Codex to continue this round (see #4341).
 struct ChatToolCallItems {
     items: Vec<Value>,
     dropped: usize,
@@ -1601,10 +1601,10 @@ fn chat_tool_calls_to_response_output_items(
             // may generate tool calls without providing a valid name)
             let function = tool_call.get("function").unwrap_or(&Value::Null);
             let name = function.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            // 纯空白名同样对应不到任何已发布工具，与空名同等对待。
+            // A pure blank name also does not correspond to any published tool and is treated the same as an empty name.
             if name.trim().is_empty() {
                 dropped += 1;
-                // 只记结构信息，不记 arguments 内容（可能包含用户代码）。
+                // Only the structure information is remembered, not the contents of arguments (which may include user code).
                 let call_id_empty = tool_call
                     .get("id")
                     .and_then(|v| v.as_str())
@@ -1686,9 +1686,9 @@ fn chat_legacy_function_call_to_response_item(
 
     // Skip legacy function calls with missing names (defensive: some models
     // may generate function_call without providing a valid name)。
-    // 纯空白名同样对应不到任何已发布工具，与空名同等对待。
+    // A pure blank name also does not correspond to any published tool and is treated the same as an empty name.
     if name.trim().is_empty() {
-        // 只记结构信息，不记 arguments 内容（可能包含用户代码）。
+        // Only the structure information is remembered, not the contents of arguments (which may include user code).
         let args_bytes = function_call
             .get("arguments")
             .and_then(|v| v.as_str())
@@ -1984,14 +1984,14 @@ pub(crate) fn response_status_from_finish_reason(finish_reason: Option<&str>) ->
     }
 }
 
-/// 把 Chat Completions 上游的错误体规整成 OpenAI Responses API 风格的错误对象。
+/// Convert Chat Completions upstream error bodies into OpenAI Responses API style error objects.
 ///
-/// 兼容两类输入：
-/// 1. 标准 OpenAI 形式 `{"error": {"message": "...", "type": "...", "code": ...}}`
-/// 2. 顶层只有 `message` / `detail` / 裸字符串的最小错误
+/// Compatible with two types of input:
+/// 1. Standard OpenAI form `{"error": {"message": "...", "type": "...", "code": ...}}`
+/// 2. The top level only has `message` / `detail` / minimal error of bare strings
 ///
-/// 输出统一为 `{"error": {"message", "type", "code", "param"}}`，与 OpenAI Responses
-/// API 错误响应一致；Codex 客户端的错误处理只识别这个形状。
+/// The output is unified as `{"error": {"message", "type", "code", "param"}}`, which is the same as OpenAI Responses
+/// API error responses are consistent; the Codex client's error handling only recognizes this shape.
 pub fn chat_error_to_response_error(body: Option<&Value>) -> Value {
     let Some(value) = body else {
         return json!({
@@ -2024,7 +2024,7 @@ pub fn chat_error_to_response_error(body: Option<&Value>) -> Value {
         .map(ToString::to_string)
         .or_else(|| source.as_str().map(ToString::to_string))
         .unwrap_or_else(|| {
-            // 没法从字段提取出文本，就把整个 JSON 序列化回去，方便用户排查。
+            // If the text cannot be extracted from the field, the entire JSON is serialized back to facilitate user troubleshooting.
             serde_json::to_string(source).unwrap_or_else(|_| "Upstream error".to_string())
         });
 
@@ -2139,7 +2139,7 @@ mod tests {
 
         let result = responses_to_chat_completions(input).unwrap();
 
-        // 既补上 include_usage，又保留客户端原有的 stream_options 字段。
+        // Not only add include_usage, but also retain the client's original stream_options field.
         assert_eq!(result["stream_options"]["include_usage"], true);
         assert_eq!(result["stream_options"]["continuous_usage_stats"], true);
     }
@@ -2910,10 +2910,10 @@ mod tests {
             "input": [
                 {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Permissions block"}]},
                 {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "AGENTS.md"}]},
-                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "你好"}]},
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]},
                 {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Collaboration Mode: Default"}]},
-                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "你好"}]},
-                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "你好"}]}
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]},
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]}
             ]
         });
 
@@ -2974,7 +2974,7 @@ mod tests {
                     ]
                 },
                 {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "You are Codex, a coding agent."}]},
-                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "你好"}]}
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]}
             ]
         });
 
@@ -2994,7 +2994,7 @@ mod tests {
         assert_eq!(messages[0]["role"], "system");
         assert_eq!(messages[0]["content"], "You are Codex, a coding agent.");
         assert_eq!(messages[1]["role"], "user");
-        assert_eq!(messages[1]["content"], "你好");
+        assert_eq!(messages[1]["content"], "Hello");
 
         // The carried tools survive as flattened chat tools.
         let tool_names: Vec<&str> = result["tools"]
@@ -3261,7 +3261,7 @@ mod tests {
 
     #[test]
     fn responses_request_to_chat_omits_reasoning_for_bare_tool_call() {
-        // 没有可用 reasoning 时，保留工具调用而不编造 reasoning_content。
+        // When no reasoning is available, keep tool calls without fabricating reasoning_content.
         let input = json!({
             "model": "gpt-chat-thinking",
             "input": [
@@ -3322,9 +3322,9 @@ mod tests {
 
     #[test]
     fn responses_request_to_chat_attaches_reasoning_forward_to_following_assistant() {
-        // 回归：reasoning 必须前向附挂到其后的 assistant 消息，不得回溯拼进
-        // 上一条 assistant。此前多轮序列 [r1, m1, r2, m2] 中 r2 会被拼到 m1
-        // 尾部、m2 丢失 reasoning_content，从而丢失多轮对话中的思考历史。
+        // Regression: Reasoning must be attached forward to the subsequent assistant message and cannot be appended backwards.
+        // Previous assistant. In the previous multiple rounds of sequence [r1, m1, r2, m2], r2 will be spelled into m1
+        // The tail, m2 loses reasoning_content, thus losing the thinking history in multiple rounds of dialogue.
         let input = json!({
             "model": "gpt-chat-thinking",
             "input": [
@@ -3368,10 +3368,10 @@ mod tests {
 
     #[test]
     fn responses_request_to_chat_keeps_reasoning_on_final_answer_after_tool_call() {
-        // 回归：[reasoning, function_call, output, reasoning, message]
-        // 最后一个纯文本 assistant 必须保留自己的 reasoning_content，且该 reasoning
-        // 不得被回溯拼进前面的 tool-call 消息（否则上游历史里 tool-call 消息的思考
-        // 被污染、最终答复消息反而没有 reasoning_content）。
+        // Regression: [reasoning, function_call, output, reasoning, message]
+        // The last plain text assistant must retain its own reasoning_content, and the reasoning
+        // It must not be retroactively spelled into the previous tool-call message (otherwise, thoughts on the tool-call message in the upstream history
+        // tainted, the final reply message has no reasoning_content).
         let input = json!({
             "model": "gpt-chat-thinking",
             "input": [
@@ -4669,8 +4669,8 @@ mod tests {
         );
     }
 
-    /// #4341（非流式路径）：丢弃后一个工具调用都不剩时，必须如实报错，
-    /// 而不是返回一个 Codex 会当成正常完成的空壳回合。
+    /// #4341 (non-streaming path): When no tool calls are left after discarding, the error must be reported truthfully.
+    /// Instead of returning a Codex it will be treated as a shell round that completed normally.
     #[test]
     fn chat_response_with_only_unnamed_tool_call_is_an_error() {
         let chat = json!({
@@ -4681,7 +4681,7 @@ mod tests {
             "choices": [{
                 "message": {
                     "role": "assistant",
-                    "content": "让我继续处理这个文件",
+                    "content": "Let me continue working on this file",
                     "tool_calls": [{
                         "id": "call_bad",
                         "type": "function",
@@ -4698,7 +4698,7 @@ mod tests {
         assert!(err.to_string().contains("without a function name"));
     }
 
-    /// 只要还剩下一个合法工具调用，Codex 本来就会继续，行为保持不变。
+    /// As long as there was one legitimate tool call left, the Codex would have continued and the behavior would have remained the same.
     #[test]
     fn chat_response_keeps_valid_tool_call_beside_unnamed_one() {
         let chat = json!({
@@ -4732,7 +4732,7 @@ mod tests {
         assert_eq!(result["status"], "completed");
     }
 
-    /// legacy `function_call` 形态同样受判据保护。
+    /// The legacy `function_call` form is also protected by criteria.
     #[test]
     fn chat_response_with_unnamed_legacy_function_call_is_an_error() {
         let chat = json!({
@@ -4754,8 +4754,8 @@ mod tests {
         assert!(matches!(err, ProxyError::TransformError(_)));
     }
 
-    /// `finish_reason=length` 是截断，不是"上游发了畸形数据"——归因必须保持
-    /// incomplete，不能报成 tool_call_dropped。
+    /// `finish_reason=length` is truncation, not "the upstream has sent abnormal data" - attribution must be maintained
+    /// incomplete, cannot be reported as tool_call_dropped.
     #[test]
     fn chat_response_truncated_stays_incomplete_instead_of_error() {
         let chat = json!({
@@ -4766,7 +4766,7 @@ mod tests {
             "choices": [{
                 "message": {
                     "role": "assistant",
-                    "content": "我来看看",
+                    "content": "Let me take a look",
                     "tool_calls": [{
                         "id": "call_cut",
                         "type": "function",
@@ -4783,7 +4783,7 @@ mod tests {
         assert_eq!(result["incomplete_details"]["reason"], "max_output_tokens");
     }
 
-    /// 纯空白函数名必须与空名同等对待，否则会伪装成"本回合还有工具调用"。
+    /// Purely blank function names must be treated the same as empty names, otherwise they will be disguised as "there are still tool calls this round".
     #[test]
     fn chat_response_whitespace_only_tool_name_is_an_error() {
         let chat = json!({
@@ -4809,7 +4809,7 @@ mod tests {
         assert!(matches!(err, ProxyError::TransformError(_)));
     }
 
-    /// 纯文本回合（从未出现工具调用）不受判据影响。
+    /// Plain text rounds (where tool calls never occur) are not affected by the criteria.
     #[test]
     fn chat_response_text_only_still_completes() {
         let chat = json!({
@@ -4818,7 +4818,7 @@ mod tests {
             "created": 123,
             "model": "gpt-chat",
             "choices": [{
-                "message": {"role": "assistant", "content": "完成了"},
+                "message": {"role": "assistant", "content": "finished"},
                 "finish_reason": "stop"
             }]
         });
@@ -4920,7 +4920,7 @@ mod tests {
 
     #[test]
     fn chat_error_to_response_error_falls_back_to_detail_field() {
-        // 部分中转把错误塞在顶层 detail 字段（OpenAI 兼容层常见）
+        // Partial transfer puts errors in the top-level detail field (common in the OpenAI compatibility layer)
         let input = json!({
             "detail": "rate limit exceeded"
         });

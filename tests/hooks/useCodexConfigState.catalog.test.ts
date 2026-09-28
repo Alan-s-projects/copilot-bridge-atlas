@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { mapCodexCatalogModelForForm } from "@/utils/codexModelCatalog";
 
-// 回归：编辑已存在的原生 Responses 供应商时，读回 modelCatalog 必须保留隐藏字段
-// (supportsParallelToolCalls / inputModalities / baseInstructions)，否则保存会
-// 把它们剥掉，导致生成的 Codex catalog 丢官方 base_instructions、并行工具、图像模态。
+// Regression: When editing an existing native Responses provider, reading back modelCatalog must preserve hidden fields
+// (supportsParallelToolCalls / inputModalities / baseInstructions), otherwise saving will
+// Strip them off, causing the generated Codex catalog to lose official base_instructions, parallel tools, and image modalities.
 //
-// 注意：initialData 必须是稳定引用（hook 的 init effect 依赖 [initialData]）。
-// 写成内联字面量会每次 re-render 产生新引用 → effect 反复 setState → 死循环 OOM。
+// Note: initialData must be a stable reference (the init effect of the hook depends on [initialData]).
+// Writing it as an inline literal will generate a new reference each time re-render → effect repeatedly setState → infinite loop OOM.
 describe("Copilot model catalog field preservation", () => {
   it("preserves native-profile hidden fields (camelCase, DB SSOT)", () => {
     const initialData = {

@@ -89,8 +89,7 @@ pub async fn restore_db_backup(
             let warning =
                 post_sync_warning_from_result(Ok(run_post_restore_sync(&app_state_for_sync)));
             if let Some(message) = warning {
-                // This legacy command returns only the restored filename, so keep
-                // restore success and surface incomplete projection in the log.
+                // Surface an incomplete projection in the log after restore succeeds.
                 log::warn!("[Restore] post-import sync warning: {message}");
             }
             Ok::<_, AppError>(restored)

@@ -67,31 +67,6 @@ impl Database {
         let transaction = conn
             .transaction()
             .map_err(|error| AppError::Database(error.to_string()))?;
-        let old_meta: Option<String> = transaction
-            .query_row(
-                "SELECT meta FROM providers WHERE id = ?1 AND app_type = ?2",
-                params![provider.id, app_type],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| AppError::Database(error.to_string()))?;
-        // Removed features remain opaque in imported databases. Saving the
-        // current provider changes only supported keys, never unrelated data.
-        let mut stored_meta = old_meta
-            .as_deref()
-            .and_then(|text| serde_json::from_str::<Value>(text).ok())
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        for key in ["providerType", "authBinding", "githubAccountId"] {
-            stored_meta.remove(key);
-        }
-        if let Some(meta) = &provider.meta {
-            if let Value::Object(values) =
-                serde_json::to_value(meta).map_err(|error| AppError::Database(error.to_string()))?
-            {
-                stored_meta.extend(values);
-            }
-        }
         transaction
             .execute(
                 "INSERT INTO providers (id, app_type, name, settings_config, meta)
@@ -106,7 +81,7 @@ impl Database {
                     provider.name,
                     serde_json::to_string(&provider.settings_config)
                         .map_err(|error| AppError::Database(error.to_string()))?,
-                    serde_json::to_string(&stored_meta)
+                    serde_json::to_string(&provider.meta.as_ref().cloned().unwrap_or_default())
                         .map_err(|error| AppError::Database(error.to_string()))?,
                 ],
             )

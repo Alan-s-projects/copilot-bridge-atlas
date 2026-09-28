@@ -118,7 +118,7 @@ export function PricingConfigPanel() {
 
   return (
     <div className="space-y-6">
-      {/* 模型定价配置 */}
+      {/* Model pricing configuration */}
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="relative w-full min-w-0 sm:w-72">

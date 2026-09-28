@@ -1,9 +1,18 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RequestLogTable } from "@/components/usage/RequestLogTable";
 import type { UsageRangeSelection } from "@/types/usage";
+import { createTestQueryClient } from "../utils/testQueryClient";
 
 const useRequestLogsMock = vi.hoisted(() => vi.fn());
+const getRequestDiagnosticsMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/api/usage", () => ({
+  usageApi: {
+    getRequestDiagnostics: (id: string) => getRequestDiagnosticsMock(id),
+  },
+}));
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -46,6 +55,7 @@ vi.mock("@/components/ui/table", () => ({
 describe("RequestLogTable", () => {
   beforeEach(() => {
     useRequestLogsMock.mockReset();
+    getRequestDiagnosticsMock.mockReset();
     useRequestLogsMock.mockImplementation(
       ({ page = 0, pageSize = 20 }: { page?: number; pageSize?: number }) => ({
         data: {
@@ -57,6 +67,61 @@ describe("RequestLogTable", () => {
         isLoading: false,
       }),
     );
+  });
+
+  it("opens a 502 stream failure with upstream 200 and closes with the X", async () => {
+    useRequestLogsMock.mockReturnValue({
+      data: {
+        data: [
+          {
+            requestId: "atlas_failure",
+            model: "gpt-6-sol",
+            requestModel: "gpt-6-sol",
+            statusCode: 502,
+            errorMessage: "kind=sse message=response.failed",
+            createdAt: 1790400000,
+            latencyMs: 1000,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            totalCostUsd: "0",
+            costMultiplier: "1",
+          },
+        ],
+        total: 1,
+      },
+      isLoading: false,
+    });
+    getRequestDiagnosticsMock.mockResolvedValue({
+      upstreamStatus: 200,
+      failureStage: "stream",
+      requestHeaders: "authorization: [redacted]",
+      requestBody: '{"model":"gpt-6-sol"}',
+      responseHeaders: "content-type: text/event-stream",
+      responseBody:
+        'event: response.failed\ndata: {"error":{"code":"upstream_error"}}',
+    });
+
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <RequestLogTable range={{ preset: "today" }} refreshIntervalMs={0} />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "View details for request status 502",
+      }),
+    );
+    expect(await screen.findByText("HTTP 200")).toBeVisible();
+    expect(screen.getByText("stream")).toBeVisible();
+    expect(screen.getByText(/event: response.failed/)).toBeVisible();
+    expect(screen.getByText("authorization: [redacted]")).toBeVisible();
+    expect(getRequestDiagnosticsMock).toHaveBeenCalledWith("atlas_failure");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Close request details" }),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("keeps empty-state colspan aligned with selected columns", () => {

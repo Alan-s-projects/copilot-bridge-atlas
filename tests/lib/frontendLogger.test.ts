@@ -70,22 +70,22 @@ describe("frontendLogger", () => {
   });
 
   it("serializes object-shaped rejection reasons without exposing secrets", () => {
-    // 两层脱敏契约：
-    //  - 属性名一级：命中敏感名(含复数/数组/嵌套)整个值一律隐藏；
-    //  - 值一级：任意位置的“不透明密钥形状”按形状隐藏；
-    //  - 文本一级：序列化后 `"name":"value"` 的裸密钥由正则兜底。
+    // Two-layer desensitization contract:
+    //  - Attribute name level 1: The entire value of hit-sensitive names (including plurals/arrays/nested) will be hidden;
+    //  - Value level one: "opaque key shape" at any position is hidden by shape;
+    //  - Text level: After serialization, the bare key of `"name":"value"` is covered by regular expressions.
     reportFrontendError("unhandledrejection", {
       code: 500,
-      message: "auth failed", // 良性文本保留(值含 "auth" 但非 name:value)
-      key: "short-secret", // 裸 key 标量(非不透明) → 属性名层
-      token: "object-secret", // 标量命名 → 属性名层
-      tokens: ["k-9f3a7c2b1e"], // 复数+数组(短值) → 属性名层(去尾 s + 整体隐藏)
-      auth: ["opaque-credential"], // 数组 → 属性名层
+      message: "auth failed", // benign text retention (value containing "auth" but not name:value)
+      key: "short-secret", // bare key scalar (non-opaque) → attribute name layer
+      token: "object-secret", // scalar naming → property name layer
+      tokens: ["k-9f3a7c2b1e"], // Complex number + array (short value) → attribute name layer (remove the tail s + hide the whole)
+      auth: ["opaque-credential"], // array → attribute name layer
       credential: "AIzaRealCredential123",
-      nested: { detail: "ghp_abcdef123456" }, // 非敏感名，靠不透明形状
-      values: ["eyJhbGciOiJIUzI1NiJ9.cGF5bG9hZA.c2lnbmF0dXJl"], // 数组内不透明形状
-      multiline: "line1\nsk-ant-api03-multiline-secret", // 串内不透明形状
-      session: { activeTab: "providers", scrollPos: 120 }, // 良性状态原样保留
+      nested: { detail: "ghp_abcdef123456" }, // Insensitive name, relying on opaque shape
+      values: ["eyJhbGciOiJIUzI1NiJ9.cGF5bG9hZA.c2lnbmF0dXJl"], // Opaque shapes within array
+      multiline: "line1\nsk-ant-api03-multiline-secret", // Opaque shape within string
+      session: { activeTab: "providers", scrollPos: 120 }, // Leave the benign state intact
     });
 
     const [message] = writeErrorLog.mock.calls[0];
@@ -110,7 +110,7 @@ describe("frontendLogger", () => {
   });
 
   it("applies property-level redaction to stringified-JSON rejection reasons", () => {
-    // 字符串形态的 JSON 不能只靠文本正则——数组/复数/裸标量字段会漏。
+    // JSON in string form cannot be regularized by text alone - array/plural/naked scalar fields will be missed.
     reportFrontendError(
       "unhandledrejection",
       '{"tokens":["k-9f3a7c2b1e"],"auth":["opaque-credential"],"key":"short-secret","keepMe":"visible"}',
@@ -134,8 +134,8 @@ describe("frontendLogger", () => {
   });
 
   it("applies property-level redaction to JSON wrapped in an Error message", () => {
-    // throw new Error(JSON.stringify(payload)) 会把凭据藏进 message，
-    // 而 error.stack 第一行原样吐出 message —— 必须先对 message 结构化脱敏。
+    // throw new Error(JSON.stringify(payload)) will hide the credentials in the message,
+    // The first line of error.stack spits out the message as it is - the message must be structurally desensitized first.
     reportFrontendError(
       "unhandledrejection",
       new Error(
@@ -152,7 +152,7 @@ describe("frontendLogger", () => {
   });
 
   it("omits oversized JSON error strings instead of leaking truncated fields", () => {
-    // 合法但超长的 JSON 若先截断再 parse，必成非法 JSON 而退回文本层，数组字段泄漏。
+    // If legal but overlong JSON is truncated first and then parsed, it will become illegal JSON and return to the text layer, causing the array field to leak.
     const padding = "x".repeat(20_000);
     reportFrontendError(
       "unhandledrejection",
@@ -177,8 +177,8 @@ describe("frontendLogger", () => {
   });
 
   it("redacts array credentials in prefix+JSON rejection strings", () => {
-    // 前缀 + JSON：`redactStructuredString` 的 startsWith 门被前缀挡掉，退回文本层。
-    // 文本层的容器正则必须在这个统一出口兜住 `"tokens":[...]`。
+    // Prefix + JSON: The startsWith gate of `redactStructuredString` is blocked by the prefix and returns to the text layer.
+    // The container regular of the text layer must contain `"tokens":[...]` in this unified outlet.
     reportFrontendError(
       "unhandledrejection",
       'Load failed: {"tokens":["ak_live_7f3d9b21c8e4"]}',
@@ -229,7 +229,7 @@ describe("frontendLogger", () => {
   });
 
   it("redacts container values only under sensitive keys", () => {
-    // 容器正则只对敏感键生效：普通数组/对象(items/config)与后缀含 key 的词(monkey)不误伤。
+    // Container regularization only takes effect on sensitive keys: ordinary arrays/objects (items/config) and words with the suffix "key" (monkey) are not accidentally affected.
     const redacted = redactFrontendLogText(
       '{"tokens":["k-secret-1"],"monkey":["visible-a"],"items":["visible-b"],"config":{"theme":"dark"}}',
     );
@@ -241,8 +241,8 @@ describe("frontendLogger", () => {
   });
 
   it("preserves native WebKit-style stack frames for JSON-wrapped errors", () => {
-    // macOS/Linux 的 WKWebView 用 `fn@file:line:col` 格式，且 stack 不含 message。
-    // 旧的 `/^\s+at\s/` 过滤会把整段栈丢掉；新实现须补脱敏头并保留原生栈。
+    // WKWebView of macOS/Linux uses `fn@file:line:col` format, and the stack does not contain message.
+    // The old `/^\s+at\s/` filter will discard the entire stack; the new implementation must supplement the masking header and retain the native stack.
     const err = new Error('{"tokens":["k-9f3a7c2b1e"]}');
     Object.defineProperty(err, "stack", {
       value:
@@ -254,13 +254,13 @@ describe("frontendLogger", () => {
 
     const [message] = writeErrorLog.mock.calls[0];
     expect(message).not.toContain("k-9f3a7c2b1e");
-    expect(message).toContain('"tokens":"[REDACTED]"'); // 脱敏 message 头
-    expect(message).toContain("handleClick@tauri://localhost"); // 原生栈帧保留
+    expect(message).toContain('"tokens":"[REDACTED]"'); // Desensitized message header
+    expect(message).toContain("handleClick@tauri://localhost"); // Native stack frames retained
     expect(message).toContain("dispatch@tauri://localhost");
   });
 
   it("replaces every occurrence of the raw message in a V8-style stack", () => {
-    // message 若在 stack 里出现多次(eval/匿名帧回显)，字面量替换必须全部换掉，零残留。
+    // If message appears multiple times in the stack (eval/anonymous frame echo), all literal substitutions must be replaced, leaving zero residue.
     const err = new Error('{"tokens":["k-9f3a7c2b1e"]}');
     Object.defineProperty(err, "stack", {
       value:
@@ -273,7 +273,7 @@ describe("frontendLogger", () => {
 
     const [message] = writeErrorLog.mock.calls[0];
     expect(message).not.toContain("k-9f3a7c2b1e");
-    expect(message).toContain("at run (index.js:10:5)"); // 栈帧保留
+    expect(message).toContain("at run (index.js:10:5)"); // Stack frame retention
   });
 
   it("redacts standalone secret shapes in ordinary error text", () => {

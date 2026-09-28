@@ -4,22 +4,24 @@ pub(crate) mod backup;
 mod dao;
 mod schema;
 
+pub(crate) use dao::request_diagnostics::RequestDiagnosticDetail;
+
 #[cfg(test)]
 mod tests;
 
-// DAO 类型导出供外部使用
+// DAO types exported for external use
 use crate::config::get_app_config_dir;
 use crate::error::AppError;
 use rusqlite::Connection;
 use std::sync::Mutex;
 
-// DAO 方法通过 impl Database 提供，无需额外导出
+// DAO methods are provided through impl Database, no additional export is required
 
-/// 当前 Schema 版本号
-/// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 23;
+/// Atlas 6 storage format.
+pub(crate) const SCHEMA_VERSION: i32 = 1;
+pub(crate) const APPLICATION_ID: i32 = 0x4154_4c36; // ATL6
 
-/// 安全地获取 Mutex 锁，避免 unwrap panic
+/// Safely acquire Mutex locks and avoid unwrap panics
 macro_rules! lock_conn {
     ($mutex:expr) => {
         $mutex
@@ -28,38 +30,36 @@ macro_rules! lock_conn {
     };
 }
 
-// 导出宏供子模块使用
+// Export macros for use by submodules
 pub(crate) use lock_conn;
 
-/// 数据库连接封装
+/// Database connection encapsulation
 ///
-/// 使用 Mutex 包装 Connection 以支持在多线程环境（如 Tauri State）中共享。
-/// rusqlite::Connection 本身不是 Sync 的，因此需要这层包装。
+/// Wrap a Connection with a Mutex to support sharing in multi-threaded environments such as Tauri State.
+/// rusqlite::Connection itself is not Sync, so this layer of packaging is needed.
 pub struct Database {
     pub(crate) conn: Mutex<Connection>,
 }
 
 impl Database {
-    /// 初始化数据库连接并创建表
+    /// Initialize database connection and create table
     ///
-    /// 数据库文件位于 `~/.copilot-bridge-atlas/copilot-bridge-atlas.db`
+    /// Database files are located at `~/.copilot-bridge-atlas/copilot-bridge-atlas.db`
     pub fn init() -> Result<Self, AppError> {
         let db_path = get_app_config_dir().join("copilot-bridge-atlas.db");
-        let db_exists = db_path.exists();
 
-        // 确保父目录存在
+        // Make sure the parent directory exists
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
         }
 
         let conn = Connection::open(&db_path).map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 启用外键约束
+        // Enable foreign key constraints
         conn.execute("PRAGMA foreign_keys = ON;", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
-        if !db_exists {
-            // For a brand-new database, configure incremental auto-vacuum
-            // before creating any tables so no rebuild is needed later.
+        if Self::get_user_version(&conn)? == 0 && !Self::has_user_tables(&conn)? {
+            // Configure a new database before creating tables.
             conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
                 .map_err(|e| AppError::Database(e.to_string()))?;
         }
@@ -67,28 +67,7 @@ impl Database {
             conn: Mutex::new(conn),
         };
 
-        // Pre-migration backup: only when upgrading from an existing database
-        {
-            let conn = lock_conn!(db.conn);
-            let version = Self::get_user_version(&conn)?;
-            drop(conn);
-            if version > 0 && version < SCHEMA_VERSION {
-                log::info!(
-                    "Creating pre-migration database backup (v{version} → v{SCHEMA_VERSION})"
-                );
-                db.backup_database_file()
-                    .map_err(|error| {
-                        AppError::Database(format!(
-                            "Cannot upgrade database until its safety backup succeeds: {error}"
-                        ))
-                    })?
-                    .ok_or_else(|| {
-                        AppError::Database("Pre-migration safety backup was not created".into())
-                    })?;
-            }
-        }
-
-        db.apply_schema_migrations()?;
+        db.initialize_schema()?;
         if let Err(e) = db.ensure_incremental_auto_vacuum() {
             log::warn!("Failed to ensure incremental auto-vacuum: {e}");
         }
@@ -112,28 +91,12 @@ impl Database {
         Ok(db)
     }
 
-    /// 读取磁盘上数据库的 `user_version`；仅当它比应用支持的 [`SCHEMA_VERSION`]
-    /// 更新时返回 `Some(version)`。
-    ///
-    /// 用于初始化失败后判断是否为「数据库版本过新（应用过旧，需升级应用）」的可恢复
-    /// 场景——此时不应反复弹出无效的重试对话框，而应引导用户在应用内升级。
-    pub fn stored_user_version_exceeds_supported(
-        db_path: &std::path::Path,
-    ) -> Result<Option<i32>, AppError> {
-        if !db_path.exists() {
-            return Ok(None);
-        }
-        let conn = Connection::open(db_path).map_err(|e| AppError::Database(e.to_string()))?;
-        let version = Self::get_user_version(&conn)?;
-        Ok((version > SCHEMA_VERSION).then_some(version))
-    }
-
-    /// 创建内存数据库（用于测试）
+    /// Create an in-memory database (for testing)
     #[cfg(test)]
     pub fn memory() -> Result<Self, AppError> {
         let conn = Connection::open_in_memory().map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 启用外键约束
+        // Enable foreign key constraints
         conn.execute("PRAGMA foreign_keys = ON;", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
         conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
@@ -142,7 +105,7 @@ impl Database {
         let db = Self {
             conn: Mutex::new(conn),
         };
-        db.apply_schema_migrations()?;
+        db.initialize_schema()?;
         db.ensure_model_pricing_seeded()?;
 
         Ok(db)
@@ -150,7 +113,7 @@ impl Database {
 
     pub(crate) fn get_auto_vacuum_mode(conn: &Connection) -> Result<i32, AppError> {
         conn.query_row("PRAGMA auto_vacuum;", [], |row| row.get(0))
-            .map_err(|e| AppError::Database(format!("读取 auto_vacuum 失败: {e}")))
+            .map_err(|e| AppError::Database(format!("Failed to read auto_vacuum: {e}")))
     }
 
     fn has_user_tables(conn: &Connection) -> Result<bool, AppError> {
@@ -160,7 +123,7 @@ impl Database {
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| AppError::Database(format!("读取表数量失败: {e}")))?;
+            .map_err(|e| AppError::Database(format!("Failed to read table quantity: {e}")))?;
         Ok(count > 0)
     }
 
@@ -174,16 +137,16 @@ impl Database {
 
         let has_tables = Self::has_user_tables(conn)?;
         conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
-            .map_err(|e| AppError::Database(format!("设置 auto_vacuum 失败: {e}")))?;
+            .map_err(|e| AppError::Database(format!("Failed to set auto_vacuum: {e}")))?;
 
         if !has_tables {
             return Ok(false);
         }
 
         conn.execute("VACUUM;", [])
-            .map_err(|e| AppError::Database(format!("执行 VACUUM 失败: {e}")))?;
+            .map_err(|e| AppError::Database(format!("Failed to execute VACUUM: {e}")))?;
         conn.execute("PRAGMA foreign_keys = ON;", [])
-            .map_err(|e| AppError::Database(format!("恢复 foreign_keys 失败: {e}")))?;
+            .map_err(|e| AppError::Database(format!("Restore foreign_keys failed: {e}")))?;
         Ok(true)
     }
 

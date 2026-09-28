@@ -1,17 +1,18 @@
-//! Bounded, content-free HTTP diagnostics for requests sent to Copilot.
+//! Bounded HTTP diagnostics for requests sent to Copilot.
 //!
 //! The Atlas ID is also the request ID of a failed usage-history row. Never
 //! interpolate request bodies, arbitrary headers, or upstream error text into
-//! a log record without passing through the small allowlists below.
+//! the summary log. Bounded failure snapshots are recorded separately under
+//! the same Atlas ID in the file log and local database.
 
 use super::{
     error_mapper::map_proxy_error_to_status, types::ReasoningEffort,
     upstream_response::ProxyResponse, usage::logger::UsageLogger, ProxyError,
 };
-use crate::Database;
+use crate::{database::RequestDiagnosticDetail, Database};
 use bytes::Bytes;
 use futures::{stream::Stream, task::Poll};
-use http::HeaderMap;
+use http::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 use std::{
     pin::Pin,
@@ -26,6 +27,8 @@ use std::{
 const MAX_ERROR_PREVIEW: usize = 4096;
 const MAX_ERROR_JSON: usize = 32 * 1024;
 const MAX_DIAGNOSTIC_IDS: usize = 6;
+const MAX_SNAPSHOT_BODY: usize = 32 * 1024;
+const MAX_SNAPSHOT_HEADERS: usize = 8 * 1024;
 
 #[derive(Default, Clone)]
 struct Details {
@@ -48,6 +51,8 @@ struct Details {
     body_summary: Option<String>,
     body_truncated: bool,
     preview: Vec<u8>,
+    response_preview: Vec<u8>,
+    snapshot: RequestDiagnosticDetail,
 }
 
 pub(crate) struct RequestDiagnostics {
@@ -126,6 +131,8 @@ impl RequestDiagnostics {
         effort: &ReasoningEffort,
         bytes: usize,
         body: &Value,
+        headers: &HeaderMap,
+        body_bytes: &[u8],
     ) {
         let mut details = self.details();
         details.upstream_model = model
@@ -151,6 +158,8 @@ impl RequestDiagnostics {
         details.tools_state = tools_state(body.get("tools"));
         details.upstream_tool_choice = tool_choice_kind(body.get("tool_choice"));
         details.parallel_tool_calls = parallel_tool_calls_kind(body.get("parallel_tool_calls"));
+        details.snapshot.request_headers = Some(snapshot_headers(headers.iter()));
+        details.snapshot.request_body = Some(snapshot_body(body_bytes, body_bytes.len()));
     }
 
     fn response_headers(&self, status: u16, headers: &HeaderMap) {
@@ -164,6 +173,7 @@ impl RequestDiagnostics {
             .get(http::header::CONTENT_ENCODING)
             .and_then(|value| value.to_str().ok())
             .map(|value| safe_identifier(value, 24));
+        details.snapshot.response_headers = Some(snapshot_headers(headers.iter()));
         details.upstream_ids = [
             "x-request-id",
             "request-id",
@@ -200,9 +210,12 @@ impl RequestDiagnostics {
     fn add_bytes(&self, bytes: &Bytes) {
         self.response_bytes
             .fetch_add(bytes.len() as u64, Ordering::Relaxed);
-        let status = self.details().status;
-        if status.is_some_and(|status| status >= 400) {
-            let mut details = self.details();
+        let mut details = self.details();
+        let remaining = MAX_SNAPSHOT_BODY.saturating_sub(details.response_preview.len());
+        details
+            .response_preview
+            .extend_from_slice(&bytes[..remaining.min(bytes.len())]);
+        if details.status.is_some_and(|status| status >= 400) {
             let remaining = MAX_ERROR_PREVIEW.saturating_sub(details.preview.len());
             details
                 .preview
@@ -255,16 +268,34 @@ impl RequestDiagnostics {
             details.encoding.is_some() && !decoded,
             bytes.len() > MAX_ERROR_JSON,
         ));
+        let mut body = snapshot_body(bytes, bytes.len());
+        if let Some(encoding) = &details.encoding {
+            body = if decoded {
+                format!("[decoded from {encoding}]\n{body}")
+            } else {
+                format!("[encoded as {encoding}]\n{body}")
+            };
+        }
+        details.snapshot.response_body = Some(body);
     }
 
-    pub fn failed_event(&self, event: &Value) {
+    pub fn failed_event(&self, event: &Value, raw_data: Option<&str>) {
         let error = event
             .pointer("/response/error")
             .or_else(|| event.get("error"));
         let summary = error
             .map(summarize_error_value)
             .unwrap_or_else(|| "kind=sse message=response.failed".into());
-        self.details().body_summary = Some(summary);
+        let serialized = raw_data
+            .map(str::to_owned)
+            .unwrap_or_else(|| event.to_string());
+        let mut details = self.details();
+        details.body_summary = Some(summary);
+        details.snapshot.response_body = Some(format!(
+            "event: response.failed\ndata: {}",
+            snapshot_body(serialized.as_bytes(), serialized.len())
+        ));
+        drop(details);
         self.record_failure("stream", 502);
     }
 
@@ -328,7 +359,7 @@ impl RequestDiagnostics {
         );
 
         let logger = UsageLogger::new(&self.db);
-        if logger
+        let history_recorded = logger
             .log_error_with_context(
                 self.id.clone(),
                 self.provider_id.clone(),
@@ -353,10 +384,113 @@ impl RequestDiagnostics {
                     applied: (details.applied_effort != "none").then_some(details.applied_effort),
                 },
             )
-            .is_err()
-        {
+            .is_ok();
+        if !history_recorded {
             log::warn!(target: "atlas_http", "atlas_id={} failed to record diagnostic history row", self.id);
         }
+        let mut snapshot = details.snapshot;
+        snapshot.upstream_status = details.status;
+        snapshot.failure_stage = Some(stage.to_owned());
+        if snapshot.response_body.is_none() && !details.response_preview.is_empty() {
+            snapshot.response_body = Some(snapshot_body(
+                &details.response_preview,
+                self.response_bytes.load(Ordering::Relaxed) as usize,
+            ));
+        }
+        for (label, value) in [
+            ("request_headers", snapshot.request_headers.as_deref()),
+            ("request_body", snapshot.request_body.as_deref()),
+            ("response_headers", snapshot.response_headers.as_deref()),
+            ("response_body", snapshot.response_body.as_deref()),
+        ] {
+            let escaped = serde_json::to_string(value.unwrap_or("[not available]"))
+                .unwrap_or_else(|_| "\"[serialization failed]\"".into());
+            log::warn!(target: "atlas_http", "atlas_id={} capture.{label}={escaped}", self.id);
+        }
+        if !history_recorded {
+            return;
+        }
+        if let Err(error) = self.db.save_request_diagnostics(&self.id, &snapshot) {
+            log::warn!(target: "atlas_http", "atlas_id={} failed to record request/response snapshot: {error}", self.id);
+        }
+    }
+}
+
+fn snapshot_body(bytes: &[u8], total_bytes: usize) -> String {
+    if bytes.len() > MAX_SNAPSHOT_BODY {
+        let half = MAX_SNAPSHOT_BODY / 2;
+        return format!(
+            "{}\n[omitted {} bytes of {total_bytes}]\n{}",
+            render_snapshot_bytes(&bytes[..half]),
+            total_bytes.saturating_sub(MAX_SNAPSHOT_BODY),
+            render_snapshot_bytes(&bytes[bytes.len() - half..])
+        );
+    }
+    let mut output = render_snapshot_bytes(bytes);
+    if total_bytes > bytes.len() {
+        output.push_str(&format!(
+            "\n[truncated after {} bytes of {total_bytes}]",
+            bytes.len()
+        ));
+    }
+    output
+}
+
+fn render_snapshot_bytes(sample: &[u8]) -> String {
+    match std::str::from_utf8(sample) {
+        Ok(text)
+            if !text
+                .chars()
+                .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t')) =>
+        {
+            text.to_owned()
+        }
+        _ => {
+            use std::fmt::Write;
+            let mut hex = String::with_capacity(sample.len() * 2 + 22);
+            hex.push_str("[non-text body, hex]\n");
+            for byte in sample {
+                write!(&mut hex, "{byte:02x}").expect("writing to a String cannot fail");
+            }
+            hex
+        }
+    }
+}
+
+fn snapshot_headers<'a>(
+    headers: impl Iterator<Item = (&'a HeaderName, &'a HeaderValue)>,
+) -> String {
+    let mut output = String::new();
+    for (name, value) in headers {
+        let name = name.as_str();
+        let value = value.to_str().unwrap_or("[non-text header]");
+        let lower = name.to_ascii_lowercase();
+        let secret_name = [
+            "authorization",
+            "cookie",
+            "token",
+            "secret",
+            "api-key",
+            "api_key",
+        ]
+        .iter()
+        .any(|part| lower.contains(part));
+        let value = if secret_name || looks_sensitive(value) {
+            "[redacted]"
+        } else {
+            value
+        };
+        let line = format!("{name}: {value}\n");
+        if output.len() + line.len() > MAX_SNAPSHOT_HEADERS {
+            output.push_str("[headers truncated]");
+            break;
+        }
+        output.push_str(&line);
+    }
+    if output.is_empty() {
+        "(no headers)".into()
+    } else {
+        output.trim_end().to_owned()
     }
 }
 
@@ -756,6 +890,8 @@ mod tests {
             },
             712,
             &serde_json::json!({"input":[{}],"tools":[{}]}),
+            &HeaderMap::new(),
+            b"",
         );
         diagnostics
     }
@@ -842,6 +978,8 @@ mod tests {
             &ReasoningEffort::default(),
             100,
             &serde_json::json!({"input":[{"content":"private prompt"}],"tools":[],"parallel_tool_calls":null}),
+            &HeaderMap::new(),
+            b"",
         );
         let response = diagnostics.observe(ProxyResponse::buffered(
             StatusCode::BAD_REQUEST,
@@ -858,11 +996,12 @@ mod tests {
             },
         );
         let entries = logger.0.lock().unwrap().clone();
-        for (_, line) in &entries {
-            assert!(line.contains("tools=0 tools_state=empty requested_tool_choice=auto upstream_tool_choice=absent parallel_tool_calls=other"));
-            assert!(!line.contains("private prompt"));
-            assert!(!line.contains("Bad Request"));
-        }
+        assert!(entries[1].1.contains("tools=0 tools_state=empty requested_tool_choice=auto upstream_tool_choice=absent parallel_tool_calls=other"));
+        assert!(!entries[1].1.contains("private prompt"));
+        assert!(!entries[1].1.contains("Bad Request"));
+        assert!(entries.iter().any(|(_, line)| {
+            line.contains("capture.response_body=") && line.contains("Bad Request")
+        }));
         let history = db.get_request_logs(&Default::default(), 0, 10).unwrap();
         let saved = history.data[0].error_message.as_deref().unwrap();
         assert!(saved.contains("requested_tool_choice=auto upstream_tool_choice=absent"));
@@ -915,7 +1054,7 @@ mod tests {
         );
 
         let entries = logger.0.lock().unwrap().clone();
-        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.len(), 6);
         assert_eq!(entries[0].0, log::Level::Info);
         assert_eq!(entries[1].0, log::Level::Warn);
         assert!(entries[1]
@@ -926,10 +1065,14 @@ mod tests {
         for (_, line) in &entries {
             assert_eq!(line.lines().count(), 1);
             assert!(line.contains(&diagnostics.id));
-            assert!(line.contains("upstream-123"));
             assert!(!line.contains("Bearer private"));
             assert!(!line.contains("access_token"));
         }
+        assert!(entries[0].1.contains("upstream-123"));
+        assert!(entries[1].1.contains("upstream-123"));
+        assert!(entries.iter().any(|(_, line)| {
+            line.contains("capture.response_headers=") && line.contains("authorization: [redacted]")
+        }));
         assert!(entries[0].1.contains("status=400"));
         assert!(entries[0].1.contains("outgoing_bytes=712"));
         assert!(entries[0].1.contains("input_items=1 tools=1"));
@@ -949,7 +1092,7 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial]
-    async fn plain_text_upstream_400_omits_raw_body_from_log_and_history() {
+    async fn plain_text_upstream_400_keeps_the_summary_safe_and_captures_the_body() {
         let logger = captured_logger();
         let db = Arc::new(Database::memory().unwrap());
         let diagnostics = make_diagnostics(db.clone());
@@ -979,6 +1122,9 @@ mod tests {
         assert!(warning.contains("body=kind=text bytes=12"));
         assert!(!warning.contains("Bad Request"));
         assert!(!warning.contains("raw_body="));
+        assert!(entries.iter().any(|(_, line)| {
+            line.contains("capture.response_body=") && line.contains("Bad Request")
+        }));
         let history = db.get_request_logs(&Default::default(), 0, 10).unwrap();
         assert_eq!(history.data[0].request_id, diagnostics.id);
         assert_eq!(history.data[0].status_code, 400);
@@ -986,6 +1132,13 @@ mod tests {
         assert!(saved.contains("kind=text bytes=12"));
         assert!(!saved.contains("Bad Request"));
         assert!(!saved.contains("raw_body="));
+        let detail = db
+            .get_request_diagnostics(&diagnostics.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(detail.upstream_status, Some(400));
+        assert_eq!(detail.failure_stage.as_deref(), Some("upstream"));
+        assert_eq!(detail.response_body.as_deref(), Some("Bad Request\n"));
     }
 
     #[tokio::test]
@@ -1115,10 +1268,39 @@ mod tests {
         logger.0.lock().unwrap().clear();
         let db = Arc::new(Database::memory().unwrap());
         let diagnostics = make_diagnostics(db.clone());
-        diagnostics.failed_event(&serde_json::json!({
+        let mut request_headers = HeaderMap::new();
+        request_headers.insert("authorization", HeaderValue::from_static("Bearer private"));
+        request_headers.insert("content-type", HeaderValue::from_static("application/json"));
+        diagnostics.outgoing(
+            Some("gpt-6-astra"),
+            "responses",
+            true,
+            &ReasoningEffort::default(),
+            25,
+            &serde_json::json!({"input":[]}),
+            &request_headers,
+            br#"{"input":"example request"}"#,
+        );
+        let mut response_headers = HeaderMap::new();
+        response_headers.insert(
+            "content-type",
+            HeaderValue::from_static("text/event-stream"),
+        );
+        let _ = diagnostics
+            .observe(ProxyResponse::buffered(
+                StatusCode::OK,
+                response_headers,
+                Bytes::from_static(b"event: response.created\n\n"),
+            ))
+            .bytes_with_limit(1024)
+            .await
+            .unwrap();
+        let failure_event = serde_json::json!({
             "type": "response.failed",
             "response": {"error": {"message": "secret tool output", "code": "model_max_prompt_tokens_exceeded", "param": "input", "prompt_tokens": 390003}}
-        }));
+        });
+        let raw_event = failure_event.to_string();
+        diagnostics.failed_event(&failure_event, Some(&raw_event));
         let history = db.get_request_logs(&Default::default(), 0, 10).unwrap();
         assert_eq!(history.data[0].request_id, diagnostics.id);
         let entries = logger.0.lock().unwrap().clone();
@@ -1128,8 +1310,26 @@ mod tests {
         assert!(entries
             .iter()
             .any(|(_, line)| line.contains("prompt_tokens=390003")));
+        assert!(!entries[1].1.contains("secret tool output"));
+        assert!(entries.iter().any(|(_, line)| {
+            line.contains("capture.response_body=") && line.contains("secret tool output")
+        }));
+        assert!(entries.iter().any(|(_, line)| {
+            line.contains("capture.request_body=") && line.contains("example request")
+        }));
         assert!(!entries
             .iter()
-            .any(|(_, line)| line.contains("secret tool output")));
+            .any(|(_, line)| line.contains("Bearer private")));
+        let detail = db
+            .get_request_diagnostics(&diagnostics.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(detail.upstream_status, Some(200));
+        assert_eq!(detail.failure_stage.as_deref(), Some("stream"));
+        assert!(detail.response_body.unwrap().contains("secret tool output"));
+        assert!(detail
+            .request_headers
+            .unwrap()
+            .contains("authorization: [redacted]"));
     }
 }

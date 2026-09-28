@@ -11,53 +11,53 @@ pub enum ProxyError {
     #[error("Request body exceeds the {0}-byte limit")]
     RequestBodyTooLarge(usize),
 
-    #[error("上游响应体超过大小上限: {0} 字节")]
+    #[error("Upstream response body exceeds size limit: {0} bytes")]
     ResponseBodyTooLarge(usize),
 
-    #[error("服务器已在运行")]
+    #[error("Server is already running")]
     AlreadyRunning,
 
-    #[error("服务器未运行")]
+    #[error("Server is not running")]
     NotRunning,
 
-    #[error("地址绑定失败: {0}")]
+    #[error("Address binding failed: {0}")]
     BindFailed(String),
 
-    #[error("停止超时")]
+    #[error("Stop timeout")]
     StopTimeout,
 
-    #[error("停止失败: {0}")]
+    #[error("Stop failed: {0}")]
     StopFailed(String),
 
-    #[error("请求转发失败: {0}")]
+    #[error("Request forwarding failed: {0}")]
     ForwardFailed(String),
 
-    #[error("未配置供应商")]
+    #[error("No provider configured")]
     NoProvidersConfigured,
 
-    #[error("上游错误 (状态码 {status}): {body:?}")]
+    #[error("Upstream error (status code {status}): {body:?}")]
     UpstreamError { status: u16, body: Option<String> },
 
-    #[error("数据库错误: {0}")]
+    #[error("Database error: {0}")]
     DatabaseError(String),
 
-    #[error("配置错误: {0}")]
+    #[error("Configuration error: {0}")]
     ConfigError(String),
 
-    #[error("格式转换错误: {0}")]
+    #[error("Format conversion error: {0}")]
     TransformError(String),
 
-    #[error("无效的请求: {0}")]
+    #[error("Invalid request: {0}")]
     InvalidRequest(String),
 
-    #[error("超时: {0}")]
+    #[error("Timeout: {0}")]
     Timeout(String),
 
-    /// 认证错误
-    #[error("认证失败: {0}")]
+    /// Authentication error
+    #[error("Authentication failed: {0}")]
     AuthError(String),
 
-    #[error("内部错误: {0}")]
+    #[error("Internal error: {0}")]
     Internal(String),
 }
 
@@ -71,13 +71,13 @@ impl IntoResponse for ProxyError {
                 let http_status =
                     StatusCode::from_u16(*upstream_status).unwrap_or(StatusCode::BAD_GATEWAY);
 
-                // 尝试解析上游响应体为 JSON，如果失败则包装为字符串
+                // Attempts to parse the upstream response body as JSON, or wraps it as a string if that fails
                 let error_body = if let Some(body_str) = upstream_body {
                     if let Ok(json_body) = serde_json::from_str::<serde_json::Value>(body_str) {
-                        // 上游返回的是 JSON，直接透传
+                        // The upstream returns JSON, which is directly transmitted transparently.
                         json_body
                     } else {
-                        // 上游返回的不是 JSON，包装为错误消息
+                        // What the upstream returns is not JSON, wrapped as an error message
                         json!({
                             "error": {
                                 "message": body_str,

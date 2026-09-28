@@ -1,11 +1,11 @@
-//! 代理服务相关的 Tauri 命令
+//! Tauri commands related to proxy services
 //!
-//! 提供前端调用的 API 接口
+//! Provides API interface for front-end calls
 
 use crate::proxy::types::*;
 use crate::store::AppState;
 
-/// 启动代理服务器（仅启动服务，不接管 Live 配置）
+/// Start the proxy server (only starts the service, does not take over the Live configuration)
 #[tauri::command]
 pub async fn start_proxy_server(
     state: tauri::State<'_, AppState>,
@@ -13,7 +13,7 @@ pub async fn start_proxy_server(
     state.proxy_service.start().await
 }
 
-/// 停止代理服务器（仅停止服务，不恢复/清理 Live 接管状态）
+/// Stop the proxy server (only stops the service, does not restore/clean up the Live takeover state)
 #[tauri::command]
 pub async fn stop_proxy_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
     if state.proxy_service.is_running().await {
@@ -34,7 +34,7 @@ pub async fn stop_proxy_server(state: tauri::State<'_, AppState>) -> Result<(), 
     Ok(())
 }
 
-/// 获取代理服务器状态
+/// Get proxy server status
 #[tauri::command]
 pub async fn get_proxy_status(state: tauri::State<'_, AppState>) -> Result<ProxyStatus, String> {
     state.proxy_service.get_status().await
@@ -42,7 +42,7 @@ pub async fn get_proxy_status(state: tauri::State<'_, AppState>) -> Result<Proxy
 
 // ==================== Global & Per-App Config ====================
 
-/// 获取全局代理配置
+/// Get global proxy configuration
 ///
 /// Returns the proxy switch, listener address, and port. Usage recording is always on.
 #[tauri::command]
@@ -55,7 +55,7 @@ pub async fn get_global_proxy_config(
         .map_err(|e| e.to_string())
 }
 
-/// 更新全局代理配置
+/// Update global proxy configuration
 ///
 /// Update the one local listener's configuration.
 #[tauri::command]

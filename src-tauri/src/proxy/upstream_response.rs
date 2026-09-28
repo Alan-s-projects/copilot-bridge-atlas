@@ -67,8 +67,8 @@ impl ProxyResponse {
     /// Consume the response and collect the full body into `Bytes`, aborting the
     /// read as soon as the accumulated body exceeds `max_bytes`.
     ///
-    /// 所有变体都在累积过程中逐块检查、超限即断开（drop stream 中止上游连接），
-    /// 而不是先收满再比较——否则超大明文 body 仍会完整进入内存，限制形同虚设。
+    /// All variants are checked block by block during the accumulation process, and will be disconnected if the limit is exceeded (drop stream terminates the upstream connection),
+    /// Instead of collecting it first and then comparing - otherwise the oversized plaintext body will still be completely entered into the memory, and the restriction will be in vain.
     pub async fn bytes_with_limit(self, max_bytes: usize) -> Result<Bytes, ProxyError> {
         let mut stream = self.bytes_stream();
         let mut body = bytes::BytesMut::new();

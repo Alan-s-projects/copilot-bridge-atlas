@@ -1,6 +1,6 @@
-//! 数据库备份和恢复
+//! Database backup and recovery
 //!
-//! 提供数据库快照备份和恢复。
+//! Provides database snapshot backup and recovery.
 
 use super::{lock_conn, Database};
 use crate::config::get_app_config_dir;
@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use tempfile::{Builder, NamedTempFile};
 
-const COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER: &str = "-- Copilot Bridge Atlas SQLite export";
+const COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER: &str = "-- Copilot Bridge Atlas 6 SQLite export";
 
 /// Bound combined INSERT batches while still amortizing statement parsing.
 /// A row larger than this cap is emitted alone because it cannot be split.
@@ -35,33 +35,26 @@ fn lock_backup_file_operations() -> Result<BackupFileOperationGuard, AppError> {
         .map_err(|e| AppError::Database(format!("Backup file operation lock failed: {e}")))
 }
 
-/// `dump_sql` 会写出的 PRAGMA。其余 PRAGMA 一律拒绝——`temp_store_directory`
-/// 能把临时文件重定向到任意目录，`writable_schema` 能绕过 schema 完整性检查。
-const IMPORT_ALLOWED_PRAGMAS: &[&str] = &["foreign_keys", "user_version"];
+/// Accept only the PRAGMAs emitted by `dump_sql`. Other PRAGMAs can redirect
+/// temporary files or bypass schema integrity checks.
+const IMPORT_ALLOWED_PRAGMAS: &[&str] = &["foreign_keys", "user_version", "application_id"];
 
-/// 执行外部 SQL 期间的 authorizer：拒绝一切能**离开临时数据库文件**的动作。
+/// Reject imported SQL operations that could affect files outside the staging database.
 ///
-/// 头部校验（`validate_copilot_bridge_atlas_sql_export`）只比较一个注释前缀，任何人都能在
-/// 合法前缀后面接着写别的语句。`ATTACH DATABASE '/path/x.db'` 的副作用发生在
-/// 暂存库的 schema 校验之前，导入即使最终失败，文件也已经被创建；而 `settings`
-/// External SQL is staged under this authorizer before schema validation.
+/// The export header is only a prefix check. An attacker can append statements
+/// after it, and `ATTACH DATABASE` can create a file before schema validation
+/// rejects the import. Apply this authorizer while staging external SQL.
 ///
-/// 为什么是 authorizer 而不是「扫描 ATTACH 关键字」：字符串扫描会被 `/*x*/ATTACH`、
-/// 大小写、换行绕过，还漏掉 `VACUUM INTO`。authorizer 在 prepare 阶段按**解析结果**
-/// 回调，绕不过语法层。
+/// Text scanning misses commented, mixed-case, or multiline `ATTACH` and
+/// `VACUUM INTO`. The SQLite authorizer sees the parsed operation at prepare time.
 ///
-/// 为什么是「拒绝越界动作」而不是「只放行 dump_sql 的语句」：这段 SQL 跑在
-/// `NamedTempFile` 建的一次性库上，而那个库的全部内容本来就由这份 SQL 决定。
-/// 因此 `DELETE` / `DROP` / `UPDATE` 给不了攻击者任何新东西——**唯一有意义的边界
-/// 是那个临时文件本身**。按 dump_sql 的产物做严格白名单只会带来误伤风险（用户
-/// 库里出现一种没预料到的对象就恢复不了备份），却不多挡任何攻击。
+/// The imported SQL already controls the contents of this disposable database.
+/// Blocking `DELETE`, `DROP`, or `UPDATE` would not add protection, but it could
+/// reject a valid backup with an unfamiliar object. The file boundary matters.
 ///
-/// 越界动作是实测出来的，不是推断的：
-/// - `ATTACH DATABASE 'x'`、`VACUUM INTO 'x'`、裸 `VACUUM` **三者都**报
-///   `AuthAction::Attach`，所以拒 `Attach` 一条即可覆盖
-/// - 文件后端的虚拟表模块（`csvfile`、`zipfile` 等）能读写任意路径 → 拒 vtable
-/// - `Unknown` 是 rusqlite 对未识别动作码的兜底 → 未知即拒，将来 SQLite 新增的
-///   跨文件语句会默认落进这里，不依赖有人记得回来补名单
+/// SQLite reports `ATTACH`, `VACUUM INTO`, and bare `VACUUM` as `Attach`.
+/// File-backed virtual tables can read or write arbitrary paths. Reject unknown
+/// action codes so future cross-file operations remain blocked by default.
 fn import_authorizer(context: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization {
     use rusqlite::hooks::{AuthAction, Authorization};
 
@@ -76,8 +69,11 @@ fn import_authorizer(context: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hoo
     };
 
     if escapes_temp_db {
-        // SQLite 只会回一句 "not authorized"，不记日志就无从知道是哪条语句被拦。
-        log::warn!("SQL 导入拒绝了越界语句: {:?}", context.action);
+        // SQLite will only reply "not authorized". Without logging, there is no way to know which statement was blocked.
+        log::warn!(
+            "SQL import rejected out-of-bounds statement: {:?}",
+            context.action
+        );
         Authorization::Deny
     } else {
         Authorization::Allow
@@ -94,14 +90,14 @@ pub struct BackupEntry {
 }
 
 impl Database {
-    /// 导出为 SQLite 兼容的 SQL 文本（内存字符串，完整导出）
+    /// Export as SQLite-compatible SQL text (in-memory string, full export)
     #[cfg(test)]
     pub fn export_sql_string(&self) -> Result<String, AppError> {
         let snapshot = self.snapshot_to_memory()?;
         Self::dump_sql(&snapshot, &[])
     }
 
-    /// 导出为 SQLite 兼容的 SQL 文本
+    /// Export as SQLite-compatible SQL text
     #[cfg(test)]
     pub fn export_sql(&self, target_path: &Path) -> Result<(), AppError> {
         let dump = self.export_sql_string()?;
@@ -113,11 +109,11 @@ impl Database {
         crate::config::atomic_write(target_path, dump.as_bytes())
     }
 
-    /// 从 SQL 文件导入，返回生成的备份 ID（若无备份则为空字符串）
+    /// Import from SQL file, return the generated backup ID (empty string if no backup)
     pub fn import_sql(&self, source_path: &Path) -> Result<String, AppError> {
         if !source_path.exists() {
             return Err(AppError::InvalidInput(format!(
-                "SQL 文件不存在: {}",
+                "SQL file does not exist: {}",
                 source_path.display()
             )));
         }
@@ -127,7 +123,7 @@ impl Database {
         self.import_sql_string(sql_content)
     }
 
-    /// 从 SQL 字符串导入，返回生成的备份 ID（若无备份则为空字符串）
+    /// Import from SQL string, returns the generated backup ID (empty string if no backup)
     pub fn import_sql_string(&self, sql_raw: &str) -> Result<String, AppError> {
         self.import_sql_string_inner(sql_raw)
     }
@@ -147,9 +143,9 @@ impl Database {
         let sql_content = sql_raw.trim_start_matches('\u{feff}');
         Self::validate_copilot_bridge_atlas_sql_export(sql_content)?;
 
-        // 在临时数据库执行导入，确保失败不会污染主库
+        // Execute the import in the temporary database to ensure that failure does not pollute the main database
         let temp_file = NamedTempFile::new().map_err(|e| AppError::IoContext {
-            context: "创建临时数据库文件失败".to_string(),
+            context: "Failed to create temporary database file".to_string(),
             source: e,
         })?;
         let temp_path = temp_file.path().to_path_buf();
@@ -160,17 +156,19 @@ impl Database {
         // SQL import cannot downgrade the main DB from incremental vacuum to NONE.
         temp_conn
             .execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
-            .map_err(|e| AppError::Database(format!("设置暂存库 auto_vacuum 失败: {e}")))?;
+            .map_err(|e| {
+                AppError::Database(format!("Setting staging database auto_vacuum failed: {e}"))
+            })?;
 
-        // authorizer 只覆盖外部 SQL，执行完立刻摘掉：紧随其后的
-        // `create_tables_on_conn` / `apply_schema_migrations_on_conn` 是本程序自己的
-        // schema 维护语句，不属于需要设防的输入，没必要让它们也过一遍守卫。
+        // Remove the authorizer after running external SQL. Schema validation
+        // below uses trusted application statements.
         temp_conn.authorizer(Some(import_authorizer));
         let batch_result = temp_conn.execute_batch(sql_content);
         temp_conn.authorizer(
             None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>,
         );
-        batch_result.map_err(|e| AppError::Database(format!("执行 SQL 导入失败: {e}")))?;
+        batch_result
+            .map_err(|e| AppError::Database(format!("Failed to execute SQL import: {e}")))?;
         if !temp_conn.is_autocommit() {
             let _ = temp_conn.execute_batch("ROLLBACK;");
             return Err(AppError::Message(
@@ -178,13 +176,8 @@ impl Database {
             ));
         }
 
-        // Validate the schema produced by the input itself before migrations
-        // can create missing tables and accidentally make a truncated file look valid.
+        // Validate the imported schema before touching the live database.
         Self::validate_imported_schema(&temp_conn)?;
-
-        // 补齐缺失表/索引并执行迁移
-        Self::create_tables_on_conn(&temp_conn)?;
-        Self::apply_schema_migrations_on_conn(&temp_conn)?;
         on_staging_ready()?;
 
         let backup_file_guard = lock_backup_file_operations()?;
@@ -197,7 +190,7 @@ impl Database {
                 Self::backup_database_file_from_conn(&backup_file_guard, &main_conn, &[])?;
             let backup = Backup::new(&temp_conn, &mut main_conn)
                 .map_err(|e| AppError::Database(e.to_string()))?;
-            Self::complete_backup(&backup, "替换主数据库")?;
+            Self::complete_backup(&backup, "Replace primary database")?;
             backup_path
         };
 
@@ -208,7 +201,7 @@ impl Database {
         Ok(backup_id)
     }
 
-    /// 创建内存快照以避免长时间持有数据库锁
+    /// Create memory snapshots to avoid holding database locks for long periods of time
     #[cfg(test)]
     pub(crate) fn snapshot_to_memory(&self) -> Result<Connection, AppError> {
         let conn = lock_conn!(self.conn);
@@ -218,7 +211,7 @@ impl Database {
         {
             let backup =
                 Backup::new(&conn, &mut snapshot).map_err(|e| AppError::Database(e.to_string()))?;
-            Self::complete_backup(&backup, "创建内存数据库快照")?;
+            Self::complete_backup(&backup, "Create an in-memory database snapshot")?;
         }
 
         Ok(snapshot)
@@ -227,26 +220,21 @@ impl Database {
     fn complete_backup(backup: &Backup<'_, '_>, context: &str) -> Result<(), AppError> {
         let result = backup
             .step(-1)
-            .map_err(|e| AppError::Database(format!("{context}失败: {e}")))?;
+            .map_err(|e| AppError::Database(format!("{context} failed: {e}")))?;
         match result {
             StepResult::Done => Ok(()),
             StepResult::More | StepResult::Busy | StepResult::Locked => Err(AppError::Database(
-                format!("{context}未完成: SQLite Backup 返回 {result:?}"),
+                format!("{context} is not completed: SQLite Backup returns {result:?}"),
             )),
             _ => Err(AppError::Database(format!(
-                "{context}未完成: SQLite Backup 返回未知状态"
+                "{context} incomplete: SQLite Backup returned unknown status"
             ))),
         }
     }
 
     fn validate_copilot_bridge_atlas_sql_export(sql: &str) -> Result<(), AppError> {
         let trimmed = sql.trim_start();
-        if trimmed.starts_with(COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER)
-            || trimmed
-                .lines()
-                .next()
-                .is_some_and(|line| line.starts_with("-- ") && line.ends_with(" SQLite 导出"))
-        {
+        if trimmed.lines().next() == Some(COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER) {
             return Ok(());
         }
 
@@ -310,7 +298,7 @@ impl Database {
         Ok(())
     }
 
-    /// 生成一致性快照备份，返回备份文件路径（不存在主库时返回 None）
+    /// Generate a consistent snapshot backup and return its path, or None if the main database is absent.
     pub(crate) fn backup_database_file(&self) -> Result<Option<PathBuf>, AppError> {
         let backup_file_guard = lock_backup_file_operations()?;
         self.backup_database_file_locked(&backup_file_guard)
@@ -355,7 +343,7 @@ impl Database {
 
         let backup_dir = db_path
             .parent()
-            .ok_or_else(|| AppError::Config("无效的数据库路径".to_string()))?
+            .ok_or_else(|| AppError::Config("Invalid database path".to_string()))?
             .join("backups");
 
         fs::create_dir_all(&backup_dir).map_err(|e| AppError::io(&backup_dir, e))?;
@@ -379,12 +367,12 @@ impl Database {
             Connection::open(temp_db_path).map_err(|e| AppError::Database(e.to_string()))?;
         let backup = Backup::new(source_conn, &mut dest_conn)
             .map_err(|e| AppError::Database(e.to_string()))?;
-        Self::complete_backup(&backup, "创建数据库安全备份")?;
+        Self::complete_backup(&backup, "Create a secure backup of your database")?;
         drop(backup);
         Self::validate_sqlite_integrity(&dest_conn)?;
-        dest_conn
-            .close()
-            .map_err(|(_, e)| AppError::Database(format!("关闭数据库安全备份失败: {e}")))?;
+        dest_conn.close().map_err(|(_, e)| {
+            AppError::Database(format!("Failed to close database security backup: {e}"))
+        })?;
         before_publish(temp_db_path, &backup_path)?;
 
         loop {
@@ -436,7 +424,7 @@ impl Database {
         }
     }
 
-    /// 清理旧的数据库备份，保留最新的 N 个
+    /// Clean up old database backups and keep the latest N
     fn cleanup_db_backups(dir: &Path, protected_paths: &[&Path]) -> Result<(), AppError> {
         let retain = crate::settings::effective_backup_retain_count();
         let entries = match fs::read_dir(dir) {
@@ -475,7 +463,11 @@ impl Database {
             }
 
             if let Err(err) = fs::remove_file(&path) {
-                log::warn!("删除旧数据库备份失败 {}: {}", path.display(), err);
+                log::warn!(
+                    "Failed to delete old database backup {}: {}",
+                    path.display(),
+                    err
+                );
             } else {
                 removed += 1;
             }
@@ -486,12 +478,12 @@ impl Database {
     fn validate_sqlite_integrity(conn: &Connection) -> Result<(), AppError> {
         let mut stmt = conn
             .prepare("PRAGMA quick_check;")
-            .map_err(|e| AppError::Database(format!("检查数据库完整性失败: {e}")))?;
+            .map_err(|e| AppError::Database(format!("Database integrity check failed: {e}")))?;
         let results = stmt
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| AppError::Database(format!("检查数据库完整性失败: {e}")))?
+            .map_err(|e| AppError::Database(format!("Database integrity check failed: {e}")))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AppError::Database(format!("检查数据库完整性失败: {e}")))?;
+            .map_err(|e| AppError::Database(format!("Database integrity check failed: {e}")))?;
 
         if results.len() == 1 && results[0].eq_ignore_ascii_case("ok") {
             return Ok(());
@@ -505,16 +497,21 @@ impl Database {
 
     /// Validate that the external SQL created a recognizable Copilot Bridge Atlas schema.
     ///
-    /// These tables all existed in the oldest supported SQL-export schema
-    /// (v3.8.x). Checking before migrations keeps header-only/truncated files
-    /// from being completed by `create_tables_on_conn`, while allowing a valid
-    /// backup whose user-owned configuration tables happen to contain no rows.
+    /// Require the current version and tables before accepting an import.
     fn validate_imported_schema(conn: &Connection) -> Result<(), AppError> {
+        let version = Self::get_user_version(conn)?;
+        let application_id = Self::get_application_id(conn)?;
+        if version != super::SCHEMA_VERSION || application_id != super::APPLICATION_ID {
+            return Err(AppError::Database(format!(
+                "Unsupported database format (schema {version}, application {application_id}); expected Atlas 6 format."
+            )));
+        }
         const REQUIRED_TABLES: &[&str] = &[
             "providers",
             "settings",
             "proxy_config",
             "proxy_request_logs",
+            "proxy_request_diagnostics",
             "usage_daily_rollups",
             "model_pricing",
         ];
@@ -534,7 +531,7 @@ impl Database {
         Ok(())
     }
 
-    /// 导出数据库为 SQL 文本 in the internal serialization tests.
+    /// Export database as SQL text in the internal serialization tests.
     #[cfg(test)]
     fn dump_sql(conn: &Connection, skip_tables: &[&str]) -> Result<String, AppError> {
         let mut output = String::new();
@@ -542,15 +539,17 @@ impl Database {
         let user_version: i64 = conn
             .query_row("PRAGMA user_version;", [], |row| row.get(0))
             .unwrap_or(0);
+        let application_id = Self::get_application_id(conn)?;
 
         output.push_str(&format!(
-            "-- Copilot Bridge Atlas SQLite export\n-- 生成时间: {timestamp}\n-- user_version: {user_version}\n"
+            "{COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER}\n-- Generated at: {timestamp}\n-- user_version: {user_version}\n"
         ));
         output.push_str("PRAGMA foreign_keys=OFF;\n");
         output.push_str(&format!("PRAGMA user_version={user_version};\n"));
+        output.push_str(&format!("PRAGMA application_id={application_id};\n"));
         output.push_str("BEGIN TRANSACTION;\n");
 
-        // 导出 schema
+        // export schema
         let mut stmt = conn
             .prepare(
                 "SELECT type, name, tbl_name, sql
@@ -570,7 +569,7 @@ impl Database {
             let name: String = row.get(1).map_err(|e| AppError::Database(e.to_string()))?;
             let sql: String = row.get(3).map_err(|e| AppError::Database(e.to_string()))?;
 
-            // 跳过 SQLite 内部对象（如 sqlite_sequence）
+            // Skip SQLite internal objects (such as sqlite_sequence)
             if name.starts_with("sqlite_") {
                 continue;
             }
@@ -587,7 +586,7 @@ impl Database {
             }
         }
 
-        // 导出数据
+        // Export data
         for table in tables {
             if skip_tables.iter().any(|t| *t == table) {
                 continue;
@@ -597,11 +596,11 @@ impl Database {
                 continue;
             }
 
-            // 每行一条 INSERT 是导入慢的根源：恢复侧要为每条语句单独
-            // 解析/准备/收尾，2 万行实测 21 秒（内存库上一样慢，说明是
-            // 纯 CPU 而非 I/O）。合并成多行 VALUES 后同样数据 <100ms。
-            // SQLite 从 3.7.11（2012）起支持多行 VALUES，且导入侧是通用
-            // execute_batch，新旧两种格式都能读——向后兼容无忧。
+            // One INSERT per line is the source of slow import: the recovery side needs to separate each statement
+            // Parsing/preparation/finishing, measured 21 seconds for 20,000 lines (same slow as on the memory bank, the explanation is
+            // Pure CPU not I/O). The same data is <100ms after merging into multiple rows of VALUES.
+            // SQLite supports multi-row VALUES starting from 3.7.11 (2012), and the import side is universal
+            // execute_batch, can read both old and new formats - no worries about backward compatibility.
             let quoted_table = Self::quote_identifier(&table);
             let quoted_columns = columns
                 .iter()
@@ -684,21 +683,23 @@ impl Database {
 
         let mut stmt = conn
             .prepare("SELECT name, seq FROM sqlite_sequence ORDER BY name")
-            .map_err(|e| AppError::Database(format!("读取 AUTOINCREMENT 序列失败: {e}")))?;
-        let mut rows = stmt
-            .query([])
-            .map_err(|e| AppError::Database(format!("查询 AUTOINCREMENT 序列失败: {e}")))?;
+            .map_err(|e| {
+                AppError::Database(format!("Failed to read AUTOINCREMENT sequence: {e}"))
+            })?;
+        let mut rows = stmt.query([]).map_err(|e| {
+            AppError::Database(format!("Query for AUTOINCREMENT sequence failed: {e}"))
+        })?;
         let mut values = Vec::new();
         while let Some(row) = rows.next().map_err(|e| AppError::Database(e.to_string()))? {
-            let table: String = row
-                .get(0)
-                .map_err(|e| AppError::Database(format!("解析 AUTOINCREMENT 表名失败: {e}")))?;
+            let table: String = row.get(0).map_err(|e| {
+                AppError::Database(format!("Failed to parse AUTOINCREMENT table name: {e}"))
+            })?;
             if skip_tables.iter().any(|skipped| *skipped == table) {
                 continue;
             }
-            let sequence = row
-                .get_ref(1)
-                .map_err(|e| AppError::Database(format!("解析表 {table} 序列失败: {e}")))?;
+            let sequence = row.get_ref(1).map_err(|e| {
+                AppError::Database(format!("Failed to parse table {table} sequence: {e}"))
+            })?;
             values.push(format!(
                 "({}, {})",
                 Self::format_sql_value(ValueRef::Text(table.as_bytes()))?,
@@ -723,7 +724,7 @@ impl Database {
         format!("\"{}\"", identifier.replace('"', "\"\""))
     }
 
-    /// 获取表的列名列表
+    /// Get a list of table column names
     #[cfg(test)]
     fn get_table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, AppError> {
         let quoted_table = Self::quote_identifier(table);
@@ -741,7 +742,7 @@ impl Database {
         Ok(columns)
     }
 
-    /// 格式化 SQL 值
+    /// Format SQL values
     #[cfg(test)]
     fn format_sql_value(value: ValueRef<'_>) -> Result<String, AppError> {
         match value {
@@ -879,10 +880,10 @@ impl Database {
         .map_err(|e| AppError::Database(e.to_string()))?;
 
         // Stage and fully validate the selected file before touching the live
-        // connection. A corrupt/future-schema backup or failed migration must
+        // connection. A corrupt or incompatible backup must
         // leave the current database unchanged.
         let temp_file = NamedTempFile::new().map_err(|e| AppError::IoContext {
-            context: "创建数据库恢复暂存文件失败".to_string(),
+            context: "Failed to create database recovery temporary file".to_string(),
             source: e,
         })?;
         let mut staging_conn =
@@ -890,15 +891,13 @@ impl Database {
         {
             let backup = Backup::new(&source_conn, &mut staging_conn)
                 .map_err(|e| AppError::Database(e.to_string()))?;
-            Self::complete_backup(&backup, "读取数据库备份")?;
+            Self::complete_backup(&backup, "Read database backup")?;
         }
         drop(source_conn);
 
         Self::validate_sqlite_integrity(&staging_conn)?;
         Self::validate_imported_schema(&staging_conn)?;
         Self::ensure_incremental_auto_vacuum_on_conn(&staging_conn)?;
-        Self::create_tables_on_conn(&staging_conn)?;
-        Self::apply_schema_migrations_on_conn(&staging_conn)?;
         Self::ensure_model_pricing_seeded_on_conn(&staging_conn)?;
         Self::validate_sqlite_integrity(&staging_conn)?;
 
@@ -914,7 +913,7 @@ impl Database {
             before_replace(safety_backup.as_deref())?;
             let backup = Backup::new(&staging_conn, &mut main_conn)
                 .map_err(|e| AppError::Database(e.to_string()))?;
-            Self::complete_backup(&backup, "恢复主数据库")?;
+            Self::complete_backup(&backup, "Restore master database")?;
             safety_backup
         };
         let safety_id = safety_backup
@@ -1092,8 +1091,8 @@ mod tests {
     #[serial]
     fn import_rejects_cross_file_statements_and_leaves_no_file_behind() -> Result<(), AppError> {
         let test_home = TestHomeGuard::new();
-        // `VACUUM INTO` 是关键字扫描方案最容易漏的一条：它不含 "ATTACH" 字样，
-        // 却和 ATTACH 一样落到 `AuthAction::Attach`（实测），因此同一条规则挡住两者。
+        // `VACUUM INTO` is the one most easily missed by keyword scanning solutions: it does not contain the word "ATTACH".
+        // But it falls into `AuthAction::Attach` (actual test) like ATTACH, so the same rule blocks both.
         let cases: [(&str, &str); 2] = [
             ("attach", "ATTACH DATABASE '{path}' AS evil;"),
             ("vacuum-into", "VACUUM INTO '{path}';"),
@@ -1104,8 +1103,8 @@ mod tests {
                 .path()
                 .join(format!("copilot-bridge-atlas-authorizer-{label}.sqlite"));
 
-            // 合法的导出头 + 越界语句。头部校验只比前缀，这份输入过得了它，
-            // 真正拦下来的必须是 authorizer。
+            // Legal export header + out-of-bounds statement. The header verification is only better than the prefix, and this input passed it.
+            // The one who really stops it must be the authorizer.
             let malicious = format!(
                 "{}\n{}\n",
                 super::COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER,
@@ -1115,16 +1114,16 @@ mod tests {
             let db = Database::memory()?;
             let result = db.import_sql_string(&malicious);
 
-            let error = result.expect_err("越界 SQL 必须被拒绝");
+            let error = result.expect_err("Out-of-bounds SQL must be rejected");
             assert!(
                 error.to_string().to_ascii_lowercase().contains("authoriz"),
-                "{label} 必须由 authorizer 拒绝，实际错误: {error}"
+                "{label} must be rejected by authorizer, actual error: {error}"
             );
-            // 光报错不够：文件创建发生在 prepare 之后、暂存库 schema 校验之前，
-            // 守卫若失效，即便导入整体失败，文件也已经躺在磁盘上了。
+            // Reporting an error alone is not enough: a file can be created before staging schema validation.
+            // If the guard fails, even if the entire import fails, the file will already be on the disk.
             assert!(
                 !target.exists(),
-                "被拒绝的 {label} 不得在磁盘上留下文件: {}",
+                "Rejected {label} must not leave files on disk: {}",
                 target.display()
             );
         }
@@ -1135,8 +1134,8 @@ mod tests {
     #[serial]
     fn import_still_accepts_a_genuine_export() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
-        // 白名单收得紧，必须有一条回归防线证明它没误伤自家导出格式——
-        // 这条测试红了就说明 dump_sql 写出了白名单没覆盖的语句。
+        // The whitelist is tightened, and there must be a return line of defense to prove that it did not accidentally damage its own export format——
+        // If this test is red, it means that dump_sql has written statements that are not covered by the whitelist.
         let source = Database::memory()?;
         {
             let conn = crate::database::lock_conn!(source.conn);
@@ -1163,141 +1162,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn version_19_sql_import_preserves_opaque_tables_and_recorded_costs() -> Result<(), AppError> {
-        let _test_home = TestHomeGuard::new();
-        let source = Database::memory()?;
-        {
-            let conn = crate::database::lock_conn!(source.conn);
-            conn.execute_batch(
-                "CREATE TABLE retired_data (id TEXT PRIMARY KEY, payload BLOB);
-                 INSERT INTO retired_data VALUES ('history', X'00FF1234');
-                 INSERT INTO proxy_request_logs
-                   (request_id, provider_id, app_type, model, total_cost_usd, latency_ms, status_code, created_at, data_source)
-                 VALUES ('old-request', 'old-provider', 'codex', 'gpt-6-astra', '12.345600', 10, 200, 1, 'imported');
-                 PRAGMA user_version = 19;"
-            )?;
-        }
-        let export = source.export_sql_string()?.replacen(
-            super::COPILOT_BRIDGE_ATLAS_SQL_EXPORT_HEADER,
-            "-- Historical SQLite 导出",
-            1,
-        );
-        let target = Database::memory()?;
-        target.import_sql_string(&export)?;
-        let conn = crate::database::lock_conn!(target.conn);
-        assert_eq!(
-            Database::get_user_version(&conn)?,
-            crate::database::SCHEMA_VERSION
-        );
-        assert_eq!(
-            conn.query_row(
-                "SELECT payload FROM retired_data WHERE id = 'history'",
-                [],
-                |row| row.get::<_, Vec<u8>>(0)
-            )?,
-            [0, 255, 18, 52]
-        );
-        assert_eq!(
-            conn.query_row(
-                "SELECT total_cost_usd FROM proxy_request_logs WHERE request_id = 'old-request'",
-                [],
-                |row| row.get::<_, String>(0)
-            )?,
-            "12.345600"
-        );
-        Ok(())
-    }
-
-    #[test]
-    #[serial]
-    fn startup_does_not_migrate_when_the_safety_backup_fails() -> Result<(), AppError> {
-        let _test_home = TestHomeGuard::new();
-        let directory = crate::config::get_app_config_dir();
-        let path = directory.join("copilot-bridge-atlas.db");
-        {
-            let conn = Connection::open(&path)?;
-            Database::create_tables_on_conn(&conn)?;
-            conn.execute("INSERT INTO settings VALUES ('sentinel', 'keep')", [])?;
-            Database::set_user_version(&conn, 22)?;
-        }
-        std::fs::write(directory.join("backups"), "block directory creation")
-            .map_err(|error| AppError::io(&directory, error))?;
-        let error = match Database::init() {
-            Ok(_) => panic!("startup must stop when its safety backup fails"),
-            Err(error) => error,
-        };
-        assert!(error.to_string().contains("safety backup succeeds"));
-        let conn = Connection::open(&path)?;
-        assert_eq!(Database::get_user_version(&conn)?, 22);
-        assert_eq!(
-            conn.query_row(
-                "SELECT value FROM settings WHERE key='sentinel'",
-                [],
-                |row| row.get::<_, String>(0)
-            )?,
-            "keep"
-        );
-        Ok(())
-    }
-
-    #[test]
-    #[serial]
-    fn retired_health_logs_survive_upgrade_maintenance_and_backups() -> Result<(), AppError> {
-        let _test_home = TestHomeGuard::new();
-        update_settings(AppSettings {
-            backup_interval_hours: Some(0),
-            ..Default::default()
-        })?;
-        let source = Database::memory()?;
-        {
-            let conn = crate::database::lock_conn!(source.conn);
-            conn.execute_batch(
-                "CREATE TABLE stream_check_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT, provider_id TEXT NOT NULL,
-                    provider_name TEXT NOT NULL, app_type TEXT NOT NULL, status TEXT NOT NULL,
-                    success INTEGER NOT NULL, message TEXT NOT NULL, response_time_ms INTEGER,
-                    http_status INTEGER, model_used TEXT, retry_count INTEGER DEFAULT 0,
-                    tested_at INTEGER NOT NULL
-                 );
-                 CREATE INDEX idx_stream_check_logs_provider
-                    ON stream_check_logs(app_type, provider_id, tested_at DESC);
-                 INSERT INTO stream_check_logs
-                    (provider_id, provider_name, app_type, status, success, message, tested_at)
-                    VALUES ('p1', 'Copilot', 'codex', 'operational', 1, 'historical result', 1);
-                 PRAGMA user_version = 22;",
-            )?;
-        }
-        source.apply_schema_migrations()?;
-        source.periodic_backup_if_needed()?;
-        let target = Database::memory()?;
-        target.import_sql_string(&source.export_sql_string()?)?;
-        let backup = source.backup_database_file()?.expect("backup exists");
-        let backup_conn = Connection::open(&backup)?;
-        let target_conn = crate::database::lock_conn!(target.conn);
-        for conn in [&backup_conn, &*target_conn] {
-            assert_eq!(
-                Database::get_user_version(conn)?,
-                crate::database::SCHEMA_VERSION
-            );
-            assert_eq!(
-                conn.query_row(
-                    "SELECT message FROM stream_check_logs WHERE id=1",
-                    [],
-                    |row| row.get::<_, String>(0)
-                )?,
-                "historical result"
-            );
-            assert_eq!(
-                conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='idx_stream_check_logs_provider'", [], |row| row.get::<_, i64>(0))?,
-                1
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    #[serial]
-    fn import_accepts_genuine_export_without_providers_or_retired_tables() -> Result<(), AppError> {
+    fn import_accepts_genuine_export_without_providers() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let source = Database::memory()?;
         {
@@ -1357,14 +1222,8 @@ mod tests {
         );
         let error = target
             .import_sql_string(&header_only)
-            .expect_err("缺少原始 schema 的文件必须被拒绝");
-        assert!(
-            error
-                .to_string()
-                .contains("required Copilot Bridge Atlas tables")
-                || error.to_string().contains("Copilot Bridge Atlas 必需表"),
-            "应由原始 schema 校验拒绝，实际错误: {error}"
-        );
+            .expect_err("Files missing the original schema must be rejected");
+        assert!(error.to_string().contains("expected Atlas 6 format"));
 
         let conn = crate::database::lock_conn!(target.conn);
         let provider: (i64, String) = conn.query_row(
@@ -1403,7 +1262,7 @@ mod tests {
         assert_eq!(
             Database::get_auto_vacuum_mode(&conn)?,
             2,
-            "SQL 导入不得把主库的 INCREMENTAL auto_vacuum 降级为 NONE"
+            "SQL import must not downgrade the main database's INCREMENTAL auto_vacuum to NONE"
         );
         Ok(())
     }
@@ -1451,7 +1310,7 @@ mod tests {
             [],
             |row| row.get(0),
         )?;
-        assert!(request_exists, "文件 API 必须完整恢复导出数据");
+        assert!(request_exists, "File API must fully restore exported data");
         Ok(())
     }
 
@@ -1487,7 +1346,10 @@ mod tests {
             [],
             |row| row.get(0),
         )?;
-        assert!(!partial_exists, "失败导入的临时对象不得进入主库");
+        assert!(
+            !partial_exists,
+            "Temporary objects from failed imports must not enter the main database"
+        );
         Ok(())
     }
 
@@ -1540,9 +1402,9 @@ mod tests {
     #[serial]
     fn dump_sql_batches_rows_into_multi_row_inserts() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
-        // 每行一条 INSERT 是导入慢的根源（恢复侧逐条解析，2 万行实测 21s）。
-        // 这条测试钉死批量格式：450 行必须合并成 ceil(450/200) = 3 条语句。
-        // 一旦退回到逐行导出，这里立刻变红。
+        // One INSERT per line is the source of slow import (parsed one by one on the recovery side, measured 21s for 20,000 rows).
+        // This test nails the batch format: 450 rows must be combined into ceil(450/200) = 3 statements.
+        // Once you return to line-by-line export, this area will immediately turn red.
         let db = Database::memory()?;
         {
             let conn = crate::database::lock_conn!(db.conn);
@@ -1559,7 +1421,7 @@ mod tests {
         let insert_count = sql.matches("INSERT INTO \"providers\"").count();
         assert_eq!(
             insert_count, 3,
-            "450 行应合并为 3 条多行 INSERT（每批 200 行），实际 {insert_count} 条"
+            "450 rows should be combined into 3 multi-row INSERTs (200 rows per batch), actual {insert_count} rows"
         );
 
         let target = Database::memory()?;
@@ -1567,14 +1429,20 @@ mod tests {
         let conn = crate::database::lock_conn!(target.conn);
         let row_count: i64 =
             conn.query_row("SELECT COUNT(*) FROM providers", [], |row| row.get(0))?;
-        assert_eq!(row_count, 450, "批次边界不得漏行或重复行");
+        assert_eq!(
+            row_count, 450,
+            "Batch boundaries must not contain missing or duplicate rows"
+        );
         for boundary in [0, 199, 200, 399, 400, 449] {
             let exists: bool = conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM providers WHERE id = ?1)",
                 [format!("p{boundary}")],
                 |row| row.get(0),
             )?;
-            assert!(exists, "批次边界行 p{boundary} 必须完整恢复");
+            assert!(
+                exists,
+                "Batch boundary row p{boundary} must be restored in full"
+            );
         }
         Ok(())
     }
@@ -1601,12 +1469,16 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with("INSERT INTO \"large_rows\""))
             .collect::<Vec<_>>();
-        assert_eq!(inserts.len(), 3, "超大字段应按 SQL 字节数提前切批");
+        assert_eq!(
+            inserts.len(),
+            3,
+            "Very large fields should be batched in advance according to the number of SQL bytes"
+        );
         assert!(
             inserts
                 .iter()
                 .all(|statement| statement.len() <= super::INSERT_BATCH_MAX_BYTES),
-            "每条可独立容纳的 INSERT 都应保持在字节上限内"
+            "Each independently sized INSERT should remain within the byte limit"
         );
 
         let target = Connection::open_in_memory()?;
@@ -1684,7 +1556,7 @@ mod tests {
         let sql = Database::dump_sql(&source, &[])?;
         assert!(
             sql.contains("CAST(X'610062' AS TEXT)") && sql.contains("CAST(X'80FF' AS TEXT)"),
-            "含 NUL 或非法 UTF-8 的 TEXT 必须使用十六进制表达式"
+            "TEXT with NUL or illegal UTF-8 must use hexadecimal expression"
         );
 
         let target = Connection::open_in_memory()?;
@@ -1747,7 +1619,10 @@ mod tests {
             [],
             |row| row.get(0),
         )?;
-        assert_eq!(sequence, 3, "已删除的最高 ID 仍应保留在序列高水位中");
+        assert_eq!(
+            sequence, 3,
+            "The highest removed ID should still remain in the sequence high water mark"
+        );
         target.execute(
             "INSERT INTO autoincrement_rows (value) VALUES ('after-restore')",
             [],
@@ -1773,7 +1648,10 @@ mod tests {
         let sql = Database::dump_sql(&source, &[])?;
         let data_pos = sql.find("INSERT INTO \"triggered_rows\"").unwrap();
         let trigger_pos = sql.find("CREATE TRIGGER ignore_second_row").unwrap();
-        assert!(data_pos < trigger_pos, "触发器必须在数据恢复完成后创建");
+        assert!(
+            data_pos < trigger_pos,
+            "The trigger must be created after data recovery is complete"
+        );
 
         let target = Connection::open_in_memory()?;
         target.execute_batch(&sql)?;
@@ -1787,7 +1665,10 @@ mod tests {
             [],
             |row| row.get(0),
         )?;
-        assert!(trigger_exists, "触发器本身仍必须随备份恢复");
+        assert!(
+            trigger_exists,
+            "The trigger itself must still be restored with the backup"
+        );
         Ok(())
     }
 
@@ -1823,7 +1704,10 @@ mod tests {
                 [object_type, object_name],
                 |row| row.get(0),
             )?;
-            assert!(exists, "{object_type} {object_name} 必须随 SQL dump 恢复");
+            assert!(
+                exists,
+                "{object_type} {object_name} must be restored with SQL dump"
+            );
         }
 
         target.execute(
@@ -1850,8 +1734,7 @@ mod tests {
     #[serial]
     fn multi_row_dump_round_trips_special_values() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
-        // 多行 VALUES 的转义面比单行宽：单引号、换行、英文逗号（列分隔符）、
-        // 中文、emoji、BLOB、NULL——任何一个处理错都会让整批语法崩掉或数据变形。
+        // Newlines, quotes, commas, emoji, BLOBs, and NULL must survive batched SQL export.
         let source = Database::memory()?;
         {
             let conn = crate::database::lock_conn!(source.conn);
@@ -1859,7 +1742,10 @@ mod tests {
             conn.execute(
                 "INSERT INTO providers (id, app_type, name, settings_config, meta)
                  VALUES ('special', 'codex', ?1, ?2, '{}')",
-                rusqlite::params!["O'Brien,\n第二行 \"quoted\" 😀", "{\"key\": \"it's, ok\"}"],
+                rusqlite::params![
+                    "O'Brien,\n second line \" quoted\" 😀",
+                    "{\"key\": \"it's, ok\"}"
+                ],
             )?;
             conn.execute(
                 "INSERT INTO providers (id, app_type, name, settings_config, meta)
@@ -1883,7 +1769,7 @@ mod tests {
             [],
             |row| row.get(0),
         )?;
-        assert_eq!(name, "O'Brien,\n第二行 \"quoted\" 😀");
+        assert_eq!(name, "O'Brien,\n second line \" quoted\" 😀");
         let cfg: String = conn.query_row(
             "SELECT settings_config FROM providers WHERE id = 'special'",
             [],
@@ -1896,7 +1782,10 @@ mod tests {
             [],
             |row| row.get(0),
         )?;
-        assert_eq!(blob_type, "blob", "BLOB 存储类型必须在往返后保留");
+        assert_eq!(
+            blob_type, "blob",
+            "BLOB storage type must be preserved after round trip"
+        );
         let blob: Vec<u8> = conn.query_row(
             "SELECT settings_config FROM providers WHERE id = 'with-blob'",
             [],
@@ -2447,9 +2336,9 @@ mod tests {
         assert_eq!(
             error.to_string(),
             format!(
-                "Database error: Unsupported database schema {}; this app accepts version 19 through {}.",
+                "Database error: Unsupported database format (schema {}, application {}); expected Atlas 6 format.",
                 crate::database::SCHEMA_VERSION + 1,
-                crate::database::SCHEMA_VERSION,
+                crate::database::APPLICATION_ID,
             ),
         );
 
@@ -2525,10 +2414,10 @@ mod tests {
         Ok(())
     }
 
-    /// 性能基准（不是回归测试）：用接近重度代理用户的行数测量
-    /// 导出 / 本地文件导入 / 同步导入三条路径的耗时与产物大小。
+    /// Performance benchmarks (not regression tests): measured with row counts close to heavy proxy users
+    /// The time consumption and product size of the three paths of export/local file import/synchronous import.
     ///
-    /// 手动运行：`cargo test --lib perf_backup -- --ignored --nocapture`
+    /// Manual operation: `cargo test --lib perf_backup -- --ignored --nocapture`
     #[test]
     #[ignore = "perf harness, run explicitly"]
     #[serial]
@@ -2562,7 +2451,7 @@ mod tests {
             }
             for i in 0..rollup_rows {
                 // (date, app_type, provider_id, model, request_model, pricing_model)
-                // 上有 UNIQUE 约束，日期必须逐行唯一。
+                // There is a UNIQUE constraint on the date, the date must be unique row by row.
                 let date = format!(
                     "{:04}-{:02}-{:02}",
                     2025 + i / 336,

@@ -1,0 +1,133 @@
+name: Atlas Release
+
+on:
+  pull_request:
+    branches: [atlas]
+  push:
+    tags:
+      - "atlas-*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release tag
+        id: release_tag
+        if: startsWith(github.ref, 'refs/tags/atlas-')
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^atlas-\d+\.\d+\.\d+$') {
+            throw "Release tag must be atlas-<major>.<minor>.<patch>: $tag"
+          }
+          $version = $tag.Substring('atlas-'.Length)
+          $packageVersion = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+          if ($version -ne $packageVersion) {
+            throw "Tag $tag does not match package.json version $packageVersion."
+          }
+          $notes = "docs/releases/$version.md"
+          if (-not (Test-Path -LiteralPath $notes -PathType Leaf)) {
+            throw "Release notes are missing: $notes"
+          }
+          git fetch --no-tags origin atlas
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot fetch the atlas branch.' }
+          git merge-base --is-ancestor HEAD FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Release tag must point to a commit on atlas.' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.3
+          run_install: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check TypeScript
+        run: pnpm typecheck
+
+      - name: Run frontend tests
+        run: pnpm test:unit --maxWorkers=4 --minWorkers=1
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Run Rust tests
+        shell: pwsh
+        run: |
+          $env:COPILOT_BRIDGE_ATLAS_TEST_HOME = Join-Path $env:RUNNER_TEMP ("atlas-tests-" + [guid]::NewGuid().ToString("N"))
+          cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw "Rust tests failed ($LASTEXITCODE)." }
+
+      - name: Build Windows MSI and SHA256
+        shell: pwsh
+        run: ./scripts/build-msi.ps1
+
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/atlas-')
+        with:
+          name: atlas-release-files
+          path: |
+            release/Copilot-Bridge-Atlas-${{ steps.release_tag.outputs.version }}-Windows-x64.msi
+            release/Copilot-Bridge-Atlas-${{ steps.release_tag.outputs.version }}-Windows-x64.msi.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/atlas-')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: atlas-release-files
+          path: release
+
+      - name: Verify artifacts and publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#atlas-}"
+          installer="Copilot-Bridge-Atlas-${version}-Windows-x64.msi"
+          test -f "release/${installer}"
+          test -f "release/${installer}.sha256"
+          (cd release && sha256sum --check "${installer}.sha256")
+          test -f "docs/releases/${version}.md"
+
+          commit="$(git rev-parse HEAD)"
+          released_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            printf 'Created by the Atlas Release pipeline in run #%s (%s) at %s on branch atlas, commit %s.\n\n' \
+              "${GITHUB_RUN_NUMBER}" "${run_url}" "${released_at}" "${commit}"
+            cat "docs/releases/${version}.md"
+          } > release-notes.md
+
+          gh release create "${tag}" \
+            "release/${installer}" "release/${installer}.sha256" \
+            --title "Copilot Bridge Atlas ${version}" \
+            --notes-file release-notes.md \
+            --verify-tag \
+            --latest

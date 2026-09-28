@@ -1,12 +1,12 @@
-//! Cost Calculator - 计算 API 请求成本
+//! Cost Calculator - Calculate API request costs
 //!
-//! 使用高精度 Decimal 类型避免浮点数精度问题
+//! Use high-precision Decimal types to avoid floating-point precision issues
 
 use super::parser::TokenUsage;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
-/// 成本明细
+/// cost details
 #[derive(Debug, Clone)]
 pub struct CostBreakdown {
     pub pricing_tier: &'static str,
@@ -17,7 +17,7 @@ pub struct CostBreakdown {
     pub total_cost: Decimal,
 }
 
-/// 模型定价信息
+/// Model pricing information
 #[derive(Debug, Clone)]
 pub struct ModelPricing {
     pub pricing_tier: &'static str,
@@ -27,11 +27,11 @@ pub struct ModelPricing {
     pub cache_creation_cost_per_million: Decimal,
 }
 
-/// 成本计算器
+/// cost calculator
 pub struct CostCalculator;
 
 impl CostCalculator {
-    /// 按 app_type 选择输入 token 语义后计算成本。
+    /// Calculate the cost after selecting the input token semantics by app_type.
     ///
     /// Codex reports total input including cache usage. Historical rows can
     /// declare fresh-input semantics independently.
@@ -69,7 +69,7 @@ impl CostCalculator {
             usage.input_tokens
         };
 
-        // 各项基础成本（不含倍率）
+        // Various basic costs (excluding magnification)
         let input_cost =
             Decimal::from(billable_input_tokens) * pricing.input_cost_per_million / million;
         let output_cost =
@@ -80,7 +80,7 @@ impl CostCalculator {
             * pricing.cache_creation_cost_per_million
             / million;
 
-        // 总成本 = 各项基础成本之和 × 倍率
+        // Total cost = sum of basic costs × multiple
         let base_total = input_cost + output_cost + cache_read_cost + cache_creation_cost;
         let total_cost = base_total * cost_multiplier;
 
@@ -105,7 +105,7 @@ impl CostCalculator {
 }
 
 impl ModelPricing {
-    /// 从字符串创建定价信息
+    /// Create pricing information from string
     pub fn from_strings(
         input: &str,
         output: &str,
@@ -174,7 +174,7 @@ mod tests {
 
         let cost = CostCalculator::calculate_for_app("codex", &usage, &pricing, multiplier);
 
-        // Codex/OpenAI 语义：input_tokens 包含 cache read/write，两桶都需扣除。
+        // Codex/OpenAI semantics: input_tokens includes cache read/write, both buckets need to be deducted.
         assert_eq!(cost.input_cost, Decimal::from_str("0.0021").unwrap());
         assert_eq!(cost.output_cost, Decimal::from_str("0.0075").unwrap());
         assert_eq!(cost.cache_read_cost, Decimal::from_str("0.00006").unwrap());
@@ -201,9 +201,9 @@ mod tests {
 
         let cost = CostCalculator::calculate_for_app("codex", &usage, &pricing, multiplier);
 
-        // input_cost: 基础价格（不含倍率）= 1000 * 3.0 / 1M = 0.003
+        // input_cost: basic price (excluding magnification) = 1000 * 3.0 / 1M = 0.003
         assert_eq!(cost.input_cost, Decimal::from_str("0.003").unwrap());
-        // total_cost: 基础价格 × 倍率 = 0.003 * 1.5 = 0.0045
+        // total_cost: base price × multiplier = 0.003 * 1.5 = 0.0045
         assert_eq!(cost.total_cost, Decimal::from_str("0.0045").unwrap());
     }
 
@@ -223,8 +223,8 @@ mod tests {
 
         let cost = CostCalculator::calculate_for_app("codex", &usage, &pricing, multiplier);
 
-        // 验证高精度计算
+        // Verify high-precision calculations
         assert!(cost.total_cost > Decimal::ZERO);
-        assert!(cost.total_cost.to_string().len() > 2); // 确保保留了小数位
+        assert!(cost.total_cost.to_string().len() > 2); // Make sure you retain the decimal places
     }
 }

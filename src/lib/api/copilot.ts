@@ -1,30 +1,30 @@
 /**
  * GitHub Copilot OAuth API
  *
- * 提供 GitHub Copilot OAuth 设备码流程相关的 API 函数。
- * 支持多账号管理。
+ * Provides API functions related to the GitHub Copilot OAuth device code process.
+ * Supports multiple account management.
  */
 
 import { invoke } from "@tauri-apps/api/core";
 
 /**
- * GitHub 账号信息（公开信息）
+ * GitHub account information (public information)
  */
 export interface GitHubAccount {
-  /** GitHub 用户 ID（唯一标识） */
+  /** GitHub user ID (unique identifier) */
   id: string;
-  /** GitHub 用户名 */
+  /** GitHub username */
   login: string;
-  /** 头像 URL */
+  /** Avatar URL */
   avatar_url: string | null;
-  /** 认证时间戳（Unix 秒） */
+  /** Authentication timestamp (Unix seconds) */
   authenticated_at: number;
-  /** GitHub 域名（github.com 或 GHES 域名） */
+  /** GitHub domain name (github.com or GHES domain name) */
   github_domain: string;
 }
 
 /**
- * Copilot 可用模型
+ * Copilot available models
  */
 export interface CopilotModel {
   id: string;
@@ -44,9 +44,9 @@ export interface CopilotModel {
 }
 
 /**
- * 获取 Copilot 可用模型列表
+ * Get a list of available models for Copilot
  *
- * @returns 可用模型列表
+ * @returns list of available models
  */
 export async function copilotGetModels(): Promise<CopilotModel[]> {
   return invoke<CopilotModel[]>("copilot_get_models");
@@ -57,7 +57,7 @@ export async function copilotOpenModelCatalog(): Promise<void> {
 }
 
 /**
- * 配额详情
+ * Quota details
  */
 interface QuotaDetail {
   entitlement: number;
@@ -67,7 +67,7 @@ interface QuotaDetail {
 }
 
 /**
- * 配额快照
+ * Quota Snapshot
  */
 interface QuotaSnapshots {
   chat: QuotaDetail;
@@ -76,7 +76,7 @@ interface QuotaSnapshots {
 }
 
 /**
- * Copilot 使用量响应
+ * Copilot usage response
  */
 interface CopilotUsageResponse {
   copilot_plan: string;
@@ -85,19 +85,19 @@ interface CopilotUsageResponse {
 }
 
 /**
- * 获取 Copilot 使用量信息
+ * Get Copilot usage information
  *
- * @returns 使用量信息，包含计划类型、重置日期和配额快照
+ * @returns usage information, including plan type, reset date, and quota snapshot
  */
 export async function copilotGetUsage(): Promise<CopilotUsageResponse> {
   return invoke<CopilotUsageResponse>("copilot_get_usage");
 }
 
 /**
- * 获取指定账号的 Copilot 可用模型列表
+ * Get the list of Copilot available models for the specified account
  *
- * @param accountId - GitHub 用户 ID
- * @returns 可用模型列表
+ * @param accountId - GitHub user ID
+ * @returns list of available models
  */
 export async function copilotGetModelsForAccount(
   accountId: string,
@@ -108,10 +108,10 @@ export async function copilotGetModelsForAccount(
 }
 
 /**
- * 获取指定账号的 Copilot 使用量信息
+ * Get Copilot usage information for a specified account
  *
- * @param accountId - GitHub 用户 ID
- * @returns 使用量信息
+ * @param accountId - GitHub user ID
+ * @returns usage information
  */
 export async function copilotGetUsageForAccount(
   accountId: string,

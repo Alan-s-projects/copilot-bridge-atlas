@@ -83,11 +83,11 @@ impl Database {
             return Ok(0);
         }
 
-        // 剪枝是不可逆的：明细一旦汇总删除，0 成本行就永远失去按 pricing_model
-        // 补价重算的机会（启动序列里 seed 定价先于 rollup、但启动回填在 rollup
-        // 之后；周期任务同理）。所以剪枝前先尽力回填一次。失败仅告警不阻断——
-        // 否则一行损坏的定价数据会永久卡死日志清理。
-        // 注意必须在 SAVEPOINT 之外调用：回填内部自己开顶层事务。
+        // Pruning is irreversible: once the details are deleted in summary, the 0 cost rows are permanently lost according to pricing_model
+        // Opportunity for price recalculation (seed pricing precedes rollup in the startup sequence, but backfilling starts after rollup
+        // Afterwards; the same applies to periodic tasks). So try your best to backfill before pruning. Failure only alerts but does not block——
+        // Otherwise a corrupted row of pricing data will permanently block log cleanup.
+        // Note that it must be called outside SAVEPOINT: backfill internally open the top-level transaction yourself.
         if let Err(e) = Self::backfill_missing_usage_costs_on_conn(&conn, None) {
             log::warn!("Pre-prune cost backfill failed, pruning anyway: {e}");
         }
@@ -106,8 +106,8 @@ impl Database {
                     log::info!(
                         "Rolled up and pruned {deleted} proxy_request_logs (retain={retain_days}d)"
                     );
-                    // 归档触发了表结构变化，前端 30 天前的统计可能跟着变，
-                    // 通知一次让 UsageDashboard 重拉数据
+                    // Archiving triggers table structure changes, and front-end statistics 30 days ago may change accordingly.
+                    // Notify once to let UsageDashboard re-pull data
                     crate::usage_events::notify_log_recorded();
                 }
                 Ok(deleted)
@@ -125,9 +125,9 @@ impl Database {
         let effective_filter = effective_usage_log_filter("l");
         let fresh_detail_input = fresh_input_sql("l");
         let fresh_old_input = fresh_input_sql("old");
-        // request_model 维度保留路由接管的「客户端别名 → 真实模型」映射，
-        // pricing_model 维度保留写入时的计价基准（request 计价模式下与 model 分叉）；
-        // 明细行的这两列可能为 NULL（历史/手工数据），归一为 ''。
+        // The request_model dimension retains the "client alias → real model" mapping taken over by routing,
+        // The pricing_model dimension retains the pricing basis when writing (forked from model in request pricing mode);
+        // These two columns of the detail row may be NULL (historical/manual data), normalized to ''.
         let aggregation_sql = format!(
             "INSERT OR REPLACE INTO usage_daily_rollups
                 (date, app_type, provider_id, model, request_model, pricing_model,
@@ -495,8 +495,8 @@ mod tests {
 
         {
             let conn = crate::database::lock_conn!(db.conn);
-            // >30 天的 0 成本行：pricing_model（gpt-5.5）在 seed 定价表中有价。
-            // 剪枝是不可逆的，rollup 必须先回填再汇总，否则按 0 永久入账。
+            // > 0 cost row for 30 days: pricing_model(gpt-5.5) has price in seed pricing table.
+            // Pruning is irreversible, rollup must be backfilled first and then summarized, otherwise it will be recorded as 0 permanently.
             conn.execute(
                 "INSERT INTO proxy_request_logs (
                     request_id, provider_id, app_type, model, request_model, pricing_model,

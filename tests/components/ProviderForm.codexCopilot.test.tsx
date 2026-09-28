@@ -113,28 +113,23 @@ describe("Codex Copilot provider form", () => {
   });
 
   it.each([
-    [{ enableUltraReasoning: false, enable_ultra_reasoning: true }, false],
-    [{ enableUltraReasoning: true, enable_ultra_reasoning: false }, true],
-    [{ enable_ultra_reasoning: true }, true],
+    [{ enableUltraReasoning: false }, false],
+    [{ enableUltraReasoning: true }, true],
     [{}, false],
-  ])(
-    "loads and saves Ultra with canonical precedence: %j",
-    async (settings, enabled) => {
-      const onSubmit = renderForm(undefined, true, settings);
-      const toggle = screen.getByRole("switch", {
-        name: "Ultra reasoning effort",
-      });
-      expect(toggle.getAttribute("data-state")).toBe(
-        enabled ? "checked" : "unchecked",
-      );
-      fireEvent.click(toggle);
-      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-      expect(
-        JSON.parse(onSubmit.mock.calls[0][0].settingsConfig)
-          .enableUltraReasoning,
-      ).toBe(!enabled);
-    },
-  );
+  ])("loads and saves Ultra: %j", async (settings, enabled) => {
+    const onSubmit = renderForm(undefined, true, settings);
+    const toggle = screen.getByRole("switch", {
+      name: "Ultra reasoning effort",
+    });
+    expect(toggle.getAttribute("data-state")).toBe(
+      enabled ? "checked" : "unchecked",
+    );
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(
+      JSON.parse(onSubmit.mock.calls[0][0].settingsConfig).enableUltraReasoning,
+    ).toBe(!enabled);
+  });
 
   it("keeps total context metadata when an unrelated model toggle is saved", async () => {
     const onSubmit = renderForm(undefined, true, {
@@ -262,51 +257,19 @@ describe("Codex Copilot provider form", () => {
     );
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
     const saved = onSubmit.mock.calls[1][0];
-    expect(saved.meta?.codexCopilotApiFormat).toBeUndefined();
     expect(
       JSON.parse(saved.settingsConfig).modelCatalog.models[1],
     ).toMatchObject({ model: "gpt-6-luna", enabled: false });
   });
 
-  it.each(["auto", "openai_chat", "openai_responses"])(
-    "accepts legacy %s metadata without exposing a format control or changing client configuration",
-    async (format) => {
-      const onSubmit = renderForm({
-        providerType: "github_copilot",
-        codexCopilotApiFormat: format,
-      });
-      expect(formatControl()).not.toBeInTheDocument();
-      expect(screen.getByText("Model catalog")).toBeVisible();
-      fireEvent.click(screen.getByRole("button", { name: "save" }));
-      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-      const saved = onSubmit.mock.calls[0][0];
-      expect(saved.meta?.codexCopilotApiFormat).toBe(format);
-      expect(saved.meta?.apiFormat).toBeUndefined();
-      expect(JSON.parse(saved.settingsConfig).config).toContain(
-        'wire_api = "responses"',
-      );
-      expect(JSON.parse(saved.settingsConfig).modelCatalog.models).toEqual(
-        models,
-      );
-      for (const key of [
-        "customUserAgent",
-        "localProxyRequestOverrides",
-        "promptCacheRouting",
-        "codexChatReasoning",
-      ]) {
-        expect(saved.meta).not.toHaveProperty(key);
-      }
-    },
-  );
-
-  it("keeps legacy cards automatic and shows mapping even with an empty catalog", () => {
-    renderForm({ providerType: "github_copilot", apiFormat: "openai_chat" });
+  it("shows the model mapping with an empty catalog", () => {
+    renderForm({ providerType: "github_copilot" });
     expect(formatControl()).not.toBeInTheDocument();
     expect(screen.getByText("Model catalog")).toBeVisible();
   });
 
   it("does not offer preset switching while editing an existing Copilot card", () => {
-    renderForm({ providerType: "github_copilot", apiFormat: "openai_chat" });
+    renderForm({ providerType: "github_copilot" });
     expect(
       screen.queryByRole("button", { name: /DeepSeek/ }),
     ).not.toBeInTheDocument();
@@ -314,21 +277,6 @@ describe("Codex Copilot provider form", () => {
       screen.queryByRole("button", { name: /providerPreset.custom/ }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("providerPreset.label")).not.toBeInTheDocument();
-  });
-
-  it("leaves a retired explicit protocol opaque when saving catalog changes", async () => {
-    const onSubmit = renderForm({
-      providerType: "github_copilot",
-      apiFormat: "openai_responses",
-      codexCopilotApiFormat: "openai_responses",
-    });
-    expect(formatControl()).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "save" }));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(onSubmit.mock.calls[0][0].meta?.codexCopilotApiFormat).toBe(
-      "openai_responses",
-    );
-    expect(onSubmit.mock.calls[0][0].meta?.apiFormat).toBe("openai_responses");
   });
 
   it("has one model catalog with neither transport options nor other provider presets", () => {

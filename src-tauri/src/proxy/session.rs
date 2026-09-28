@@ -21,13 +21,13 @@ fn extract_responses_session(
     body: &serde_json::Value,
     prefix: &str,
 ) -> Option<SessionIdResult> {
-    // 1. 从 headers 提取
+    // 1. Extract from headers
     let header_names = &["session_id", "x-session-id"];
     for header_name in header_names {
         if let Some(value) = headers.get(*header_name) {
             if let Ok(session_id) = value.to_str() {
                 let session_id = session_id.trim();
-                // Responses 客户端的 Session ID 通常较长（UUID 格式）
+                // Responses The client's Session ID is usually longer (UUID format)
                 if session_id.len() > 20 {
                     return Some(SessionIdResult {
                         session_id: format!("{prefix}_{session_id}"),
@@ -39,7 +39,7 @@ fn extract_responses_session(
         }
     }
 
-    // 2. 从 body.metadata.session_id 提取
+    // 2. Extract from body.metadata.session_id
     if let Some(session_id) = body
         .get("metadata")
         .and_then(|m| m.get("session_id"))
@@ -55,9 +55,9 @@ fn extract_responses_session(
         }
     }
 
-    // previous_response_id 是 Responses 协议里的响应游标，不是稳定会话身份。
-    // Chat/Responses 桥接时该值通常来自上游每轮返回的随机 response id；
-    // 若把它当 prompt_cache_key 或 Codex session header，会导致每轮请求换缓存 key。
+    // previous_response_id is the response cursor in the Responses protocol, not a stable session identity.
+    // When Chat/Responses is bridged, this value usually comes from the random response id returned by the upstream in each round;
+    // If it is used as prompt_cache_key or Codex session header, it will cause the cache key to be changed in each round of requests.
 
     None
 }

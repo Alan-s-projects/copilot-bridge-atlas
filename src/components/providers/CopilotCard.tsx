@@ -7,9 +7,7 @@ import CopilotQuotaFooter from "@/components/CopilotQuotaFooter";
 export function CopilotCard({ provider }: { provider: Provider }) {
   const auth = useCopilotAuth();
   const accountId =
-    provider.meta?.authBinding?.accountId ??
-    provider.meta?.githubAccountId ??
-    auth.defaultAccountId;
+    provider.meta?.authBinding?.accountId ?? auth.defaultAccountId;
   const account = accountId
     ? auth.accounts.find((item) => item.id === accountId)
     : auth.accounts[0];

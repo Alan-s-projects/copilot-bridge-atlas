@@ -27,7 +27,13 @@ const provider: Provider = {
   id: "current-copilot",
   name: "GitHub Copilot",
   settingsConfig: { modelCatalog: { models: [{ model: "gpt-6-astra" }] } },
-  meta: { providerType: "github_copilot", githubAccountId: "account-1" },
+  meta: {
+    providerType: "github_copilot",
+    authBinding: {
+      authProvider: "github_copilot",
+      accountId: "account-1",
+    },
+  },
 };
 
 function renderCard(cardProvider = provider) {

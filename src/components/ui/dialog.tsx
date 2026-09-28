@@ -55,7 +55,7 @@ const DialogContent = React.forwardRef<
           className,
         )}
         onInteractOutside={(e) => {
-          // 防止点击遮罩层关闭对话框
+          // Prevent clicking on mask layer from closing dialog box
           e.preventDefault();
         }}
         {...props}

@@ -4,9 +4,6 @@ use serde_json::{Map, Value};
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::sync::OnceLock;
-
-static LEGACY_APP_CONFIG_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 pub fn get_home_dir() -> PathBuf {
     std::env::var("COPILOT_BRIDGE_ATLAS_TEST_HOME")
@@ -16,35 +13,8 @@ pub fn get_home_dir() -> PathBuf {
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
 }
 
-/// Atlas never discovers another application's data directory.
 pub fn get_app_config_dir() -> PathBuf {
-    LEGACY_APP_CONFIG_DIR
-        .get()
-        .cloned()
-        .flatten()
-        .unwrap_or_else(|| get_home_dir().join(".copilot-bridge-atlas"))
-}
-
-/// Keep an earlier Atlas folder selection for the process lifetime without
-/// restoring the removed directory editor, store plugin, or write commands.
-pub(crate) fn initialize_legacy_app_config_dir(app_data_dir: &Path) {
-    LEGACY_APP_CONFIG_DIR.get_or_init(|| {
-        read_legacy_app_config_dir(&app_data_dir.join("app_paths.json"), &get_home_dir())
-    });
-}
-
-fn read_legacy_app_config_dir(store_path: &Path, home: &Path) -> Option<PathBuf> {
-    let bytes = fs::read(store_path).ok()?;
-    let store: Value = serde_json::from_slice(&bytes).ok()?;
-    let raw = store.get("app_config_dir_override")?.as_str()?.trim();
-    let path = if raw == "~" {
-        home.to_path_buf()
-    } else if let Some(relative) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
-        home.join(relative)
-    } else {
-        PathBuf::from(raw)
-    };
-    (path.is_absolute() && path.is_dir()).then_some(path)
+    get_home_dir().join(".copilot-bridge-atlas")
 }
 
 fn normalize_path_lexically(path: &Path) -> PathBuf {
@@ -106,7 +76,7 @@ pub(crate) fn path_is_within(base: &Path, path: &Path) -> bool {
     path_key.starts_with(&prefix)
 }
 
-/// 递归排序 JSON 对象的键（按字母顺序），确保序列化输出是确定性的
+/// Recursively sort the JSON object's keys (alphabetical order), ensuring that the serialized output is deterministic
 fn sort_json_keys(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
@@ -125,7 +95,7 @@ fn sort_json_keys(value: &Value) -> Value {
 
 /// Write stable JSON into Atlas's own storage using atomic replacement.
 pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
-    // 确保目录存在
+    // Make sure the directory exists
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
     }
@@ -138,7 +108,7 @@ pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppErr
     atomic_write(path, json.as_bytes())
 }
 
-/// 原子写入：写入临时文件后 rename 替换，避免半写状态
+/// Atomic write: Rename replacement after writing to temporary file to avoid half-write state
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
@@ -146,10 +116,10 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
 
     let parent = path
         .parent()
-        .ok_or_else(|| AppError::Config("无效的路径".to_string()))?;
+        .ok_or_else(|| AppError::Config("Invalid path".to_string()))?;
     let file_name = path
         .file_name()
-        .ok_or_else(|| AppError::Config("无效的文件名".to_string()))?
+        .ok_or_else(|| AppError::Config("Invalid file name".to_string()))?
         .to_string_lossy()
         .to_string();
     let ts = std::time::SystemTime::now()
@@ -259,7 +229,11 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
             let source = last_error.unwrap_or_else(std::io::Error::last_os_error);
             let _ = fs::remove_file(&tmp);
             return Err(AppError::IoContext {
-                context: format!("原子替换失败: {} -> {}", tmp.display(), path.display()),
+                context: format!(
+                    "Atomic replacement failed: {} -> {}",
+                    tmp.display(),
+                    path.display()
+                ),
                 source,
             });
         }
@@ -271,78 +245,6 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn legacy_data_directory_preserves_existing_data_and_store() {
-        let root = tempfile::tempdir().unwrap();
-        let data_dir = root.path().join("existing data");
-        fs::create_dir_all(&data_dir).unwrap();
-        let settings_path = data_dir.join("settings.json");
-        fs::write(&settings_path, b"existing preferences").unwrap();
-        let store_path = root.path().join("app_paths.json");
-        let bytes = serde_json::to_vec(&serde_json::json!({
-            "app_config_dir_override": data_dir,
-            "retired_metadata": {"preserve": true}
-        }))
-        .unwrap();
-        fs::write(&store_path, &bytes).unwrap();
-
-        assert_eq!(
-            read_legacy_app_config_dir(&store_path, root.path()),
-            Some(data_dir)
-        );
-        assert_eq!(fs::read(&store_path).unwrap(), bytes);
-        assert_eq!(fs::read(&settings_path).unwrap(), b"existing preferences");
-        assert!(!root.path().join(".copilot-bridge-atlas").exists());
-    }
-
-    #[test]
-    fn legacy_data_directory_accepts_existing_home_relative_paths() {
-        let root = tempfile::tempdir().unwrap();
-        let data_dir = root.path().join("atlas-data");
-        fs::create_dir_all(&data_dir).unwrap();
-        let store_path = root.path().join("app_paths.json");
-
-        for raw in ["~/atlas-data", "~\\atlas-data", "  ~/atlas-data  ", "~"] {
-            let store = serde_json::json!({"app_config_dir_override": raw});
-            fs::write(&store_path, serde_json::to_vec(&store).unwrap()).unwrap();
-            assert_eq!(
-                read_legacy_app_config_dir(&store_path, root.path()),
-                Some(if raw == "~" {
-                    root.path().to_path_buf()
-                } else {
-                    data_dir.clone()
-                })
-            );
-        }
-    }
-
-    #[test]
-    fn legacy_data_directory_ignores_missing_invalid_or_unusable_selections() {
-        let root = tempfile::tempdir().unwrap();
-        let store_path = root.path().join("app_paths.json");
-        assert_eq!(read_legacy_app_config_dir(&store_path, root.path()), None);
-        assert!(!store_path.exists());
-
-        for store in [
-            serde_json::json!({}),
-            serde_json::json!({"app_config_dir_override": null}),
-            serde_json::json!({"app_config_dir_override": 42}),
-            serde_json::json!({"app_config_dir_override": ""}),
-            serde_json::json!({"app_config_dir_override": "."}),
-            serde_json::json!({"app_config_dir_override": root.path().join("missing")}),
-            serde_json::json!({"app_config_dir_override": store_path}),
-        ] {
-            let bytes = serde_json::to_vec(&store).unwrap();
-            fs::write(&store_path, &bytes).unwrap();
-            assert_eq!(read_legacy_app_config_dir(&store_path, root.path()), None);
-            assert_eq!(fs::read(&store_path).unwrap(), bytes);
-        }
-        fs::write(&store_path, b"not JSON").unwrap();
-        assert_eq!(read_legacy_app_config_dir(&store_path, root.path()), None);
-        assert_eq!(fs::read(&store_path).unwrap(), b"not JSON");
-        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
-    }
 
     fn assert_atomic_write_replaces_existing_file(dir: &Path) {
         let path = dir.join("atomic-write-contract.json");
@@ -471,7 +373,7 @@ mod tests {
 
     #[test]
     fn sort_json_keys_produces_identical_output_for_different_insertion_orders() {
-        // 核心保证：同一逻辑配置无论键的插入顺序如何，写出的字节序列必须一致。
+        // Core guarantee: Regardless of the insertion order of keys in the same logical configuration, the written byte sequence must be consistent.
         let mut a = Map::new();
         a.insert("env".to_string(), serde_json::json!({"PATH": "/usr/bin"}));
         a.insert("model".to_string(), serde_json::json!("gpt-6-astra"));

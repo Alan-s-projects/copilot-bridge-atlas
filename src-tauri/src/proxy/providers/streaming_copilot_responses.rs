@@ -237,7 +237,7 @@ mod tests {
             "data:{\"type\":\"response.output_item.added\",\"output_index\":0,",
             "\"item\":{\"id\":\"msg_one\",\"type\":\"message\"}}\r\n\r\n",
             "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,",
-            "\"item_id\":\"msg_one\",\"delta\":\"你好\"}\r\n\r\n",
+            "\"item_id\":\"msg_one\",\"delta\":\"€≈\"}\r\n\r\n",
             "data: {\"type\":\"vendor.event\",\"output_index\":0,\"item_id\":\"keep\"}\r\n\r\n",
             "data: not-json\r\n\r\ndata: [DONE]\r\n\r\n",
         );
@@ -252,7 +252,7 @@ mod tests {
             ": keep this comment\r\nid: transport-2\r\nretry: 500\r\n",
             "event: response.output_text.done\r\n",
             "data: {\"type\":\"response.output_text.done\",\r\n",
-            "data:\"output_index\":0,\"item_id\":\"msg_changed\",\"text\":\"你好🌟\"}",
+            "data:\"output_index\":0,\"item_id\":\"msg_changed\",\"text\":\"€≈🌟\"}",
         );
         for size in [1, 2, 3, 7, input.len()] {
             let output = normalize(input, size).await;
@@ -262,7 +262,7 @@ mod tests {
             let events = events(&output);
             assert_eq!(events.len(), 2);
             assert_eq!(events[1]["item_id"], "msg_one");
-            assert_eq!(events[1]["text"], "你好🌟");
+            assert_eq!(events[1]["text"], "€≈🌟");
         }
     }
 

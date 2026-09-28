@@ -168,13 +168,13 @@ describe("formatUsageTrendTokenTickLabel", () => {
     const enFormatter = createUsageTrendTokenTickFormatter("en-US");
 
     expect(formatUsageTrendTokenTickLabel(600_000_000, zhFormatter)).toBe(
-      "6.0亿",
+      "6.0\u4ebf",
     );
     expect(formatUsageTrendTokenTickLabel(1_950_000_000, zhFormatter)).toBe(
-      "19.5亿",
+      "19.5\u4ebf",
     );
     expect(formatUsageTrendTokenTickLabel(65_000_000, zhTwFormatter)).toBe(
-      "6500.0萬",
+      "6500.0\u842c",
     );
     expect(formatUsageTrendTokenTickLabel(600_000_000, enFormatter)).toBe(
       "600.0M",

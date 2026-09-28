@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
   Table,
@@ -8,7 +9,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { isUnpricedUsage, type RequestLogRow } from "@/types/usage";
+import {
+  isUnpricedUsage,
+  type RequestLog,
+  type RequestLogRow,
+} from "@/types/usage";
 import { REQUEST_LOG_COLUMNS, visibleColumns } from "./tableColumns";
 import { InputUsageHeading, RequestInputValue } from "./InputUsage";
 import {
@@ -28,11 +33,13 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
   caption,
   showTokenDetails = true,
   columns,
+  onInspectError,
 }: {
   logs: RequestLogRow[];
   caption?: string;
   showTokenDetails?: boolean;
   columns?: string[];
+  onInspectError?: (log: RequestLog) => void;
 }) {
   const { t } = useTranslation();
   const locale = "en-US";
@@ -187,17 +194,25 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
                     hidden={!visible.has("status")}
                     className="text-center"
                   >
-                    <span
-                      className={
-                        pending
-                          ? "text-amber-700 dark:text-amber-400"
-                          : log.statusCode >= 200 && log.statusCode < 300
-                            ? "text-green-600"
-                            : "text-red-600"
-                      }
-                    >
-                      {pending ? "Pending" : log.statusCode}
-                    </span>
+                    {pending ? (
+                      <span className="text-amber-700 dark:text-amber-400">
+                        Pending
+                      </span>
+                    ) : log.statusCode >= 200 && log.statusCode < 300 ? (
+                      <span className="text-green-600">{log.statusCode}</span>
+                    ) : onInspectError ? (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-0.5 rounded px-1.5 py-1 text-red-600 underline underline-offset-2 hover:bg-red-500/10 dark:text-red-400"
+                        aria-label={`View details for request status ${log.statusCode}`}
+                        onClick={() => onInspectError(log)}
+                      >
+                        {log.statusCode}
+                        <ChevronRight aria-hidden className="h-3.5 w-3.5" />
+                      </button>
+                    ) : (
+                      <span className="text-red-600">{log.statusCode}</span>
+                    )}
                   </TableCell>
                   {showTokenDetails && (
                     <>

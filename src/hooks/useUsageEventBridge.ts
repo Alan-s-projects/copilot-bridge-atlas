@@ -5,13 +5,13 @@ import { usageKeys } from "@/lib/query/usage";
 import { useWindowActive } from "@/lib/windowActivity";
 
 /**
- * 监听后端 `usage-log-recorded` 事件，收到后立刻 invalidate 所有
- * UsageDashboard 相关查询，让用户无需等待 30s 轮询周期。
+ * Listen to the backend `usage-log-recorded` event and immediately invalidate everything after receiving it.
+ * UsageDashboard related queries so that users do not need to wait for the 30s polling cycle.
  *
- * 后端在 `proxy_request_logs` 写入新行时会 emit 该事件（200ms 防抖合并），
+ * The backend will emit this event when `proxy_request_logs` writes a new line (200ms anti-shake merge),
  * Proxy usage changes invalidate the active dashboard queries.
  *
- * 该 hook 只挂在 UsageDashboard 上，避免在主界面其他位置无意义触发。
+ * This hook is only hung on UsageDashboard to avoid meaningless triggering elsewhere in the main interface.
  */
 export function useUsageEventBridge() {
   const queryClient = useQueryClient();
@@ -25,8 +25,8 @@ export function useUsageEventBridge() {
     (async () => {
       const off = await listen("usage-log-recorded", () => {
         if (disposed || !focusManager.isFocused()) return;
-        // invalidate 整个 usage 命名空间：summary / trends /
-        // modelStats / logs 全部跟着重拉
+        // invalidate the entire usage namespace: summary / trends /
+        // modelStats / logs all follow the re-pull
         queryClient.invalidateQueries({ queryKey: usageKeys.all });
       });
 

@@ -3,12 +3,11 @@
 //! OpenAI input tokens include cached tokens. Normalize Codex rows once while
 //! retaining opaque imported rows without reinterpreting their token counts.
 
-/// `app_type` 的存储 `input_tokens` 是否已包含 cache read/write。
+/// Whether the storage `input_tokens` of `app_type` already contains cache read/write.
 pub(crate) fn is_cache_inclusive_app(app_type: &str) -> bool {
     app_type == "codex"
 }
 
-pub(crate) const INPUT_TOKEN_SEMANTICS_LEGACY: i64 = 0;
 pub(crate) const INPUT_TOKEN_SEMANTICS_TOTAL: i64 = 1;
 pub(crate) const INPUT_TOKEN_SEMANTICS_FRESH: i64 = 2;
 
@@ -27,9 +26,8 @@ pub(crate) fn output_generation_ms_sql(alias: &str) -> String {
 /// Build an SQL expression that returns the cache-normalized `input_tokens`
 /// for a single row in `proxy_request_logs` or `usage_daily_rollups`.
 ///
-/// Legacy rows subtract cache reads only. New total-inclusive rows subtract
-/// both cache reads and writes. Rollups normalized to fresh input are returned
-/// unchanged.
+/// Total-inclusive rows subtract cache reads and writes. Rollups already
+/// normalized to fresh input are returned unchanged.
 ///
 /// Pass an empty string to reference the columns directly (no alias),
 /// or a table alias such as `"l"` to emit `l.input_tokens` style references.
@@ -46,10 +44,6 @@ pub fn fresh_input_sql(alias: &str) -> String {
                    AND {prefix}input_token_semantics = {INPUT_TOKEN_SEMANTICS_TOTAL} \
                    AND {prefix}input_tokens >= ({prefix}cache_read_tokens + {prefix}cache_creation_tokens) \
               THEN ({prefix}input_tokens - {prefix}cache_read_tokens - {prefix}cache_creation_tokens) \
-              WHEN {prefix}app_type = 'codex' \
-                   AND {prefix}input_token_semantics = {INPUT_TOKEN_SEMANTICS_LEGACY} \
-                   AND {prefix}input_tokens >= {prefix}cache_read_tokens \
-              THEN ({prefix}input_tokens - {prefix}cache_read_tokens) \
               ELSE {prefix}input_tokens END"
     )
 }
@@ -69,7 +63,7 @@ mod tests {
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 cache_read_tokens INTEGER NOT NULL DEFAULT 0,
                 cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
-                input_token_semantics INTEGER NOT NULL DEFAULT 0
+                input_token_semantics INTEGER NOT NULL DEFAULT 1
             );",
         )
         .unwrap();
@@ -104,7 +98,7 @@ mod tests {
         // Unknown imported data is not reinterpreted.
         conn.execute(
             "INSERT INTO proxy_request_logs (request_id, app_type, input_tokens, cache_read_tokens)
-             VALUES ('legacy-1', 'legacy-import', 200, 5000)",
+             VALUES ('other-1', 'other-app', 200, 5000)",
             [],
         )
         .unwrap();

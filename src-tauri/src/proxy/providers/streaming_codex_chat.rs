@@ -63,7 +63,7 @@ struct ChatToResponsesState {
     latest_usage: Option<Value>,
     finish_reason: Option<String>,
     tool_context: CodexToolContext,
-    /// 本回合因缺少合法函数名而被丢弃的工具调用数（见 `finalize_tools`）。
+    /// The number of tool calls that were discarded this round due to lack of legal function names (see `finalize_tools`).
     dropped_tool_calls: usize,
 }
 
@@ -225,13 +225,13 @@ impl ChatToResponsesState {
         (!self.reasoning.text.trim().is_empty()).then(|| self.reasoning.text.trim().to_string())
     }
 
-    /// 上游未下发 `index` 时的 key 解析。
+    /// Key resolution when `index` is not issued by the upstream.
     ///
-    /// `index` 在 OpenAI Chat Completions 协议里是必填字段，但部分第三方网关会省略。
-    /// 缺了它就无法从帧结构上区分「同一调用的 arguments 续帧」和「一个新调用」，
-    /// 所以这里只在**能确证是新调用**时才分配新 key：delta 带非空 `id`，且该 id 与
-    /// 所有已知调用都不同。其余情况一律归入最后一个已知 key（空 map 时为 0），保持
-    /// 既有行为——宁可两个并行调用坍缩成一个，也不能把一个调用的续帧炸成多个 item。
+    /// `index` is a required field in the OpenAI Chat Completions protocol, but some third-party gateways will omit it.
+    /// Without it, it is impossible to distinguish "arguments continuation frame of the same call" and "a new call" from the frame structure.
+    /// So a new key is only allocated here if it can be confirmed that it is a new call: delta with non-empty `id`, and the id is the same as
+    /// All known calls are different. All other cases will be classified into the last known key (0 when the map is empty), and keep
+    /// Existing behavior - It would be better for two parallel calls to collapse into one than to explode the continuation frame of one call into multiple items.
     fn resolve_tool_key_without_index(&self, tool_call: &Value) -> usize {
         let last_key = self.tools.keys().next_back().copied();
 
@@ -247,10 +247,10 @@ impl ChatToResponsesState {
             return *key;
         }
 
-        // 上游可以先发一个显式 `index: usize::MAX` 再发无 index 的新 id。这段代码
-        // 存在的理由就是应付畸形上游，所以不能用裸 `+1`（debug 下 panic、release 下
-        // 回绕到 0 覆盖已有调用）。溢出时退回并入最后一个已知调用，与本函数
-        // "宁可坍缩也不炸开" 的取向一致。
+        // The upstream can first send an explicit `index: usize::MAX` and then send the new id without index. this code
+        // The reason for existence is to deal with malformed upstream, so you cannot use naked `+1` (panic under debug, panic under release)
+        // Wraps around to 0 (overwriting existing calls). On overflow, return to the last known call, and this function
+        // The orientation of "would rather collapse than explode" is consistent.
         match last_key {
             Some(key) => key.checked_add(1).unwrap_or(key),
             None => 0,
@@ -416,7 +416,7 @@ impl ChatToResponsesState {
             })
     }
 
-    /// 本回合最终产出里是否至少有一个可被 Codex 识别的工具调用 item。
+    /// Whether there is at least one tool call item that can be recognized by Codex in the final output of this round.
     fn has_emitted_tool_call(&self) -> bool {
         self.output_items.iter().any(|(_, item)| {
             matches!(
@@ -438,16 +438,16 @@ impl ChatToResponsesState {
 
         let status = response_status_from_finish_reason(self.finish_reason.as_deref());
 
-        // 丢弃过工具调用、且最终一个工具调用都没剩下时，Codex 会收到一个
-        // "status=completed 但 output 里没有任何工具调用" 的回合，agent loop 必然
-        // 静默收尾——这正是 #4341「答一句就停、零报错」的形态。此时如实报错，
-        // 而不是谎报成功。只要还剩下任何一个合法工具调用，Codex 本来就会继续，
-        // 判据不成立，行为保持不变。
+        // When tool calls have been discarded and no tool calls are left at the end, the Codex will receive a
+        // "status=completed but there is no tool call in the output", the agent loop must
+        // Silent ending - this is exactly the form of #4341 "stop with one answer and zero error report". At this time, the error is reported truthfully.
+        // Instead of lying about success. Codex would have continued as long as any legitimate tool calls remained,
+        // The criterion is not established and the behavior remains unchanged.
         //
-        // 🔴 只对本应 `completed` 的回合生效：`finish_reason=length`（含流提前断开后
-        // 合成的 length）有自己正当的终止解释，工具调用没拿到 name 是截断的后果而非
-        // 上游发了畸形数据——报成 tool_call_dropped 会给出错误的归因，而本修复的全部
-        // 意义就在于诊断信息的准确性。
+        // 🔴 Only effective for the round that should be `completed`: `finish_reason=length` (including after the stream is disconnected in advance
+        // The synthetic length) has its own legitimate termination explanation. The tool call not getting the name is the result of truncation rather than
+        // The upstream sent malformed data - reporting tool_call_dropped will give wrong attribution, and all the fixes are
+        // The significance lies in the accuracy of diagnostic information.
         if status == "completed" && self.dropped_tool_calls > 0 && !self.has_emitted_tool_call() {
             let dropped = self.dropped_tool_calls;
             let message = format!(
@@ -508,8 +508,8 @@ impl ChatToResponsesState {
 
             // Skip tool calls with missing names (defensive: some models generate
             // tool call deltas without providing a valid function name)
-            // 纯空白名同样对应不到任何已发布工具，必须与空名同等对待——否则它会
-            // 伪装成"本回合还有工具调用"，绕过下面 finalize 里的失败判据。
+            // A pure blank name also does not correspond to any published tool and must be treated the same as a blank name - otherwise it will
+            // Disguise it as "there are still tool calls in this round" to bypass the failure criterion in finalize below.
             let has_bad_name = self
                 .tools
                 .get(&key)
@@ -525,8 +525,8 @@ impl ChatToResponsesState {
                     state.done = true;
                 }
                 self.dropped_tool_calls += 1;
-                // 只记结构信息：arguments 内容可能包含用户代码，且前端日志出口是
-                // allowlist 脱敏，新字段不进白名单就不会被处理，因此只输出字节数。
+                // Only structural information is recorded: arguments content may contain user code, and the front-end log exit is
+                // allowlist desensitization, new fields will not be processed unless they are in the whitelist, so only the number of bytes is output.
                 log::warn!(
                     "[Codex] dropped streaming tool call: model={} chat_index={} \
                      call_id_empty={} args_bytes={} finish_reason={} tools_total={}",
@@ -1233,12 +1233,12 @@ mod tests {
         assert!(!output.contains("call_missing"));
     }
 
-    /// #4341：上游只给出畸形工具调用时，丢弃后本回合一个工具调用都不剩，
-    /// Codex 会把它当成正常完成而静默收尾。此时必须如实报错。
+    /// #4341: When the upstream only provides malformed tool calls, not a single tool call will be left in this round after discarding.
+    /// Codex will treat it as a normal completion and end silently. At this time, the error must be reported truthfully.
     #[tokio::test]
     async fn dropped_only_tool_call_emits_failed_without_completed() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_drop\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"content\":\"让我继续处理这个文件\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_drop\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"content\":\"Let me continue working on this file\"}}]}\n\n",
             "data: {\"id\":\"chatcmpl_drop\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_bad\",\"type\":\"function\",\"function\":{\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
@@ -1247,17 +1247,17 @@ mod tests {
         assert!(output.contains("event: response.failed"));
         assert!(output.contains("upstream_tool_call_dropped"));
         assert!(!output.contains("event: response.completed"));
-        // 已经推给客户端的文本增量不受影响，用户仍能看到模型说了什么。
-        assert!(output.contains("让我继续处理这个文件"));
+        // Text increments already pushed to the client are not affected, and users can still see what the model says.
+        assert!(output.contains("Let me continue working on this file"));
     }
 
-    /// `finish_reason=length`（token 截断）时工具调用往往只到一半就没了 name。
-    /// 这不是"上游发了畸形数据"，而是截断——归因必须是 incomplete，不能报成
-    /// tool_call_dropped，否则诊断信息本身就是错的。
+    /// When `finish_reason=length` (token truncation), the tool call often loses its name only halfway through.
+    /// This is not "the upstream sent abnormal data", but truncation - the attribution must be incomplete and cannot be reported as successful.
+    /// tool_call_dropped, otherwise the diagnostic information itself will be wrong.
     #[tokio::test]
     async fn truncated_turn_stays_incomplete_instead_of_failed() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_trunc\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"content\":\"我来看看\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_trunc\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"content\":\"Let me take a look\"}}]}\n\n",
             "data: {\"id\":\"chatcmpl_trunc\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_cut\",\"type\":\"function\",\"function\":{\"arguments\":\"{\\\"pa\"}}]},\"finish_reason\":\"length\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
@@ -1268,8 +1268,8 @@ mod tests {
         assert!(!output.contains("event: response.failed"));
     }
 
-    /// 纯空白函数名对应不到任何已发布工具，必须与空名同等对待，
-    /// 否则它会伪装成"本回合还有工具调用"而绕过判据。
+    /// Purely blank function names do not correspond to any published tools and must be treated the same as empty names.
+    /// Otherwise, it will pretend to be "there are still tool calls this round" and bypass the criterion.
     #[tokio::test]
     async fn whitespace_only_tool_name_is_dropped() {
         let output = collect(vec![
@@ -1283,11 +1283,11 @@ mod tests {
         assert!(!output.contains("event: response.completed"));
     }
 
-    /// 纯文本回合（从未出现过工具调用增量）不受判据影响。
+    /// Plain text rounds (where tool call increments never occur) are not affected by the criterion.
     #[tokio::test]
     async fn text_only_turn_still_completes() {
         let output = collect(vec![
-            "data: {\"id\":\"chatcmpl_text\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"content\":\"完成了\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"id\":\"chatcmpl_text\",\"model\":\"gpt-6-astra\",\"choices\":[{\"delta\":{\"content\":\"finished\"},\"finish_reason\":\"stop\"}]}\n\n",
             "data: [DONE]\n\n",
         ])
         .await;
@@ -1307,7 +1307,7 @@ mod tests {
         }
     }
 
-    /// 上游省略 `index` 时，两个 id 不同的调用不得坍缩成一个。
+    /// When `index` is omitted from upstream, two calls with different ids must not collapse into one.
     #[tokio::test]
     async fn missing_index_with_distinct_ids_keeps_calls_separate() {
         let output = collect(vec![
@@ -1332,8 +1332,8 @@ mod tests {
         assert_eq!(items[1]["arguments"], r#"{"cmd":"ls"}"#);
     }
 
-    /// 上游省略 `index` 时，不带 id 的 arguments 续帧必须归入同一个调用，
-    /// 不能被当成新调用炸成多个 item。
+    /// When `index` is omitted from the upstream, arguments without id must be included in the same call.
+    /// It cannot be treated as a new call and exploded into multiple items.
     #[tokio::test]
     async fn missing_index_argument_fragments_stay_in_one_call() {
         let output = collect(vec![
@@ -1354,8 +1354,8 @@ mod tests {
         assert_eq!(items[0]["arguments"], r#"{"path":"a.txt"}"#);
     }
 
-    /// 上游省略 `index` 且重复下发同一个 id（部分网关每帧重复整个头部）时，
-    /// 不得被判成新调用。
+    /// When the upstream omits `index` and sends the same id repeatedly (some gateways repeat the entire header in every frame),
+    /// Shall not be judged as a new call.
     #[tokio::test]
     async fn missing_index_repeated_same_id_stays_in_one_call() {
         let output = collect(vec![

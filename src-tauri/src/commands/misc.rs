@@ -1,4 +1,3 @@
-use crate::init_status::InitErrorPayload;
 use serde::Deserialize;
 use std::time::Duration;
 use tauri::AppHandle;
@@ -53,7 +52,7 @@ pub async fn get_available_release_version() -> Result<Option<String>, String> {
     ))
 }
 
-/// 打开外部链接
+/// Open external link
 #[tauri::command]
 pub async fn open_external(app: AppHandle, url: String) -> Result<bool, String> {
     let url = if url.starts_with("http://") || url.starts_with("https://") {
@@ -64,7 +63,7 @@ pub async fn open_external(app: AppHandle, url: String) -> Result<bool, String> 
 
     app.opener()
         .open_url(&url, None::<String>)
-        .map_err(|e| format!("打开链接失败: {e}"))?;
+        .map_err(|e| format!("Failed to open link: {e}"))?;
 
     Ok(true)
 }
@@ -74,18 +73,18 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<bool, String> {
     // Use spawn_blocking to avoid blocking the async runtime
     // Clipboard access can block on some platforms and may have thread/loop constraints
     tokio::task::spawn_blocking(move || {
-        let mut clipboard =
-            arboard::Clipboard::new().map_err(|e| format!("访问系统剪贴板失败: {e}"))?;
+        let mut clipboard = arboard::Clipboard::new()
+            .map_err(|e| format!("Failed to access system clipboard: {e}"))?;
         clipboard
             .set_text(text)
-            .map_err(|e| format!("写入系统剪贴板失败: {e}"))?;
+            .map_err(|e| format!("Failed to write to system clipboard: {e}"))?;
         Ok(true)
     })
     .await
-    .map_err(|e| format!("剪贴板任务执行失败: {e}"))?
+    .map_err(|e| format!("Clipboard task execution failed: {e}"))?
 }
 
-/// 检查更新
+/// Check for updates
 #[tauri::command]
 pub async fn check_for_updates(handle: AppHandle) -> Result<bool, String> {
     handle
@@ -94,16 +93,9 @@ pub async fn check_for_updates(handle: AppHandle) -> Result<bool, String> {
             "https://github.com/Alan-s-projects/copilot-bridge-atlas/releases/latest",
             None::<String>,
         )
-        .map_err(|e| format!("打开更新页面失败: {e}"))?;
+        .map_err(|e| format!("Failed to open update page: {e}"))?;
 
     Ok(true)
-}
-
-/// 获取应用启动阶段的初始化错误（若有）。
-/// 用于前端在早期主动拉取，避免事件订阅竞态导致的提示缺失。
-#[tauri::command]
-pub async fn get_init_error() -> Result<Option<InitErrorPayload>, String> {
-    Ok(crate::init_status::get_init_error())
 }
 
 /// Set the Windows title-bar theme.

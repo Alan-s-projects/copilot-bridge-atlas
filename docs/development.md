@@ -14,6 +14,8 @@ Connection proposals use the generated per-model catalog for context limits and 
 
 An upstream HTTP 408 is reported separately from Atlas's own timeout. For repeated request-body timeouts in a long conversation, reduce the context or continue in a new chat with a short handoff. Atlas does not silently remove conversation content or change Codex's compaction settings.
 
+In Usage → Request Logs, failed status codes open a centered detail dialog. Failed requests retain up to 32 KiB each of the outbound Copilot request body and upstream response body, plus up to 8 KiB of headers on each side. A `response.failed` event inside an HTTP 200 stream is saved as the response body and shown with upstream status 200 and history status 502. Long request bodies retain the first and last 16 KiB with an omission marker. Common credential-bearing headers are redacted; bodies and other headers can contain conversation text or credentials. Bounded snapshots are stored in Atlas's local database and written as escaped lines under the same Atlas ID in the file log. Database backups include the snapshots; the usual 30-day request-detail pruning removes their database rows. Treat the file log and backups as sensitive.
+
 ### Pages
 
 - **Overview:** Provider, Today's usage, and Requests cards; proxy status, endpoint, quota ring, estimated cost, cache reuse, active requests, and the latest five requests. Connection warnings appear above Provider.
@@ -27,17 +29,16 @@ The application log is always enabled at Info level and rotates locally. Each
 upstream HTTP request records an `atlas_id`, status, elapsed time, endpoint path,
 requested/upstream models, transport, streaming and reasoning metadata, request
 shape counts, response size, and allowlisted upstream correlation IDs. Failures
-also record a bounded, redacted body summary at Warn level. The same `atlas_id`
-identifies the failed request in Usage history. Old `log_config` database rows
-remain untouched but no longer control logging. Prompts, tool output, credentials,
-and arbitrary headers are excluded. A bare upstream “Bad Request” cannot identify
-which field the provider rejected.
+also record a bounded diagnostic summary and four escaped request/response
+snapshot lines at Warn level. The same `atlas_id` identifies the failed request
+in Usage history. Request and response bodies in the file log can include prompts,
+tool output, or echoed credentials; handle logs and backups as sensitive data.
 
 Overview and Usage share the same summary component. Request logs, stored costs, and editable per-model prices retain precision. Average latency includes individual requests and weighted daily rollups for the selected range.
 
-Pricing has no models.dev downloads or automatic sync. Existing local price overrides are stored in `%USERPROFILE%\.copilot-bridge-atlas\model-pricing.json`; the bundled defaults are in `src-tauri/src/resources/model-pricing.json`. They contain 33 entries from GitHub's official Copilot pricing table, including all 11 published long-context tiers. Cost Pricing links to the source, filters model IDs and names as you type, and can reset all overrides to bundled defaults. Resetting removes price overrides and deletion tombstones while preserving retired metadata and recorded history. Custom models without a bundled default become unpriced. Unknown models and distinct vendor variants never borrow another model's price. See [pricing provenance and limitations](model-pricing.md). Existing retired sync metadata remains inactive.
+Pricing has no models.dev downloads or automatic sync. Local price overrides are stored in `%USERPROFILE%\.copilot-bridge-atlas\model-pricing.json`; the bundled defaults are in `src-tauri/src/resources/model-pricing.json`. They contain 33 entries from GitHub's official Copilot pricing table, including all 11 published long-context tiers. Cost Pricing links to the source, filters model IDs and names as you type, and can reset all overrides to bundled defaults. Resetting removes price overrides and deletion tombstones while preserving recorded history. Custom models without a bundled default become unpriced. Unknown models and distinct vendor variants never borrow another model's price. See [pricing provenance and limitations](model-pricing.md).
 
-Model names, input/total context limits, and reasoning levels are read-only Copilot metadata. Refresh replaces legacy overrides while preserving model enable switches. An empty catalog explains when GitHub Copilot must be signed in. Catalog rows can be disabled to hide them from Codex without deleting their settings, pricing, or usage history. Enabled models sort before disabled models, then alphabetically by display name. Temporarily unavailable models retain their saved choices but are omitted from Codex's generated catalog.
+Model names, input/total context limits, and reasoning levels are read-only Copilot metadata. Refresh preserves model enable switches. An empty catalog explains when GitHub Copilot must be signed in. Catalog rows can be disabled to hide them from Codex without deleting their settings, pricing, or usage history. Enabled models sort before disabled models, then alphabetically by display name. Temporarily unavailable models retain their saved choices but are omitted from Codex's generated catalog.
 
 Atlas keeps one provider, GitHub Copilot, regardless of the model vendor. Responses or Chat Completions transport is chosen automatically from each model's advertised capabilities; there is no upstream-format setting. Future model IDs using these protocols do not need a code allowlist update. Embedding, completion, hidden, policy-disabled, and unsupported-protocol entries are not exposed as chat models. Explicit refresh fetches a fresh catalog, and routing caches expire after five minutes. Context, output limits, image support, parallel tools, and reasoning metadata remain model-specific.
 
@@ -49,7 +50,7 @@ Atlas keeps one provider, GitHub Copilot, regardless of the model vendor. Respon
 - Database: `copilot-bridge-atlas.db`
 - Generated catalog: `copilot-model-catalog.json` inside the data directory
 
-The app uses its own installer identity, settings, logs, startup entry, and WebView profile. It does not discover or reuse another application's data directory. Database backups can be restored through Settings → Backup & Restore. Folder selections saved by older Atlas versions are still honored on startup, without restoring the removed directory editor or modifying those selections. Database upgrades require a successful safety backup before migration. Existing retired tables remain intact and travel with backups; fresh databases create only the current bridge tables.
+The app uses its own installer identity, settings, logs, startup entry, and WebView profile. Atlas 6 creates its database in `%USERPROFILE%\.copilot-bridge-atlas` with its own application ID and schema version 1. Its backups can be restored through Settings → Backup & Restore.
 
 ## Develop and release
 
@@ -70,6 +71,6 @@ $env:COPILOT_BRIDGE_ATLAS_TEST_HOME = $atlasTestHome
 cargo test --manifest-path src-tauri/Cargo.toml --locked --offline -- --test-threads=1
 ```
 
-The local build writes the MSI and SHA256 file to `release/`. Use a reviewed PR and squash merge into `atlas`, verify that the built source matches the merged tree, then publish an `atlas-<version>` tag and upload those two explicit files. There is no cloud build workflow. Only `atlas` remains after temporary PR branches are removed.
+The local build writes the MSI and SHA256 file to `release/`. A reviewed PR targets `atlas` and includes matching versions in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, plus `docs/releases/<version>.md`. The Atlas Release workflow builds and checks each PR on Windows. After squash merge, push an `atlas-<version>` tag pointing to the merged commit. The workflow verifies that the tag is on `atlas` and matches the package version, then builds the MSI, verifies its SHA256 file, and publishes both assets with the checked-in release notes. The description begins with the pipeline run, UTC time, branch, and commit. No manual upload is needed. Remove temporary PR branches after merge.
 
 [MIT license and copyright notice](../LICENSE).

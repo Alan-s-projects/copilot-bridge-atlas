@@ -22,10 +22,6 @@ fn file_lock() -> &'static Mutex<()> {
     MODEL_PRICING_FILE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn default_file_version() -> u32 {
-    MODEL_PRICING_FILE_VERSION
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelPricingInfo {
@@ -81,11 +77,7 @@ impl LongContextPricing {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ModelPricingFile {
-    #[serde(default = "default_file_version")]
     version: u32,
-    // Retired settings remain opaque and never enable network activity.
-    #[serde(flatten)]
-    extra: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     models: Vec<ModelPricingInfo>,
     #[serde(default)]
@@ -96,7 +88,6 @@ impl Default for ModelPricingFile {
     fn default() -> Self {
         Self {
             version: MODEL_PRICING_FILE_VERSION,
-            extra: BTreeMap::new(),
             models: Vec::new(),
             deleted_model_ids: Vec::new(),
         }
@@ -163,9 +154,9 @@ fn normalize_key_list(values: Vec<String>) -> Vec<String> {
 }
 
 fn normalize_file(mut file: ModelPricingFile) -> Result<ModelPricingFile, AppError> {
-    if file.version > MODEL_PRICING_FILE_VERSION {
+    if file.version != MODEL_PRICING_FILE_VERSION {
         return Err(AppError::Config(format!(
-            "model-pricing.json version {} is newer than supported version {}",
+            "model-pricing.json version {} is incompatible with version {}",
             file.version, MODEL_PRICING_FILE_VERSION
         )));
     }
@@ -199,8 +190,11 @@ fn read_file_unlocked() -> Result<Option<ModelPricingFile>, AppError> {
 
 fn write_file_unlocked(file: &ModelPricingFile) -> Result<(), AppError> {
     let path = model_pricing_file_path();
-    let mut data = serde_json::to_vec_pretty(file)
-        .map_err(|error| AppError::Config(format!("序列化模型定价配置失败: {error}")))?;
+    let mut data = serde_json::to_vec_pretty(file).map_err(|error| {
+        AppError::Config(format!(
+            "Serialized model pricing configuration failed: {error}"
+        ))
+    })?;
     data.push(b'\n');
     atomic_write(&path, &data)
 }
@@ -254,7 +248,7 @@ fn upsert_pricing(
                     .map_err(|e| AppError::Config(e.to_string()))?
             ],
         )
-        .map_err(|error| AppError::Database(format!("更新模型定价失败: {error}")))
+        .map_err(|error| AppError::Database(format!("Failed to update model pricing: {error}")))
 }
 
 fn apply_file_to_database(
@@ -281,9 +275,9 @@ fn apply_file_to_database(
 /// Load all model overrides from Atlas's own model-pricing.json.
 pub fn sync_local_model_pricing(db: &Database) -> Result<usize, AppError> {
     let (upserted, deleted) = {
-        let _file_guard = file_lock()
-            .lock()
-            .map_err(|error| AppError::Config(format!("模型定价文件锁失败: {error}")))?;
+        let _file_guard = file_lock().lock().map_err(|error| {
+            AppError::Config(format!("Model pricing file lock failed: {error}"))
+        })?;
         let file = load_or_create_file_unlocked()?;
         apply_file_to_database(db, &file)?
     };
@@ -293,7 +287,7 @@ pub fn sync_local_model_pricing(db: &Database) -> Result<usize, AppError> {
     // deleted on every startup; they must not trigger a full-table backfill.
     if upserted > 0 {
         if let Err(error) = db.backfill_missing_usage_costs() {
-            log::warn!("本地模型定价同步后回填历史用量成本失败: {error}");
+            log::warn!("Failed to backfill historical usage cost after local model pricing synchronization: {error}");
         }
     }
     Ok(upserted + deleted)
@@ -305,9 +299,9 @@ pub fn update_model_pricing(db: &Database, entry: ModelPricingInfo) -> Result<us
 
     sync_local_model_pricing(db)?;
     let changed = {
-        let _file_guard = file_lock()
-            .lock()
-            .map_err(|error| AppError::Config(format!("模型定价文件锁失败: {error}")))?;
+        let _file_guard = file_lock().lock().map_err(|error| {
+            AppError::Config(format!("Model pricing file lock failed: {error}"))
+        })?;
         let mut file = load_or_create_file_unlocked()?;
         let mut file_models = file
             .models
@@ -349,7 +343,7 @@ pub fn delete_model_pricing(db: &Database, model_id: &str) -> Result<(), AppErro
     sync_local_model_pricing(db)?;
     let _file_guard = file_lock()
         .lock()
-        .map_err(|error| AppError::Config(format!("模型定价文件锁失败: {error}")))?;
+        .map_err(|error| AppError::Config(format!("Model pricing file lock failed: {error}")))?;
     let mut file = load_or_create_file_unlocked()?;
     file.models.retain(|entry| entry.model_id != model_id);
     if !file
@@ -373,11 +367,11 @@ pub fn delete_model_pricing(db: &Database, model_id: &str) -> Result<(), AppErro
 }
 
 /// Restore bundled prices and remove explicit overrides and deletion tombstones.
-/// Retired file metadata and recorded request costs remain untouched.
+/// Recorded request costs remain untouched.
 pub fn reset_model_pricing_to_defaults(db: &Database) -> Result<(), AppError> {
     let _file_guard = file_lock()
         .lock()
-        .map_err(|error| AppError::Config(format!("模型定价文件锁失败: {error}")))?;
+        .map_err(|error| AppError::Config(format!("Model pricing file lock failed: {error}")))?;
     let mut file = read_file_unlocked()?.unwrap_or_default();
     file.models.clear();
     file.deleted_model_ids.clear();
@@ -471,7 +465,6 @@ mod tests {
             let content = fs::read_to_string(path).expect("read pricing file");
             let file: ModelPricingFile = serde_json::from_str(&content).expect("parse file");
             assert!(file.models.is_empty());
-            assert!(file.extra.is_empty());
         });
     }
 
@@ -609,13 +602,9 @@ mod tests {
                 let mut file = read_file_unlocked()
                     .expect("read pricing file")
                     .expect("pricing file exists");
-                file.extra.insert(
-                    "retiredMetadata".into(),
-                    serde_json::json!({"enabled": false}),
-                );
                 file.models.push(retired_entry.clone());
                 file.deleted_model_ids.push("retired-tombstone".into());
-                write_file_unlocked(&file).expect("preserve legacy pricing metadata");
+                write_file_unlocked(&file).expect("save custom pricing");
 
                 let conn = db.conn.lock().expect("lock test database");
                 conn.execute(
@@ -696,10 +685,6 @@ mod tests {
             let saved: serde_json::Value =
                 serde_json::from_slice(&fs::read(path).expect("read saved pricing file"))
                     .expect("parse saved pricing file");
-            assert_eq!(
-                saved["retiredMetadata"],
-                serde_json::json!({"enabled": false})
-            );
             assert_eq!(saved["models"], serde_json::json!([]));
             assert_eq!(saved["deletedModelIds"], serde_json::json!([]));
         });
@@ -803,43 +788,6 @@ mod tests {
                 .expect("query pending usage cost");
             assert_eq!(deleted_count, 0);
             assert_eq!(total_cost, 0.0);
-        });
-    }
-
-    #[test]
-    #[serial]
-    fn retired_sync_metadata_is_opaque_and_survives_manual_price_changes() {
-        with_test_home(|db, path| {
-            let legacy = serde_json::json!({
-                "autoSyncEnabled": true,
-                "selectedModelKeys": ["openai/gpt-custom-model"],
-                "lastSyncAt": 123,
-                "lastSyncError": "  historical error  "
-            });
-            let file = serde_json::json!({
-                "version": 1,
-                "modelsDevSync": legacy,
-                "models": [sample_pricing()],
-                "deletedModelIds": []
-            });
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, serde_json::to_vec_pretty(&file).unwrap()).unwrap();
-            let before = fs::read(path).unwrap();
-            assert_eq!(sync_local_model_pricing(db).unwrap(), 1);
-            assert_eq!(fs::read(path).unwrap(), before);
-
-            let mut edited = sample_pricing();
-            edited.input_cost_per_million = "8.5".into();
-            update_model_pricing(db, edited.clone()).unwrap();
-            let saved: serde_json::Value =
-                serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-            assert_eq!(saved["modelsDevSync"], legacy);
-            assert_eq!(saved["models"][0], serde_json::to_value(edited).unwrap());
-
-            delete_model_pricing(db, "gpt-custom-model").unwrap();
-            let saved: serde_json::Value =
-                serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-            assert_eq!(saved["modelsDevSync"], legacy);
         });
     }
 

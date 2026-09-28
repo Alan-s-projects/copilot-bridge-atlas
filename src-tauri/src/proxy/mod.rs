@@ -1,4 +1,4 @@
-//! 代理服务器模块
+//! Proxy server module
 //!
 //! Local OpenAI-compatible HTTP server for GitHub Copilot.
 

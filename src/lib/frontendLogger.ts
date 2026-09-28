@@ -12,10 +12,10 @@ const QUOTED_NAMED_SECRET_PATTERN =
   /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|authorization|auth|password|passwd|pwd|secret|cookie)\s*["']?\s*[:=]\s*)(["'])(.*?)\2/gi;
 const NAMED_SECRET_PATTERN =
   /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|authorization|auth|password|passwd|pwd|secret|cookie)\s*["']?\s*[:=]\s*["']?)([^\s"',}]+)/gi;
-// 敏感键的值是数组/对象(`"tokens":[...]`、`"auth":{...}`)时，标量正则够不着里面的元素。
-// 文本层是所有入口(Error/string/对象/嵌套/前缀+JSON)最终汇聚的唯一出口，故在这里
-// 兜底：命中敏感键名后把紧跟的 `[..]`/`{..}` 整体替换。`\b` 防止匹配到 monkey 之类的后缀，
-// `(?:\\?["'])?` 同时兼容裸引号与转义引号(双重编码 JSON 里的 `\"tokens\"`)。
+// When the value of the sensitive key is an array/object (`"tokens":[...]`, `"auth":{...}`), the scalar regular expression cannot reach the elements inside.
+// The text layer is the only outlet where all entries (Error/string/object/nested/prefix+JSON) finally converge, so here
+// Tip: After hitting the sensitive key name, replace the entire `[..]`/`{..}` that follows. `\b` prevents matching suffixes such as monkey,
+// `(?:\\?["'])?` is compatible with both bare quotes and escaped quotes (`\"tokens\"` in double-encoded JSON).
 const NAMED_SECRET_CONTAINER_PATTERN =
   /((?:\\?["'])?\b(?:api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|session[_-]?id|authorization|credential|password|passwd|bearer|cookie|secret|token|auth|pwd|key)s?(?:\\?["'])?\s*[:=]\s*)(\[[^\]]*\]|\{[^{}]*\})/gi;
 const SENSITIVE_HEADER_LINE_PATTERN =
@@ -64,9 +64,9 @@ function looksLikeSecretValue(value: string): boolean {
   );
 }
 
-// 结构化对象里，命中这些属性名即认定其整个值(标量/数组/对象)为敏感并整体隐藏。
-// 存单数形式，查表前去掉尾部 s，让复数(tokens/apiKeys/credentials)自动覆盖，
-// 不必逐个枚举——正则文本层只能匹配 `"name":"value"` 标量，抓不到数组/嵌套。
+// In structured objects, hitting these attribute names will determine that the entire value (scalar/array/object) is sensitive and hidden as a whole.
+// In the form of depositing single numbers, remove the trailing s before looking up the table, so that the plural numbers (tokens/apiKeys/credentials) will be automatically overwritten.
+// No need to enumerate one by one - regular text layers can only match `"name":"value"` scalars, not arrays/nested ones.
 const SENSITIVE_KEY_NAMES = new Set([
   "key",
   "apikey",
@@ -112,8 +112,8 @@ function normalizeForSerialization(
   budget.remaining -= 1;
 
   if (typeof value === "string") {
-    // 值一级脱敏：对“看起来像密钥”的不透明串整体隐藏。命名字段(apiKey/token/...)
-    // 由上层 isSensitiveKey 按属性名整体隐藏；文本里的裸密钥再由 redactFrontendLogText 兜底。
+    // Value-level desensitization: Hide the entire opaque string that "looks like a key". Named fields (apiKey/token/...)
+    // The upper layer isSensitiveKey is hidden as a whole according to the attribute name; the naked key in the text is then hidden by redactFrontendLogText.
     if (looksLikeSecretValue(value)) {
       return "[REDACTED]";
     }
@@ -177,7 +177,7 @@ function normalizeForSerialization(
           continue;
         }
         if (isSensitiveKey(key)) {
-          // 敏感属性名 → 整个值(含数组/对象)一律隐藏，不递归、不猜形状。
+          // Sensitive attribute names → The entire value (including arrays/objects) is hidden, no recursion, no shape guessing.
           output[key] = "[REDACTED]";
           continue;
         }
@@ -214,17 +214,17 @@ function serializeStructured(value: unknown): string | null {
   }
 }
 
-// 结构化数据可能以“字符串形态的 JSON”混进来(Promise.reject(JSON.stringify(...))、
-// throw new Error(JSON.stringify(...)))。不还原结构就只剩文本正则，够不着数组/嵌套字段。
-// 命中 JSON 结构则 parse 后走属性级脱敏；非 JSON 返回 null 交调用方按普通文本处理。
+// Structured data may be mixed in as "JSON in string form" (Promise.reject(JSON.stringify(...)),
+// throw new Error(JSON.stringify(...))). Without restoring the structure, only text regularization is left, and arrays/nested fields are out of reach.
+// If the JSON structure is hit, attribute-level desensitization will be performed after parse; if it is not JSON, null will be returned and the interaction caller will process it as ordinary text.
 function redactStructuredString(text: string): string | null {
   const trimmed = text.trim();
   if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
     return null;
   }
   if (text.length > MAX_RAW_LOG_INPUT_LENGTH) {
-    // 合法的超大 JSON 一旦截断必成非法 JSON，会退回够不着数组字段的文本正则并泄漏；
-    // 也不冒险 parse 多 MiB 输入阻塞 UI。检出 JSON-like 且超限即整体丢弃。
+    // Once the legal oversized JSON is truncated, it will become illegal JSON, and the text regularity that cannot reach the array field will be returned and leaked;
+    // Nor does it risk parse blocking the UI with multiple MiB inputs. If JSON-like is checked out and exceeds the limit, the entire file will be discarded.
     return "[oversized structured error omitted]";
   }
   let parsed: unknown;
@@ -233,18 +233,18 @@ function redactStructuredString(text: string): string | null {
   } catch {
     return null;
   }
-  // 标量 JSON(如 "42")无字段可脱，交给文本层。
+  // Scalar JSON (such as "42") has no fields to remove and is given to the text layer.
   if (parsed === null || typeof parsed !== "object") {
     return null;
   }
   return serializeStructured(parsed) ?? "[Unserializable structured error]";
 }
 
-// 把 Error 渲染成“脱敏 message + 原生调用栈”，与浏览器引擎的 stack 格式无关：
-//  - V8/Chromium(Windows WebView2)：stack 首行内嵌 message → 全局字面量替换成脱敏版；
-//  - WebKit/JSC(macOS/Linux WKWebView)、SpiderMonkey：stack 是纯栈帧、不含 message → 补脱敏头。
-// 不识别 `    at ` / `@` 等引擎特有格式(枚举不完，正是它把 WebKit 栈整段丢了)，只按
-// “message 是否出现在 stack 里”分流，从而各平台都保留原生调用栈，且绝不残留未脱敏 message。
+// Render Error into "desensitized message + native call stack", regardless of the stack format of the browser engine:
+//  - V8/Chromium (Windows WebView2): embedded message in the first line of stack → replace global literals with desensitized versions;
+//  - WebKit/JSC (macOS/Linux WKWebView), SpiderMonkey: stack is a pure stack frame without message → desensitization header.
+// Does not recognize engine-specific formats such as `    at ` / `@` (the enumeration is not complete, it is the entire WebKit stack that is lost), just press
+// "Whether the message appears in the stack" is separated, so that each platform retains the native call stack and no undesensitized messages remain.
 function renderRedactedError(error: Error, structuredMessage: string): string {
   const head = `${error.name}: ${structuredMessage}`;
   const stack = error.stack;
@@ -252,18 +252,18 @@ function renderRedactedError(error: Error, structuredMessage: string): string {
     return head;
   }
   if (error.message && stack.includes(error.message)) {
-    // V8：message 内嵌在 stack —— 全局字面量替换(split/join 换掉所有出现)，栈帧原样保留。
+    // V8: message is embedded in the stack - global literal replacement (split/join replaces all occurrences), and the stack frame is retained as is.
     return stack.split(error.message).join(structuredMessage);
   }
-  // WebKit/Firefox：stack 不含 message —— 纯栈帧前补一个脱敏 message 头。
+  // WebKit/Firefox: stack does not contain message - a desensitized message header is prepended to the pure stack frame.
   return `${head}\n${stack}`;
 }
 
 function describeError(error: unknown): string {
   if (error instanceof Error) {
-    // throw new Error(JSON.stringify(payload)) 很常见：凭据会藏进 message，而 V8 的
-    // stack 首行就是原始 message。先对 message 按 JSON 结构化脱敏，命中则渲染成
-    // “脱敏 message + 原生栈”，避免 stack 把未脱敏的 message 直接吐出去。
+    // throw new Error(JSON.stringify(payload)) is very common: the credentials will be hidden in the message, and V8's
+    // The first line of the stack is the original message. First desensitize the message according to the JSON structure, and render it into
+    // "Desensitized message + native stack" prevents the stack from spitting out undesensitized messages directly.
     const structuredMessage = redactStructuredString(error.message);
     if (structuredMessage !== null) {
       return truncateForProcessing(
@@ -298,7 +298,7 @@ export function reportFrontendError(
   error: unknown,
   details?: string,
 ): void {
-  // 先限制每段原始输入，再执行全局正则，避免异常携带多 MiB 文本时阻塞 UI。
+  // First limit each piece of original input, and then perform global regularization to avoid blocking the UI when exceptions carry multiple MiB text.
   const raw = truncateForProcessing(
     [
       `[frontend] ${truncateForProcessing(context, MAX_RAW_LOG_INPUT_LENGTH)}`,
@@ -317,8 +317,8 @@ export function reportFrontendError(
       ? `${redacted.slice(0, MAX_LOG_MESSAGE_LENGTH)}\n[truncated]`
       : redacted;
 
-  // Web 开发/测试环境没有 Tauri invoke，日志上报失败不应再触发
-  // console.error 或未处理 Promise，否则会形成错误循环。
+  // The web development/test environment does not have Tauri invoke, and log reporting failure should no longer be triggered.
+  // console.error or the Promise is not handled, otherwise an error loop will form.
   void writeErrorLog(message, { file: "frontend" }).catch(() => undefined);
 }
 

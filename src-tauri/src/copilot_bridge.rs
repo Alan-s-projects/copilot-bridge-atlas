@@ -106,7 +106,7 @@ fn ensure_copilot_entry(db: &Database) -> Result<(), AppError> {
     db.save_provider("codex", &provider)
 }
 
-/// Keep legacy DB rows and backups for rollback, but never activate their writers.
+/// Initialize the Copilot provider record.
 pub fn initialize(state: &AppState) -> Result<(), AppError> {
     ensure_copilot_entry(&state.db)?;
     let current = current(&state.db)?;
@@ -167,15 +167,7 @@ fn merge_live_capabilities(
             }
             row["reasoningLevels"] = json!(model.reasoning_efforts.as_deref().unwrap_or(&[]));
             if let Some(object) = row.as_object_mut() {
-                for key in [
-                    "reasoning_levels",
-                    "defaultReasoningLevel",
-                    "default_reasoning_level",
-                    "context_window",
-                    "display_name",
-                ] {
-                    object.remove(key);
-                }
+                object.remove("defaultReasoningLevel");
             }
         }
         let known: std::collections::HashSet<_> = rows
@@ -1162,7 +1154,7 @@ notify = ["unchanged"]
     }
 
     #[test]
-    fn refresh_replaces_legacy_reasoning_overrides_with_copilot_declarations() {
+    fn refresh_replaces_saved_reasoning_with_copilot_declarations() {
         use crate::proxy::providers::copilot_auth::CopilotModel;
         use serde_json::json;
         let models = [CopilotModel {
@@ -1179,8 +1171,8 @@ notify = ["unchanged"]
         ] {
             let mut row = json!({
                 "model": "gpt-6-astra",
-                "reasoning_levels": ["low", "ultra"],
-                "default_reasoning_level": "ultra"
+                "reasoningLevels": ["low", "ultra"],
+                "defaultReasoningLevel": "ultra"
             });
             if let Some(levels) = canonical_levels {
                 row["reasoningLevels"] = levels;
@@ -1197,7 +1189,6 @@ notify = ["unchanged"]
             let saved = &provider.settings_config["modelCatalog"]["models"][0];
             assert_eq!(saved["reasoningLevels"], json!(["low", "medium"]));
             assert!(saved.get("defaultReasoningLevel").is_none());
-            assert!(saved.get("reasoning_levels").is_none());
             assert!(!merge_live_capabilities(&mut provider, &models));
         }
     }

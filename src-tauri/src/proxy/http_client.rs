@@ -1,7 +1,7 @@
-//! 全局 HTTP 客户端模块
+//! Global HTTP client module
 //!
-//! 提供支持全局代理配置的 HTTP 客户端。
-//! 所有需要发送 HTTP 请求的模块都应使用此模块提供的客户端。
+//! Provides an HTTP client that supports global proxy configuration.
+//! All modules that need to send HTTP requests should use the client provided by this module.
 
 use once_cell::sync::OnceCell;
 use reqwest::Client;
@@ -10,15 +10,15 @@ use std::net::IpAddr;
 use std::sync::RwLock;
 use std::time::Duration;
 
-/// 全局 HTTP 客户端实例
+/// Global HTTP client instance
 static GLOBAL_CLIENT: OnceCell<RwLock<Client>> = OnceCell::new();
 
-/// Copilot Bridge Atlas 代理服务器当前监听的端口
+/// Copilot Bridge Atlas proxy server is currently listening on the port
 static COPILOT_BRIDGE_ATLAS_PROXY_PORT: OnceCell<RwLock<u16>> = OnceCell::new();
 
-/// 设置 Copilot Bridge Atlas 代理服务器的监听端口
+/// Set the listening port of the Copilot Bridge Atlas proxy server
 ///
-/// 应在代理服务器启动时调用，以便系统代理检测能正确识别自己的端口
+/// Should be called when the proxy server starts so that the system proxy detection can correctly identify its own port
 pub fn set_proxy_port(port: u16) {
     if let Some(lock) = COPILOT_BRIDGE_ATLAS_PROXY_PORT.get() {
         if let Ok(mut current_port) = lock.write() {
@@ -31,27 +31,27 @@ pub fn set_proxy_port(port: u16) {
     }
 }
 
-/// 获取 Copilot Bridge Atlas 代理服务器的监听端口
+/// Get the listening port of the Copilot Bridge Atlas proxy server
 fn get_proxy_port() -> u16 {
     COPILOT_BRIDGE_ATLAS_PROXY_PORT
         .get()
         .and_then(|lock| lock.read().ok())
         .map(|port| *port)
-        .unwrap_or(15722) // 默认端口作为回退
+        .unwrap_or(15722) // Default port as fallback
 }
 
-/// 初始化全局 HTTP 客户端
+/// Initialize the global HTTP client
 ///
-/// 应在应用启动时调用一次。
+/// Should be called once when the app starts.
 ///
 /// # Arguments
-/// * `proxy_url` - 代理 URL，如 `http://127.0.0.1:7890` 或 `socks5://127.0.0.1:1080`
-///   传入 None 或空字符串表示直连
+/// * `proxy_url` - Proxy URL, such as `http://127.0.0.1:7890` or `socks5://127.0.0.1:1080`
+///   Passing in None or an empty string indicates a direct connection
 pub fn init(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
     let client = build_client(effective_url)?;
 
-    // 尝试初始化全局客户端，如果已存在则记录警告并使用 apply_proxy 更新
+    // Try to initialize the global client, log a warning if it already exists and update it with apply_proxy
     if GLOBAL_CLIENT.set(RwLock::new(client.clone())).is_err() {
         log::warn!(
             "[GlobalProxy] [GP-003] Already initialized, updating instead: {}",
@@ -59,7 +59,7 @@ pub fn init(proxy_url: Option<&str>) -> Result<(), String> {
                 .map(mask_url)
                 .unwrap_or_else(|| "direct connection".to_string())
         );
-        // 已初始化，改用 apply_proxy 更新
+        // Initialized, update using apply_proxy instead
         return apply_proxy(proxy_url);
     }
 
@@ -73,35 +73,35 @@ pub fn init(proxy_url: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// 验证代理配置（不应用）
+/// Verify proxy configuration (do not apply)
 ///
-/// 只验证代理 URL 是否有效，不实际更新全局客户端。
-/// 用于在持久化之前验证配置的有效性。
+/// Only verifies that the proxy URL is valid and does not actually update the global client.
+/// Used to verify the validity of the configuration before persisting it.
 ///
 /// # Arguments
-/// * `proxy_url` - 代理 URL，None 或空字符串表示直连
+/// * `proxy_url` - proxy URL, None or empty string indicates direct connection
 ///
 /// # Returns
-/// 验证成功返回 Ok(())，失败返回错误信息
+/// Ok(()) is returned if the verification is successful, and an error message is returned if it fails.
 pub fn validate_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
-    // 只调用 build_client 来验证，但不应用
+    // Just call build_client to verify, but not apply
     build_client(effective_url)?;
     Ok(())
 }
 
-/// 应用代理配置（假设已验证）
+/// Apply proxy configuration (assuming verified)
 ///
-/// 直接应用代理配置到全局客户端，不做额外验证。
-/// 应在 validate_proxy 成功后调用。
+/// Apply proxy configuration directly to the global client without additional verification.
+/// Should be called after validate_proxy succeeds.
 ///
 /// # Arguments
-/// * `proxy_url` - 代理 URL，None 或空字符串表示直连
+/// * `proxy_url` - proxy URL, None or empty string indicates direct connection
 pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
     let new_client = build_client(effective_url)?;
 
-    // 更新客户端
+    // Update client
     if let Some(lock) = GLOBAL_CLIENT.get() {
         let mut client = lock.write().map_err(|e| {
             log::error!("[GlobalProxy] [GP-001] Failed to acquire write lock: {e}");
@@ -109,7 +109,7 @@ pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
         })?;
         *client = new_client;
     } else {
-        // 如果还没初始化，则初始化
+        // If it has not been initialized yet, initialize it
         return init(proxy_url);
     }
 
@@ -123,9 +123,9 @@ pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// 获取全局 HTTP 客户端
+/// Get the global HTTP client
 ///
-/// 返回配置了代理的客户端（如果已配置代理），否则返回跟随系统代理的客户端。
+/// Returns clients with a proxy configured if a proxy is configured, otherwise returns clients following the system proxy.
 pub fn get() -> Client {
     GLOBAL_CLIENT
         .get()
@@ -137,23 +137,23 @@ pub fn get() -> Client {
         })
 }
 
-/// 构建 HTTP 客户端
+/// Building an HTTP client
 fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
     let mut builder = Client::builder()
         .timeout(Duration::from_secs(600))
         .connect_timeout(Duration::from_secs(30))
         .pool_max_idle_per_host(10)
         .tcp_keepalive(Duration::from_secs(60))
-        // 禁用 reqwest 自动解压：防止 reqwest 覆盖客户端原始 accept-encoding header。
-        // 响应解压由 response_processor 根据 content-encoding 手动处理。
+        // Disable reqwest automatic decompression: prevent reqwest from overwriting the client's original accept-encoding header.
+        // Response decompression is handled manually by response_processor based on content-encoding.
         .no_gzip()
         .no_brotli()
         .no_deflate()
         .no_zstd();
 
-    // 有代理地址则使用代理，否则跟随系统代理
+    // If there is a proxy address, use the proxy, otherwise follow the system proxy.
     if let Some(url) = proxy_url {
-        // 先验证 URL 格式和 scheme
+        // First verify the URL format and scheme
         let parsed = url::Url::parse(url)
             .map_err(|e| format!("Invalid proxy URL '{}': {}", mask_url(url), e))?;
 
@@ -171,8 +171,8 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
         builder = builder.proxy(proxy);
         log::debug!("[GlobalProxy] Proxy configured: {}", mask_url(url));
     } else {
-        // 未设置全局代理时，让 reqwest 自动检测系统代理（环境变量）
-        // 若系统代理指向本机，禁用系统代理避免自环
+        // When the global proxy is not set, let reqwest automatically detect the system proxy (environment variable)
+        // If the system proxy points to the local machine, disable the system proxy to avoid self-loop
         if system_proxy_points_to_loopback() {
             builder = builder.no_proxy();
             log::warn!(
@@ -221,8 +221,8 @@ fn proxy_points_to_loopback(value: &str) -> bool {
             .unwrap_or(false)
     }
 
-    // 检查是否指向 Copilot Bridge Atlas 自己的代理端口
-    // 只有指向自己的代理才需要跳过，避免递归
+    // Check if it points to Copilot Bridge Atlas' own proxy port
+    // Only the proxy pointing to yourself needs to be skipped to avoid recursion.
     fn is_copilot_bridge_atlas_proxy_port(port: Option<u16>) -> bool {
         let copilot_bridge_atlas_port = get_proxy_port();
         port == Some(copilot_bridge_atlas_port)
@@ -230,7 +230,7 @@ fn proxy_points_to_loopback(value: &str) -> bool {
 
     if let Ok(parsed) = url::Url::parse(value) {
         if let Some(host) = parsed.host_str() {
-            // 只有当主机是 loopback 且端口是 Copilot Bridge Atlas 的端口时才返回 true
+            // Returns true only if the host is a loopback and the port is the port of the Copilot Bridge Atlas
             return host_is_loopback(host) && is_copilot_bridge_atlas_proxy_port(parsed.port());
         }
         return false;
@@ -246,18 +246,18 @@ fn proxy_points_to_loopback(value: &str) -> bool {
     false
 }
 
-/// 隐藏 URL 中的敏感信息（用于日志）
+/// Hide sensitive information in URLs (for logging)
 pub fn mask_url(url: &str) -> String {
     if let Ok(parsed) = url::Url::parse(url) {
-        // 隐藏用户名和密码，保留 scheme、host 和端口
+        // Hide username and password, retain scheme, host and port
         let host = parsed.host_str().unwrap_or("?");
         match parsed.port() {
             Some(port) => format!("{}://{}:{}", parsed.scheme(), host, port),
             None => format!("{}://{}", parsed.scheme(), host),
         }
     } else {
-        // URL 解析失败，返回部分内容。截断点回退到最近的字符边界，
-        // 避免在多字节 UTF-8 字符中间切割导致 panic。
+        // URL parsing failed, partial content returned. The truncation point falls back to the nearest character boundary,
+        // Avoid panic caused by cutting in the middle of multi-byte UTF-8 characters.
         if url.len() > 20 {
             let cut = (0..=20)
                 .rev()
@@ -291,7 +291,7 @@ mod tests {
             mask_url("socks5://admin:secret@proxy.example.com:1080"),
             "socks5://proxy.example.com:1080"
         );
-        // 无端口的 URL 不应显示 ":?"
+        // Unported URLs should not display ":?"
         assert_eq!(
             mask_url("http://proxy.example.com"),
             "http://proxy.example.com"
@@ -304,11 +304,11 @@ mod tests {
 
     #[test]
     fn test_mask_url_does_not_panic_on_multibyte_boundary() {
-        // 一个无法被 Url::parse 解析、且在字节 20 处正好切在多字节字符中间的字符串。
+        // A string that cannot be parsed by Url::parse and is cut exactly in the middle of a multibyte character at byte 20.
         // Regression: URL masking must not split multi-byte characters.
-        let bad = "这是一个无效的代理地址不能解析";
+        let bad = format!("{}€invalid", "x".repeat(19));
         assert!(bad.len() > 20 && !bad.is_char_boundary(20));
-        let masked = mask_url(bad);
+        let masked = mask_url(&bad);
         assert!(masked.ends_with("..."));
     }
 
@@ -332,27 +332,27 @@ mod tests {
 
     #[test]
     fn test_build_client_invalid_url() {
-        // reqwest::Proxy::all 对某些无效 URL 不会立即报错
-        // 使用明确无效的 scheme 来触发错误
+        // reqwest::Proxy::all will not immediately report an error for some invalid URLs
+        // Use an explicitly invalid scheme to trigger an error
         let result = build_client(Some("invalid-scheme://127.0.0.1:7890"));
         assert!(result.is_err(), "Should reject invalid proxy scheme");
     }
 
     #[test]
     fn test_proxy_points_to_loopback() {
-        // 设置 Copilot Bridge Atlas 代理端口为 15722（默认值）
+        // Set Copilot Bridge Atlas proxy port to 15722 (default)
         set_proxy_port(15722);
 
-        // 只有指向 Copilot Bridge Atlas 自己端口的 loopback 地址才返回 true
+        // Only the loopback address pointing to the Copilot Bridge Atlas' own port returns true
         assert!(proxy_points_to_loopback("http://127.0.0.1:15722"));
         assert!(proxy_points_to_loopback("socks5://localhost:15722"));
         assert!(proxy_points_to_loopback("127.0.0.1:15722"));
 
-        // 其他 loopback 端口不应该被跳过（允许使用其他本地代理工具）
+        // Other loopback ports should not be skipped (allowing use of other local proxy tools)
         assert!(!proxy_points_to_loopback("http://127.0.0.1:7890"));
         assert!(!proxy_points_to_loopback("socks5://localhost:1080"));
 
-        // 非 loopback 地址不应该被跳过
+        // Non-loopback addresses should not be skipped
         assert!(!proxy_points_to_loopback("http://192.168.1.10:7890"));
         assert!(!proxy_points_to_loopback("http://192.168.1.10:15722"));
     }
@@ -361,7 +361,7 @@ mod tests {
     fn test_system_proxy_points_to_loopback() {
         let _guard = env_lock().lock().unwrap();
 
-        // 设置 Copilot Bridge Atlas 代理端口
+        // Setting up the Copilot Bridge Atlas proxy port
         set_proxy_port(15722);
 
         let keys = [
@@ -377,15 +377,15 @@ mod tests {
             std::env::remove_var(key);
         }
 
-        // 指向 Copilot Bridge Atlas 端口的代理应该被跳过
+        // Proxies pointing to Copilot Bridge Atlas ports should be skipped
         std::env::set_var("HTTP_PROXY", "http://127.0.0.1:15722");
         assert!(system_proxy_points_to_loopback());
 
-        // 指向其他端口的本地代理不应该被跳过
+        // Local proxies pointing to other ports should not be skipped
         std::env::set_var("HTTP_PROXY", "http://127.0.0.1:7890");
         assert!(!system_proxy_points_to_loopback());
 
-        // 非 loopback 地址不应该被跳过
+        // Non-loopback addresses should not be skipped
         std::env::set_var("HTTP_PROXY", "http://10.0.0.2:7890");
         assert!(!system_proxy_points_to_loopback());
 

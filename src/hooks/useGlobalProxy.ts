@@ -1,7 +1,7 @@
 /**
- * 全局出站代理 React Hooks
+ * Global outbound proxy React Hooks
  *
- * 提供获取、设置和测试全局代理的 React Query hooks。
+ * Provides React Query hooks for getting, setting, and testing global proxies.
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -17,18 +17,18 @@ import {
 } from "@/lib/api/globalProxy";
 
 /**
- * 获取全局代理 URL
+ * Get global proxy URL
  */
 export function useGlobalProxyUrl() {
   return useQuery({
     queryKey: ["globalProxyUrl"],
     queryFn: getGlobalProxyUrl,
-    staleTime: 30 * 1000, // 30秒内不重新获取，避免展开时闪烁
+    staleTime: 30 * 1000, // Do not reacquire within 30 seconds to avoid flickering when expanding
   });
 }
 
 /**
- * 设置全局代理 URL
+ * Set global proxy URL
  */
 export function useSetGlobalProxyUrl({
   showSuccessToast = true,
@@ -57,7 +57,7 @@ export function useSetGlobalProxyUrl({
 }
 
 /**
- * 测试代理连接
+ * Test proxy connection
  */
 export function useTestProxy() {
   const { t } = useTranslation();
@@ -82,7 +82,7 @@ export function useTestProxy() {
 }
 
 /**
- * 扫描本地代理
+ * Scan for local proxies
  */
 export function useScanProxies() {
   const { t } = useTranslation();

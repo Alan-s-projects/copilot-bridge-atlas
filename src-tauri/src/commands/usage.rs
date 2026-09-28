@@ -1,12 +1,13 @@
-//! 使用统计相关命令
+//! Use statistics related commands
 
+use crate::database::RequestDiagnosticDetail;
 use crate::error::AppError;
 use crate::services::model_pricing::ModelPricingInfo;
 use crate::services::usage_stats::*;
 use crate::store::AppState;
 use tauri::State;
 
-/// 获取使用量汇总
+/// Get usage summary
 #[tauri::command]
 pub fn get_usage_summary(
     state: State<'_, AppState>,
@@ -26,7 +27,7 @@ pub fn get_usage_summary(
     )
 }
 
-/// 获取每日趋势
+/// Get daily trends
 #[tauri::command]
 pub fn get_usage_trends(
     state: State<'_, AppState>,
@@ -48,7 +49,7 @@ pub fn get_usage_trends(
     )
 }
 
-/// 获取模型统计
+/// Get model statistics
 #[tauri::command]
 pub fn get_model_stats(
     state: State<'_, AppState>,
@@ -88,7 +89,7 @@ pub fn get_unpriced_model_usage(
     )
 }
 
-/// 获取请求日志列表
+/// Get request log list
 #[tauri::command]
 pub fn get_request_logs(
     state: State<'_, AppState>,
@@ -100,7 +101,16 @@ pub fn get_request_logs(
     state.db.get_request_logs(&filters, page, page_size)
 }
 
-/// 获取模型定价列表
+/// Read a failed request's bounded headers and bodies only when its details are opened.
+#[tauri::command]
+pub fn get_request_diagnostics(
+    state: State<'_, AppState>,
+    request_id: String,
+) -> Result<Option<RequestDiagnosticDetail>, AppError> {
+    state.db.get_request_diagnostics(&request_id)
+}
+
+/// Get model pricing list
 #[tauri::command]
 pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingInfo>, AppError> {
     state.db.ensure_model_pricing_seeded()?;
@@ -147,7 +157,7 @@ pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingI
     Ok(pricing)
 }
 
-/// 更新模型定价
+/// Update model pricing
 #[tauri::command]
 pub fn update_model_pricing(
     state: State<'_, AppState>,
@@ -174,11 +184,11 @@ pub fn update_model_pricing(
     Ok(())
 }
 
-/// 删除模型定价
+/// Delete model pricing
 #[tauri::command]
 pub fn delete_model_pricing(state: State<'_, AppState>, model_id: String) -> Result<(), AppError> {
     crate::services::model_pricing::delete_model_pricing(&state.db, &model_id)?;
-    log::info!("已删除模型定价: {model_id}");
+    log::info!("Deleted model pricing: {model_id}");
     Ok(())
 }
 

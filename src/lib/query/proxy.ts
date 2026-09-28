@@ -10,10 +10,10 @@ export const proxyKeys = {
   globalConfig: ["globalProxyConfig"] as const,
 };
 
-// ========== 代理服务器状态 Hooks ==========
+// ========== Proxy Server Status Hooks ==========
 
 /**
- * 获取代理服务器状态
+ * Get proxy server status
  */
 export function useProxyStatusQuery() {
   const active = useWindowActive();
@@ -25,15 +25,15 @@ export function useProxyStatusQuery() {
     refetchInterval: (query) =>
       active && query.state.data?.running ? 5000 : false,
     refetchIntervalInBackground: false,
-    // 保持之前的数据，避免闪烁
+    // Keep previous data to avoid flickering
     placeholderData: (previousData) => previousData,
   });
 }
 
-// ========== v3+ 全局/应用级配置 Hooks ==========
+// ========== v3+ Global/Application Level Configuration Hooks ==========
 
 /**
- * 获取全局代理配置
+ * Get global proxy configuration
  */
 export function useGlobalProxyConfig() {
   return useQuery({
@@ -43,7 +43,7 @@ export function useGlobalProxyConfig() {
 }
 
 /**
- * 更新全局代理配置
+ * Update global proxy configuration
  */
 export function useUpdateGlobalProxyConfig({
   showSuccessToast = true,

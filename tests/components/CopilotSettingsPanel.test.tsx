@@ -57,7 +57,13 @@ const provider: Provider = {
       models: [{ model: "gpt-6-astra", inputModalities: ["text", "image"] }],
     },
   },
-  meta: { providerType: "github_copilot", githubAccountId: "account-a" },
+  meta: {
+    providerType: "github_copilot",
+    authBinding: {
+      authProvider: "github_copilot",
+      accountId: "account-a",
+    },
+  },
 };
 
 describe("Copilot provider editing", () => {

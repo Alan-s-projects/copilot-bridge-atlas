@@ -1,7 +1,7 @@
 /**
- * 从各种错误对象中提取错误信息
- * @param error 错误对象
- * @returns 提取的错误信息字符串
+ * Extract error information from various error objects
+ * @param error error object
+ * @returns extracted error message string
  */
 export const extractErrorMessage = (error: unknown): string => {
   if (!error) return "";

@@ -1,74 +1,74 @@
-//! 错误类型到 HTTP 状态码的映射
+//! Mapping of error types to HTTP status codes
 //!
-//! 将 ProxyError 映射到合适的 HTTP 状态码，用于日志记录和手动构建错误响应
+//! Map ProxyError to the appropriate HTTP status code for logging and manually building error responses
 
 use super::ProxyError;
 
-/// 将 ProxyError 映射到 HTTP 状态码
+/// Map ProxyError to HTTP status code
 ///
-/// 映射规则：
-/// - 上游错误：直接使用上游返回的状态码
-/// - 超时：504 Gateway Timeout
-/// - 连接失败：502 Bad Gateway
-/// - 无可用 Provider：503 Service Unavailable
-/// - 认证错误：401 Unauthorized
-/// - 配置/请求错误：400 Bad Request
-/// - 转换错误：422 Unprocessable Entity
-/// - 其他错误：500 Internal Server Error
+/// Mapping rules:
+/// - Upstream error: directly use the status code returned by the upstream
+/// - Timeout: 504 Gateway Timeout
+/// - Connection failed: 502 Bad Gateway
+/// - No Provider available: 503 Service Unavailable
+/// - Authentication error: 401 Unauthorized
+/// - Configuration/Request Error: 400 Bad Request
+/// - Conversion error: 422 Unprocessable Entity
+/// - Other errors: 500 Internal Server Error
 pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
     match error {
-        // 服务状态错误：与 IntoResponse 保持一致
+        // Service status error: consistent with IntoResponse
         ProxyError::AlreadyRunning => 409,
         ProxyError::NotRunning => 503,
 
-        // 上游错误：使用实际状态码
+        // Upstream error: use actual status code
         ProxyError::UpstreamError { status, .. } => *status,
 
-        // 超时错误：504 Gateway Timeout
+        // Timeout error: 504 Gateway Timeout
         ProxyError::Timeout(_) => 504,
 
-        // 转发失败/连接失败：502 Bad Gateway
+        // Forwarding failure/connection failure: 502 Bad Gateway
         ProxyError::ForwardFailed(_) => 502,
         ProxyError::ResponseBodyTooLarge(_) => 502,
         ProxyError::RequestBodyTooLarge(_) => 413,
 
-        // 无可用 Provider：503 Service Unavailable
+        // No Provider available: 503 Service Unavailable
 
-        // 未配置供应商：503 Service Unavailable
+        // No provider configured: 503 Service Unavailable
         ProxyError::NoProvidersConfigured => 503,
 
-        // 配置错误/无效请求：400 Bad Request
+        // Configuration error/invalid request: 400 Bad Request
         ProxyError::ConfigError(_) | ProxyError::InvalidRequest(_) => 400,
 
-        // 认证错误：401 Unauthorized
+        // Authentication error: 401 Unauthorized
         ProxyError::AuthError(_) => 401,
 
-        // 数据库错误：500 Internal Server Error
+        // Database error: 500 Internal Server Error
         ProxyError::DatabaseError(_) => 500,
 
-        // 转换错误：422 Unprocessable Entity
+        // Conversion error: 422 Unprocessable Entity
         ProxyError::TransformError(_) => 422,
 
-        // 其他未知错误：500 Internal Server Error
+        // Other unknown errors: 500 Internal Server Error
         _ => 500,
     }
 }
 
-/// 将 ProxyError 转换为用户友好的错误消息
+/// Convert ProxyError into user-friendly error message
 pub fn get_error_message(error: &ProxyError) -> String {
     match error {
         ProxyError::UpstreamError { status, body } => {
             if let Some(body) = body {
-                format!("上游错误 ({status}): {body}")
+                format!("Upstream error ({status}): {body}")
             } else {
-                format!("上游错误 ({status})")
+                format!("Upstream error ({status})")
             }
         }
-        ProxyError::Timeout(msg) => format!("请求超时: {msg}"),
-        ProxyError::ForwardFailed(msg) => format!("转发失败: {msg}"),
-        ProxyError::NoProvidersConfigured => "未配置供应商".to_string(),
-        ProxyError::DatabaseError(msg) => format!("数据库错误: {msg}"),
-        ProxyError::TransformError(msg) => format!("请求/响应转换错误: {msg}"),
+        ProxyError::Timeout(msg) => format!("Request timeout: {msg}"),
+        ProxyError::ForwardFailed(msg) => format!("Forwarding failed: {msg}"),
+        ProxyError::NoProvidersConfigured => "No provider configured".to_string(),
+        ProxyError::DatabaseError(msg) => format!("Database error: {msg}"),
+        ProxyError::TransformError(msg) => format!("Request/response conversion error: {msg}"),
         _ => error.to_string(),
     }
 }
@@ -139,7 +139,7 @@ mod tests {
             body: Some("Internal Server Error".to_string()),
         };
         let msg = get_error_message(&error);
-        assert!(msg.contains("上游错误"));
+        assert!(msg.contains("Upstream error"));
         assert!(msg.contains("500"));
         assert!(msg.contains("Internal Server Error"));
     }

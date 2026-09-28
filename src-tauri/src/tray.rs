@@ -1,14 +1,11 @@
-use crate::{AppError, AppState};
+use crate::AppError;
 use tauri::menu::{Menu, MenuBuilder};
 use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
 pub const TRAY_ID: &str = "copilot-bridge-atlas";
 
-pub fn create_tray_menu(
-    app: &tauri::AppHandle,
-    _state: &AppState,
-) -> Result<Menu<tauri::Wry>, AppError> {
+pub fn create_tray_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, AppError> {
     MenuBuilder::new(app)
         .text("show_main", "Open Copilot Bridge Atlas")
         .text("open_website", "GitHub repository")

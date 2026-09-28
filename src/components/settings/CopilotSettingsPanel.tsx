@@ -1,7 +1,6 @@
 import { useCallback } from "react";
 import { Loader2 } from "lucide-react";
 import { useProvidersQuery, useUpdateProviderMutation } from "@/lib/query";
-import { providersApi } from "@/lib/api";
 import {
   ProviderForm,
   type ProviderFormValues,
@@ -26,14 +25,6 @@ export function CopilotSettingsPanel() {
           meta: values.meta,
         },
       });
-      try {
-        await providersApi.updateTrayMenu();
-      } catch (error) {
-        console.warn(
-          "[CopilotSettingsPanel] Failed to refresh tray menu",
-          error,
-        );
-      }
     },
     [mutateAsync, provider],
   );

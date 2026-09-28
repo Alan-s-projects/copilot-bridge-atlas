@@ -213,8 +213,6 @@
     "cacheCreationCostPerMillion": "Cache Write Cost (per million tokens, USD)"
   },
   "errors": {
-    "configLoadFailedTitle": "Configuration Load Failed",
-    "configLoadFailedMessage": "Unable to read configuration file:\n{{path}}\n\nError details:\n{{detail}}\n\nPlease check if the JSON is valid, or restore from a backup file (e.g., config.json.bak) in the same directory.\n\nThe app will exit so you can fix this.",
     "frontendCrashTitle": "Something went wrong in the interface",
     "frontendCrashMessage": "An attempt was made to write the error to the application diagnostic log. Reload the interface, and attach the log when opening an issue if the problem continues.",
     "reloadInterface": "Reload interface"

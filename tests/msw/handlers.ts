@@ -58,8 +58,6 @@ export const handlers = [
       listenPort: 15722,
     }),
   ),
-  ...["update_tray_menu", "set_auto_launch"].map((command) =>
-    http.post(`${root}/${command}`, () => success(true)),
-  ),
+  http.post(`${root}/set_auto_launch`, () => success(true)),
   http.post(`${root}/list_db_backups`, () => success([])),
 ];

@@ -3,66 +3,16 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
 // Import internationalization configuration
-import i18n from "./i18n";
+import "./i18n";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "@/components/theme-provider";
 import { queryClient } from "@/lib/query";
 import { Toaster } from "@/components/ui/sonner";
-import { listen } from "@tauri-apps/api/event";
-import { message } from "@tauri-apps/plugin-dialog";
-import { exit } from "@tauri-apps/plugin-process";
 import { FrontendErrorBoundary } from "./components/FrontendErrorBoundary";
-import {
-  installGlobalErrorHandlers,
-  reportFrontendError,
-} from "./lib/frontendLogger";
+import { installGlobalErrorHandlers } from "./lib/frontendLogger";
 import { initializeWindowActivity } from "@/lib/windowActivity";
 
 installGlobalErrorHandlers();
-
-// Configuration loading error payload type
-interface ConfigLoadErrorPayload {
-  path?: string;
-  error?: string;
-}
-
-/**
- * Handle configuration load failure: display error message and force quit app
- * Don't give the user a "cancel" option because the app won't run properly when the configuration is corrupted
- */
-async function handleConfigLoadError(
-  payload: ConfigLoadErrorPayload | null,
-): Promise<void> {
-  const path = payload?.path ?? "~/.copilot-bridge-atlas/config.json";
-  const detail = payload?.error ?? "Unknown error";
-
-  await message(
-    i18n.t("errors.configLoadFailedMessage", {
-      path,
-      detail,
-      defaultValue:
-        "Unable to read configuration file:\n{{path}}\n\nError details:\n{{detail}}\n\nPlease check if the JSON is valid, or restore from a backup file (e.g., config.json.bak) in the same directory.\n\nThe app will exit so you can fix this.",
-    }),
-    {
-      title: i18n.t("errors.configLoadFailedTitle", {
-        defaultValue: "Configuration Load Failed",
-      }),
-      kind: "error",
-    },
-  );
-
-  await exit(1);
-}
-
-// Listen to the configuration loading error event of the backend: only remind the user and force exit, without modifying any configuration files
-try {
-  void listen("configLoadError", async (evt) => {
-    await handleConfigLoadError(evt.payload as ConfigLoadErrorPayload | null);
-  });
-} catch (e) {
-  // Ignore event subscription exceptions (e.g. in non-Tauri environments)
-  reportFrontendError("config_load_error_listener", e);
-}
 
 function bootstrap() {
   initializeWindowActivity();

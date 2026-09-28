@@ -8,7 +8,6 @@ export const providersApi = {
     invoke("get_current_provider", { app: "codex" }),
   update: (provider: Provider): Promise<boolean> =>
     invoke("update_provider", { provider, app: "codex" }),
-  updateTrayMenu: (): Promise<boolean> => invoke("update_tray_menu"),
   onSwitched: (handler: () => void): Promise<UnlistenFn> =>
     listen("provider-switched", handler),
 };

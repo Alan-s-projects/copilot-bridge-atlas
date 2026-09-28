@@ -9,12 +9,10 @@ const api = vi.hoisted(() => ({
   get: vi.fn(),
   save: vi.fn(),
   setAutoLaunch: vi.fn(),
-  updateTrayMenu: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => ({
   settingsApi: api,
-  providersApi: { updateTrayMenu: api.updateTrayMenu },
 }));
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -45,7 +43,6 @@ beforeEach(() => {
     return true;
   });
   api.setAutoLaunch.mockResolvedValue(true);
-  api.updateTrayMenu.mockResolvedValue(undefined);
 });
 
 function createWrapper() {

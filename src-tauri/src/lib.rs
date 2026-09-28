@@ -94,28 +94,6 @@ fn runtime_log_level_allows(level: log::Level) -> bool {
     level <= log::Level::Info
 }
 
-/// Update Tauri command for tray menu
-#[tauri::command]
-async fn update_tray_menu(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-) -> Result<bool, String> {
-    match tray::create_tray_menu(&app, state.inner()) {
-        Ok(new_menu) => {
-            if let Some(tray) = app.tray_by_id(tray::TRAY_ID) {
-                tray.set_menu(Some(new_menu))
-                    .map_err(|e| format!("Failed to update tray menu: {e}"))?;
-                return Ok(true);
-            }
-            Ok(false)
-        }
-        Err(err) => {
-            log::error!("Failed to create tray menu: {err}");
-            Ok(false)
-        }
-    }
-}
-
 pub fn run() {
     panic_hook::setup_panic_hook();
 
@@ -147,7 +125,6 @@ pub fn run() {
                 let _ = window.set_skip_taskbar(true);
             }
         })
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(
@@ -233,8 +210,8 @@ pub fn run() {
                 log::warn!("Copilot model catalog initialization failed: {error}");
             }
 
-            // Create a dynamic tray menu
-            let menu = tray::create_tray_menu(app.handle(), &app_state)?;
+            // The fixed Open / repository / Quit menu is created once.
+            let menu = tray::create_tray_menu(app.handle())?;
 
             // build pallet
             let mut tray_builder = TrayIconBuilder::with_id(tray::TRAY_ID)
@@ -371,7 +348,6 @@ pub fn run() {
             commands::rename_db_backup,
             commands::delete_db_backup,
             commands::import_config_from_file,
-            update_tray_menu,
             commands::set_auto_launch,
             commands::start_proxy_server,
             commands::stop_proxy_server,

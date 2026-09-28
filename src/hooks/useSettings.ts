@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { providersApi, settingsApi } from "@/lib/api";
+import { settingsApi } from "@/lib/api";
 import { useSaveSettingsMutation } from "@/lib/query";
 import type { Settings } from "@/types";
 import { useSettingsForm, type SettingsFormState } from "./useSettingsForm";
@@ -72,12 +72,6 @@ export function useSettings(): UseSettingsResult {
           }
         }
         throw error;
-      }
-
-      try {
-        await providersApi.updateTrayMenu();
-      } catch (error) {
-        console.warn("[useSettings] Failed to refresh tray menu", error);
       }
     },
     [saveMutation, t],

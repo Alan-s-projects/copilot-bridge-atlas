@@ -45,5 +45,42 @@ describe("request input details", () => {
     );
     expect(screen.getByText("(fresh/cached/hit)")).toBeVisible();
     expect(container).toHaveTextContent("0 / 0 / --");
+    expect(screen.getByText("--")).toHaveClass("text-muted-foreground");
+  });
+
+  it.each([
+    [0, "0.0%", "text-red-700", "dark:text-red-400"],
+    [4996, "50.0%", "text-red-700", "dark:text-red-400"],
+    [5000, "50.0%", "text-orange-700", "dark:text-orange-400"],
+    [7996, "80.0%", "text-orange-700", "dark:text-orange-400"],
+    [8000, "80.0%", "text-emerald-700", "dark:text-emerald-400"],
+    [10000, "100.0%", "text-emerald-700", "dark:text-emerald-400"],
+  ])(
+    "colors %i cached tokens using the unrounded rate",
+    (cached, text, light, dark) => {
+      render(
+        <RequestInputValue
+          log={{
+            freshInputTokens: 10000 - cached,
+            cacheReadTokens: cached,
+            cacheCreationTokens: 0,
+          }}
+        />,
+      );
+      expect(screen.getByText(text)).toHaveClass(light, dark);
+    },
+  );
+
+  it("counts cache writes as misses when selecting the color", () => {
+    render(
+      <RequestInputValue
+        log={{
+          freshInputTokens: 0,
+          cacheReadTokens: 400,
+          cacheCreationTokens: 600,
+        }}
+      />,
+    );
+    expect(screen.getByText("40.0%")).toHaveClass("text-red-700");
   });
 });

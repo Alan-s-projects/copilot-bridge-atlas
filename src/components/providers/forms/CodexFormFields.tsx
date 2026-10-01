@@ -13,7 +13,10 @@ import {
   type CopilotModel,
 } from "@/lib/api/copilot";
 import { extractErrorMessage } from "@/utils/errorUtils";
-import { isValidModelId } from "@/utils/codexModelCatalog";
+import {
+  getCopilotModelProtocol,
+  isValidModelId,
+} from "@/utils/codexModelCatalog";
 import type { CodexCatalogModel } from "@/types";
 
 export function isCopilotModelSupportedByCodex(model: CopilotModel): boolean {
@@ -24,17 +27,7 @@ export function isCopilotModelSupportedByCodex(model: CopilotModel): boolean {
     (model.model_type && model.model_type !== "chat")
   )
     return false;
-  const endpoints = [
-    "/responses",
-    "/v1/responses",
-    "/chat/completions",
-    "/v1/chat/completions",
-  ];
-  return (model.supported_endpoints ?? []).some((endpoint) =>
-    endpoints.includes(
-      endpoint.trim().split("?")[0].replace(/\/+$/, "").toLowerCase(),
-    ),
-  );
+  return getCopilotModelProtocol(model.supported_endpoints) !== undefined;
 }
 
 export function resolveCopilotCatalogContextWindow(
@@ -53,6 +46,7 @@ export function mergeCopilotModelCapabilities(
     model: model.id,
     available: true,
     vendor: model.vendor || existing?.vendor,
+    supportedEndpoints: model.supported_endpoints ?? [],
     displayName: model.name || model.id,
     contextWindow: resolveCopilotCatalogContextWindow(
       existing?.contextWindow,
@@ -282,76 +276,72 @@ export function CodexFormFields({
                 })}
           </p>
         )}
-        {sortedCatalogModels.map(({ model, index }) => (
-          <div
-            key={index}
-            className="flex items-center justify-between gap-4 rounded-lg border px-4 py-3"
-          >
-            <div className="min-w-0 flex-1 space-y-1">
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <h4
-                  title={model.model}
-                  className="break-words text-base font-medium"
-                >
-                  {model.displayName?.trim() || model.model}
-                </h4>
-                <span
-                  aria-label="Context window"
-                  title="Context window: input limit / total tokens"
-                  className="text-xs tabular-nums text-muted-foreground"
-                >
-                  Input / total:{" "}
-                  {Number(model.contextWindow) > 0
-                    ? Number(model.contextWindow).toLocaleString()
-                    : "Not reported"}{" "}
-                  / {model.maxContextWindow?.toLocaleString() ?? "Not reported"}
-                </span>
-              </div>
-              <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                <span aria-label="Reasoning levels" className="break-words">
-                  Reasoning:{" "}
-                  {(
-                    model.supportedReasoningLevels ?? model.reasoningLevels
-                  )?.join(", ") || "Not reported"}
-                </span>
-                {model.available === false && (
-                  <p
-                    role="status"
-                    className="text-xs text-amber-600 dark:text-amber-400"
+        {sortedCatalogModels.map(({ model, index }) => {
+          const protocol = getCopilotModelProtocol(model.supportedEndpoints);
+          return (
+            <div
+              key={index}
+              className="flex items-center justify-between gap-4 rounded-lg border px-4 py-3"
+            >
+              <div className="min-w-0 flex-1 space-y-1">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <h4
+                    title={model.model}
+                    className="break-words text-base font-medium"
                   >
-                    Unavailable in the current Copilot catalog
-                  </p>
-                )}
-                <span>
-                  {model.vendor ? `${model.vendor} · ` : ""}
-                  Images:{" "}
-                  {model.inputModalities
-                    ? model.inputModalities.includes("image")
-                      ? "supported"
-                      : "not supported"
-                    : "not reported"}{" "}
-                  · Parallel tools:{" "}
-                  {model.supportsParallelToolCalls === undefined
-                    ? "not reported"
-                    : model.supportsParallelToolCalls
-                      ? "supported"
-                      : "not supported"}
-                </span>
+                    {model.displayName?.trim() || model.model}
+                  </h4>
+                  <span
+                    aria-label="Context window"
+                    title="Context window: input limit / total tokens"
+                    className="text-xs tabular-nums text-muted-foreground"
+                  >
+                    Input / total:{" "}
+                    {Number(model.contextWindow) > 0
+                      ? Number(model.contextWindow).toLocaleString()
+                      : "Not reported"}{" "}
+                    /{" "}
+                    {model.maxContextWindow?.toLocaleString() ?? "Not reported"}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  {protocol && (
+                    <span aria-label="Upstream protocol">
+                      {protocol === "responses"
+                        ? "Responses"
+                        : "Chat Completions"}
+                    </span>
+                  )}
+                  <span aria-label="Reasoning levels" className="break-words">
+                    Reasoning:{" "}
+                    {(
+                      model.supportedReasoningLevels ?? model.reasoningLevels
+                    )?.join(", ") || "Not reported"}
+                  </span>
+                  {model.available === false && (
+                    <p
+                      role="status"
+                      className="text-xs text-amber-600 dark:text-amber-400"
+                    >
+                      Unavailable in the current Copilot catalog
+                    </p>
+                  )}
+                </div>
               </div>
+              <Switch
+                className="shrink-0"
+                checked={model.enabled !== false}
+                disabled={model.available === false}
+                onCheckedChange={(enabled) =>
+                  updateModel(index, { enabled: enabled ? undefined : false })
+                }
+                aria-label={t("codexConfig.modelAvailableInCodex", {
+                  model: model.displayName?.trim() || model.model || index + 1,
+                })}
+              />
             </div>
-            <Switch
-              className="shrink-0"
-              checked={model.enabled !== false}
-              disabled={model.available === false}
-              onCheckedChange={(enabled) =>
-                updateModel(index, { enabled: enabled ? undefined : false })
-              }
-              aria-label={t("codexConfig.modelAvailableInCodex", {
-                model: model.displayName?.trim() || model.model || index + 1,
-              })}
-            />
-          </div>
-        ))}
+          );
+        })}
       </section>
     </div>
   );

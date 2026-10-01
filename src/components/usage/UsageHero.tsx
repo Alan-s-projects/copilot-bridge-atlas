@@ -121,6 +121,11 @@ export function UsageSummaryCard({
                         fresh={input}
                         cached={cacheRead}
                         hit={`${hitPercentLabel}%`}
+                        hitRate={
+                          input + cacheRead + cacheWrite > 0
+                            ? hitPercent / 100
+                            : null
+                        }
                         compact
                       />
                     </dd>

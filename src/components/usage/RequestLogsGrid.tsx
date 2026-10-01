@@ -48,7 +48,8 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
       columns,
       REQUEST_LOG_COLUMNS.filter(
         ({ id }) =>
-          showTokenDetails || !["input", "output", "cacheWrite"].includes(id),
+          showTokenDetails ||
+          !["output", "cacheWrite", "pricingTier"].includes(id),
       ),
     ),
   );
@@ -83,14 +84,14 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
             >
               {t("usage.status", "Status")}
             </TableHead>
+            <TableHead
+              hidden={!visible.has("input")}
+              className="text-center whitespace-nowrap min-w-44"
+            >
+              <InputUsageHeading />
+            </TableHead>
             {showTokenDetails && (
               <>
-                <TableHead
-                  hidden={!visible.has("input")}
-                  className="text-center whitespace-nowrap min-w-44"
-                >
-                  <InputUsageHeading />
-                </TableHead>
                 <TableHead
                   hidden={!visible.has("output")}
                   className="text-center whitespace-nowrap"
@@ -111,12 +112,14 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
             >
               {t("usage.timingInfo", "Duration")}
             </TableHead>
-            <TableHead
-              hidden={!visible.has("pricingTier")}
-              className="text-center whitespace-nowrap"
-            >
-              Pricing Tier
-            </TableHead>
+            {showTokenDetails && (
+              <TableHead
+                hidden={!visible.has("pricingTier")}
+                className="text-center whitespace-nowrap"
+              >
+                Pricing Tier
+              </TableHead>
+            )}
             <TableHead
               hidden={!visible.has("cost")}
               className="text-center whitespace-nowrap"
@@ -214,14 +217,14 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
                       <span className="text-red-600">{log.statusCode}</span>
                     )}
                   </TableCell>
+                  <TableCell
+                    hidden={!visible.has("input")}
+                    className="text-center whitespace-nowrap px-1.5"
+                  >
+                    {pending ? "N/A" : <RequestInputValue log={log} />}
+                  </TableCell>
                   {showTokenDetails && (
                     <>
-                      <TableCell
-                        hidden={!visible.has("input")}
-                        className="text-center whitespace-nowrap px-1.5"
-                      >
-                        {pending ? "N/A" : <RequestInputValue log={log} />}
-                      </TableCell>
                       <TableCell
                         hidden={!visible.has("output")}
                         className="text-center px-1.5"
@@ -251,29 +254,31 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
                   >
                     {pending ? "N/A" : `${(log.latencyMs / 1000).toFixed(1)}s`}
                   </TableCell>
-                  <TableCell
-                    hidden={!visible.has("pricingTier")}
-                    className="text-center whitespace-nowrap px-1.5"
-                  >
-                    <span
-                      className="text-xs"
-                      title={
-                        pending
-                          ? "Request is in progress"
-                          : log.pricingTier
-                            ? "Tier recorded when this request was priced"
-                            : "No pricing tier recorded"
-                      }
+                  {showTokenDetails && (
+                    <TableCell
+                      hidden={!visible.has("pricingTier")}
+                      className="text-center whitespace-nowrap px-1.5"
                     >
-                      {pending
-                        ? "N/A"
-                        : log.pricingTier === "long_context"
-                          ? "Long context"
-                          : log.pricingTier === "default"
-                            ? "Default"
-                            : "--"}
-                    </span>
-                  </TableCell>
+                      <span
+                        className="text-xs"
+                        title={
+                          pending
+                            ? "Request is in progress"
+                            : log.pricingTier
+                              ? "Tier recorded when this request was priced"
+                              : "No pricing tier recorded"
+                        }
+                      >
+                        {pending
+                          ? "N/A"
+                          : log.pricingTier === "long_context"
+                            ? "Long context"
+                            : log.pricingTier === "default"
+                              ? "Default"
+                              : "--"}
+                      </span>
+                    </TableCell>
+                  )}
                   <TableCell
                     hidden={!visible.has("cost")}
                     className="text-center px-1.5"

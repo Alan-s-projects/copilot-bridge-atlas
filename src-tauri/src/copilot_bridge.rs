@@ -143,6 +143,7 @@ fn merge_live_capabilities(
             row["model"] = json!(model.id);
             row["displayName"] = json!(model.name);
             row["vendor"] = json!(model.vendor);
+            row["supportedEndpoints"] = json!(model.supported_endpoints);
             row["supportedReasoningLevels"] =
                 json!(model.reasoning_efforts.as_deref().unwrap_or(&[]));
             if let Some(limit) = model.max_output_tokens {
@@ -184,6 +185,7 @@ fn merge_live_capabilities(
                 "displayName": model.name,
                 "available": true,
                 "vendor": model.vendor,
+                "supportedEndpoints": model.supported_endpoints,
                 "contextWindow": model.context_window,
                 "maxContextWindow": model.max_context_window_tokens,
                 "maxOutputTokens": model.max_output_tokens,
@@ -1077,6 +1079,7 @@ notify = ["unchanged"]
             CopilotModel {
                 id: "gpt-6-astra".into(),
                 context_window: Some(1050000),
+                supported_endpoints: vec!["/responses".into(), "/chat/completions".into()],
                 supports_parallel_tool_calls: Some(true),
                 supports_vision: Some(true),
                 ..Default::default()
@@ -1095,6 +1098,10 @@ notify = ["unchanged"]
         assert_eq!(rows.as_array().unwrap().len(), 3);
         assert_eq!(rows[0]["supportsParallelToolCalls"], true);
         assert_eq!(rows[0]["contextWindow"], 1050000);
+        assert_eq!(
+            rows[0]["supportedEndpoints"],
+            json!(["/responses", "/chat/completions"])
+        );
         assert_eq!(rows[1]["contextWindow"], 872000);
         assert_eq!(rows[1]["inputModalities"], json!(["text", "image"]));
         assert_eq!(rows[1]["reasoningLevels"], json!(["low", "medium", "max"]));

@@ -15,7 +15,7 @@ import {
   formatTokensShort,
 } from "./format";
 import { InputUsageHeading, InputUsageValue } from "./InputUsage";
-import type { UsageRangeSelection } from "@/types/usage";
+import { getReadCacheHitRate, type UsageRangeSelection } from "@/types/usage";
 import { MODEL_STATS_COLUMNS, visibleColumns } from "./tableColumns";
 
 interface ModelStatsTableProps {
@@ -94,61 +94,68 @@ export function ModelStatsTable({
               </TableCell>
             </TableRow>
           ) : (
-            stats?.map((stat) => (
-              <TableRow key={stat.model}>
-                <TableCell
-                  hidden={!visible.has("model")}
-                  className="font-mono text-sm"
-                >
-                  {stat.model}
-                </TableCell>
-                <TableCell
-                  hidden={!visible.has("requests")}
-                  className="text-right"
-                >
-                  {stat.requestCount.toLocaleString()}
-                </TableCell>
-                <TableCell
-                  hidden={!visible.has("input")}
-                  className="text-right"
-                >
-                  <InputUsageValue
-                    compact
-                    compactDecimals={1}
-                    fresh={stat.totalInputTokens}
-                    cached={stat.totalCacheReadTokens}
-                    hit={formatReadCacheHitRate({
-                      freshInputTokens: stat.totalInputTokens,
-                      cacheReadTokens: stat.totalCacheReadTokens,
-                      cacheCreationTokens: stat.totalCacheCreationTokens,
-                    })}
-                  />
-                </TableCell>
-                <TableCell
-                  hidden={!visible.has("output")}
-                  className="text-right tabular-nums"
-                  title={fmtInt(stat.totalOutputTokens)}
-                >
-                  {formatTokensShort(stat.totalOutputTokens, 1)}
-                </TableCell>
-                <TableCell
-                  hidden={!visible.has("cacheWrite")}
-                  className="text-right tabular-nums"
-                  title={fmtInt(stat.totalCacheCreationTokens)}
-                >
-                  {formatTokensShort(stat.totalCacheCreationTokens, 1)}
-                </TableCell>
-                <TableCell hidden={!visible.has("cost")} className="text-right">
-                  {fmtUsd(stat.totalCost, 4)}
-                </TableCell>
-                <TableCell
-                  hidden={!visible.has("averageCost")}
-                  className="text-right"
-                >
-                  {fmtUsd(stat.avgCostPerRequest, 6)}
-                </TableCell>
-              </TableRow>
-            ))
+            stats?.map((stat) => {
+              const inputUsage = {
+                freshInputTokens: stat.totalInputTokens,
+                cacheReadTokens: stat.totalCacheReadTokens,
+                cacheCreationTokens: stat.totalCacheCreationTokens,
+              };
+              return (
+                <TableRow key={stat.model}>
+                  <TableCell
+                    hidden={!visible.has("model")}
+                    className="font-mono text-sm"
+                  >
+                    {stat.model}
+                  </TableCell>
+                  <TableCell
+                    hidden={!visible.has("requests")}
+                    className="text-right"
+                  >
+                    {stat.requestCount.toLocaleString()}
+                  </TableCell>
+                  <TableCell
+                    hidden={!visible.has("input")}
+                    className="text-right"
+                  >
+                    <InputUsageValue
+                      compact
+                      compactDecimals={1}
+                      fresh={stat.totalInputTokens}
+                      cached={stat.totalCacheReadTokens}
+                      hit={formatReadCacheHitRate(inputUsage)}
+                      hitRate={getReadCacheHitRate(inputUsage)}
+                    />
+                  </TableCell>
+                  <TableCell
+                    hidden={!visible.has("output")}
+                    className="text-right tabular-nums"
+                    title={fmtInt(stat.totalOutputTokens)}
+                  >
+                    {formatTokensShort(stat.totalOutputTokens, 1)}
+                  </TableCell>
+                  <TableCell
+                    hidden={!visible.has("cacheWrite")}
+                    className="text-right tabular-nums"
+                    title={fmtInt(stat.totalCacheCreationTokens)}
+                  >
+                    {formatTokensShort(stat.totalCacheCreationTokens, 1)}
+                  </TableCell>
+                  <TableCell
+                    hidden={!visible.has("cost")}
+                    className="text-right"
+                  >
+                    {fmtUsd(stat.totalCost, 4)}
+                  </TableCell>
+                  <TableCell
+                    hidden={!visible.has("averageCost")}
+                    className="text-right"
+                  >
+                    {fmtUsd(stat.avgCostPerRequest, 6)}
+                  </TableCell>
+                </TableRow>
+              );
+            })
           )}
         </TableBody>
       </Table>

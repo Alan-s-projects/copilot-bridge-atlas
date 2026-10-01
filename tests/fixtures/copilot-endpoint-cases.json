@@ -25,6 +25,16 @@
     "formats": ["auto", "openai_responses", "openai_chat"]
   },
   {
+    "name": "Responses surrounding whitespace",
+    "endpoints": [" /responses "],
+    "formats": ["auto", "openai_responses"]
+  },
+  {
+    "name": "Chat surrounding whitespace",
+    "endpoints": [" /chat/completions/ "],
+    "formats": ["auto", "openai_chat"]
+  },
+  {
     "name": "Responses case, trailing slash and query",
     "endpoints": ["/V1/RESPONSES/?preview=1"],
     "formats": ["auto", "openai_responses"]

@@ -90,6 +90,8 @@ const snapshot = {
         latencyMs: 180,
         inputTokens: 0,
         freshInputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
         outputTokens: 0,
         totalCostUsd: "0",
       },
@@ -164,16 +166,19 @@ describe("read-only bridge overview", () => {
     expect(within(table).getByText("gpt-6-astra")).toBeVisible();
     const headings = within(table).getAllByRole("columnheader");
     expect(headings[1]).toHaveTextContent("Billing Model");
-    expect(headings[5]).toHaveTextContent("Pricing Tier");
+    expect(headings[4]).toHaveTextContent("Input(fresh/cached/hit)");
+    expect(headings[5]).toHaveTextContent("Duration");
     expect(headings[2]).toHaveTextContent("Reasoning(requested/applied)");
     const rows = within(table).getAllByRole("row");
-    expect(within(rows[1]).getAllByRole("cell")[5]).toHaveTextContent(
-      "Long context",
+    expect(within(rows[1]).getAllByRole("cell")[4]).toHaveTextContent(
+      "300 / 600 / 60.0%",
     );
     expect(within(rows[1]).getAllByRole("cell")[2]).toHaveTextContent(
       "ultra / max",
     );
-    expect(within(rows[2]).getAllByRole("cell")[5]).toHaveTextContent("--");
+    expect(within(rows[2]).getAllByRole("cell")[4]).toHaveTextContent(
+      "0 / 0 / --",
+    );
     expect(within(rows[2]).getAllByRole("cell")[2]).toHaveTextContent(
       "\u2014 / \u2014",
     );
@@ -183,14 +188,14 @@ describe("read-only bridge overview", () => {
     expect(firstCells[3]).toHaveTextContent("200");
     expect(firstCells[6]).toHaveTextContent("$0.0100");
     expect(within(table).getByText("2.5s")).toBeVisible();
-    expect(firstCells[4]).toHaveTextContent(/^2\.5s$/);
+    expect(firstCells[5]).toHaveTextContent(/^2\.5s$/);
     expect(headings.map((heading) => heading.textContent)).toEqual([
       "Time",
       "Billing Model",
       "Reasoning(requested/applied)",
       "Status",
+      "Input(fresh/cached/hit)",
       "Duration",
-      "Pricing Tier",
       "Cost",
     ]);
     expect(mocks.logs).toHaveBeenCalledWith({ appType: "codex" }, 0, 5);

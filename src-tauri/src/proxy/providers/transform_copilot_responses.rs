@@ -1,4 +1,5 @@
 //! Adapt Codex-only tools to the function-only Responses dialect exposed by xAI.
+use super::codex_chat_common::validate_replayable_history;
 use super::codex_responses_sse as sse;
 use super::transform_codex_chat::{
     build_codex_tool_context_from_request, response_tool_call_item_from_chat_name,
@@ -18,6 +19,7 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 
 pub(crate) fn adapt_request(body: &mut Value) -> Result<(), ProxyError> {
+    validate_replayable_history(body.get("input"))?;
     let context = build_codex_tool_context_from_request(body);
     let tools: Vec<_> = context
         .chat_tools()
@@ -77,16 +79,22 @@ pub(crate) fn adapt_request(body: &mut Value) -> Result<(), ProxyError> {
             match kind {
                 Some("additional_tools" | "reasoning") => continue,
                 Some("agent_message") => converted.push(agent_message_to_responses_message(item)?),
-                Some("compaction" | "item_reference") => return Err(ProxyError::InvalidRequest(
-                    "This model cannot replay an opaque item from another model. Start a new chat or switch back to the previous model.".into())),
                 Some("custom_tool_call_output" | "tool_search_output") => {
-                    converted.push(json!({"type":"function_call_output", "call_id":item["call_id"],
-                        "output": serde_json::to_string(item).unwrap_or_default()}));
+                    converted.push(
+                        json!({"type":"function_call_output", "call_id":item["call_id"],
+                        "output": serde_json::to_string(item).unwrap_or_default()}),
+                    );
                 }
                 _ => {
                     let mut item = item.clone();
                     if let Some(object) = item.as_object_mut() {
-                        for key in ["id", "phase", "status", "encrypted_content", "reasoning_content"] {
+                        for key in [
+                            "id",
+                            "phase",
+                            "status",
+                            "encrypted_content",
+                            "reasoning_content",
+                        ] {
                             object.remove(key);
                         }
                     }
@@ -489,11 +497,20 @@ mod tests {
 
     #[test]
     fn opaque_compaction_is_not_silently_discarded() {
-        let mut body = json!({"input":[{"type":"compaction","encrypted_content":"opaque"}]});
-        assert!(matches!(
-            adapt_request(&mut body),
-            Err(ProxyError::InvalidRequest(_))
-        ));
+        for item in [
+            json!({"type":"compaction","encrypted_content":"opaque"}),
+            json!({"type":"item_reference","id":"opaque_reference"}),
+        ] {
+            for input in [item.clone(), json!([item])] {
+                let mut body = json!({"tools":[], "tool_choice":"auto", "input":input});
+                let original = body.clone();
+                assert!(matches!(
+                    adapt_request(&mut body),
+                    Err(ProxyError::InvalidRequest(_))
+                ));
+                assert_eq!(body, original, "reject before changing the request");
+            }
+        }
     }
 
     #[tokio::test]

@@ -3,6 +3,21 @@ import type { CodexCatalogModel } from "@/types";
 export const isValidModelId = (model: string): boolean =>
   model.trim().length > 0 && !/[\s\u0000-\u001f\u007f]/u.test(model.trim());
 
+export function getCopilotModelProtocol(
+  endpoints: readonly string[] = [],
+): "responses" | "chat_completions" | undefined {
+  const paths = new Set(
+    endpoints.map((endpoint) =>
+      endpoint.trim().split("?")[0].replace(/\/+$/, "").toLowerCase(),
+    ),
+  );
+  // Match the backend router's preference when both protocols are advertised.
+  if (paths.has("/responses") || paths.has("/v1/responses")) return "responses";
+  if (paths.has("/chat/completions") || paths.has("/v1/chat/completions"))
+    return "chat_completions";
+  return undefined;
+}
+
 export const mapCodexCatalogModelForForm = (item: any): CodexCatalogModel => {
   // Preserve saved capabilities and reasoning preferences through load/save.
   // Accept both saved camelCase fields and catalog snake_case fields.
@@ -47,6 +62,14 @@ export const mapCodexCatalogModelForForm = (item: any): CodexCatalogModel => {
       ? { available: item.available }
       : {}),
     ...(typeof item?.vendor === "string" ? { vendor: item.vendor } : {}),
+    ...(Array.isArray(item?.supportedEndpoints)
+      ? {
+          supportedEndpoints: item.supportedEndpoints.filter(
+            (endpoint: unknown): endpoint is string =>
+              typeof endpoint === "string",
+          ),
+        }
+      : {}),
     ...(maxContextWindow !== undefined ? { maxContextWindow } : {}),
     ...(typeof item?.maxOutputTokens === "number"
       ? { maxOutputTokens: item.maxOutputTokens }

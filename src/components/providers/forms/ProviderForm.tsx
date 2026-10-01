@@ -53,6 +53,9 @@ export const normalizeCodexCatalogModelsForSave = (
         ? { available: item.available }
         : {}),
       ...(item.vendor ? { vendor: item.vendor } : {}),
+      ...(item.supportedEndpoints
+        ? { supportedEndpoints: item.supportedEndpoints }
+        : {}),
       ...(item.maxOutputTokens
         ? { maxOutputTokens: item.maxOutputTokens }
         : {}),

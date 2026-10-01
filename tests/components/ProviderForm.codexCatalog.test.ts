@@ -3,6 +3,16 @@ import { normalizeCodexCatalogModelsForSave } from "@/components/providers/forms
 import { mapCodexCatalogModelForForm } from "@/utils/codexModelCatalog";
 
 describe("ProviderForm Codex catalog helpers", () => {
+  it("retains advertised protocols through catalog load and save", () => {
+    const saved = {
+      model: "future-model",
+      supportedEndpoints: ["/chat/completions", "/responses"],
+    };
+    expect(
+      normalizeCodexCatalogModelsForSave([mapCodexCatalogModelForForm(saved)]),
+    ).toEqual([saved]);
+  });
+
   it.each(["maxContextWindow", "max_context_window"])(
     "preserves the total context limit through load and save from %s",
     (key) => {

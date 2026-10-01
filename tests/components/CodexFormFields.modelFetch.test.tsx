@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
@@ -165,6 +166,22 @@ describe("Copilot model catalog import", () => {
     for (const id of ["gemini-future", "grok-future", "future-vendor/model"]) {
       expect(screen.getByRole("heading", { name: id })).toBeVisible();
     }
+    const gemini = screen.getByRole("heading", { name: "gemini-future" })
+      .parentElement!.parentElement!;
+    const details = within(gemini);
+    const protocol = details.getByLabelText("Upstream protocol");
+    const reasoning = details.getByLabelText("Reasoning levels");
+    expect(protocol).toHaveTextContent("Chat Completions");
+    expect(protocol.nextElementSibling).toBe(reasoning);
+    expect(protocol.parentElement).toHaveClass(
+      "text-xs",
+      "text-muted-foreground",
+    );
+    expect(protocol).not.toHaveAttribute("class");
+    expect(screen.getAllByText("Responses")).toHaveLength(3);
+    expect(screen.queryByText(/Images:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Parallel tools:/)).not.toBeInTheDocument();
+    expect(screen.queryByText("OpenAI")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "unsupported-transport" }),
     ).not.toBeInTheDocument();

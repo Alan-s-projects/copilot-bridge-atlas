@@ -1,5 +1,28 @@
 use serde_json::{json, Map, Value};
 
+/// Function-only adapters cannot replay opaque native Responses history.
+/// Check only top-level input items: tool results may contain arbitrary JSON.
+pub(crate) fn validate_replayable_history(
+    input: Option<&Value>,
+) -> Result<(), crate::proxy::error::ProxyError> {
+    let items = match input {
+        Some(Value::Array(items)) => items.as_slice(),
+        Some(item @ Value::Object(_)) => std::slice::from_ref(item),
+        _ => return Ok(()),
+    };
+    if items.iter().any(|item| {
+        matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("compaction" | "item_reference")
+        )
+    }) {
+        return Err(crate::proxy::error::ProxyError::InvalidRequest(
+            "This model cannot replay opaque compaction or unresolved history references. Start a new chat or switch back to the model that created this history.".into(),
+        ));
+    }
+    Ok(())
+}
+
 // Exhaust possible reasoning return fields from upstream, priority: reasoning_content > reasoning(string/object) > reasoning_details.
 // It does not rely on the outputFormat declaration of provider meta, so it can fully extract all Chat compatible interfaces.
 pub(crate) fn extract_reasoning_field_text(value: &Value) -> Option<String> {

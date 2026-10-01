@@ -6,6 +6,7 @@ import {
 } from "@/components/providers/forms/CodexFormFields";
 import type { CopilotModel } from "@/lib/api/copilot";
 import endpointCases from "../fixtures/copilot-endpoint-cases.json";
+import { getCopilotModelProtocol } from "@/utils/codexModelCatalog";
 
 function model(supportedEndpoints?: string[]): CopilotModel {
   return {
@@ -23,6 +24,13 @@ describe("Codex Copilot capabilities", () => {
     ({ endpoints, formats }) => {
       expect(isCopilotModelSupportedByCodex(model(endpoints))).toBe(
         formats.includes("auto"),
+      );
+      expect(getCopilotModelProtocol(endpoints)).toBe(
+        formats.includes("openai_responses")
+          ? "responses"
+          : formats.includes("openai_chat")
+            ? "chat_completions"
+            : undefined,
       );
     },
   );
@@ -58,6 +66,7 @@ describe("Codex Copilot capabilities", () => {
     const refreshed = mergeCopilotModelCapabilities(live, saved);
     expect(refreshed).toMatchObject({
       contextWindow: 872_000,
+      supportedEndpoints: ["/responses"],
       supportsParallelToolCalls: true,
       inputModalities: ["text", "image"],
       reasoningLevels: live.reasoning_efforts,

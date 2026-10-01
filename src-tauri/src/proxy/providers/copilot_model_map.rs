@@ -64,10 +64,10 @@ pub fn resolve_model(client_id: &str, models: &[CopilotModel]) -> Option<Resolve
 fn transport_for(model: &CopilotModel) -> Option<CopilotTransport> {
     let supported = |expected: &[&str]| {
         model.supported_endpoints.iter().find_map(|endpoint| {
+            let endpoint = endpoint.trim();
             let path = endpoint
-                .trim()
                 .split_once('?')
-                .map_or(endpoint.as_str(), |(path, _)| path)
+                .map_or(endpoint, |(path, _)| path)
                 .trim_end_matches('/');
             expected
                 .iter()
@@ -166,6 +166,37 @@ mod tests {
             ],
         );
         assert_eq!(transport_for(&model).unwrap().endpoint, "/V1/RESPONSES");
+    }
+
+    #[test]
+    fn protocol_selection_matches_the_renderer_contract() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/copilot-endpoint-cases.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            let endpoints: Vec<_> = case["endpoints"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|endpoint| endpoint.as_str().unwrap())
+                .collect();
+            let formats = case["formats"].as_array().unwrap();
+            let expected = if formats.iter().any(|format| format == "openai_responses") {
+                Some(CopilotProtocol::Responses)
+            } else if formats.iter().any(|format| format == "openai_chat") {
+                Some(CopilotProtocol::Chat)
+            } else {
+                None
+            };
+            assert_eq!(
+                transport_for(&model("future-model", &endpoints))
+                    .map(|transport| transport.protocol),
+                expected,
+                "{}",
+                case["name"]
+            );
+        }
     }
 
     #[test]

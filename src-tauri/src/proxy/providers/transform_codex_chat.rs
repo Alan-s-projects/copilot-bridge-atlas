@@ -7,6 +7,7 @@
 use super::codex_chat_common::{
     append_reasoning_content, extract_reasoning_field_text, extract_reasoning_summary_text,
     response_function_call_item, response_function_call_item_with_namespace,
+    validate_replayable_history,
 };
 use super::copilot_model_map::is_grok_model;
 use super::tool_integer_repair::repair_integer_arguments;
@@ -354,6 +355,7 @@ pub(crate) fn build_codex_tool_context_from_request(body: &Value) -> CodexToolCo
 /// Convert an OpenAI Responses request into an OpenAI Chat Completions request,
 /// preserving the requested GPT reasoning effort.
 pub fn responses_to_chat_completions(body: Value) -> Result<Value, ProxyError> {
+    validate_replayable_history(body.get("input"))?;
     let mut result = json!({});
     let tool_context = build_codex_tool_context_from_request(&body);
 
@@ -375,7 +377,8 @@ pub fn responses_to_chat_completions(body: Value) -> Result<Value, ProxyError> {
     if let Some(input) = body.get("input") {
         append_responses_input_as_chat_messages(input, &mut messages, &tool_context)?;
     }
-    let messages = collapse_system_messages_to_head(messages);
+    // Later instructions belong at their original turn boundary. Hoisting them
+    // into the first system message rewrites previously sent context.
     result["messages"] = json!(messages);
 
     if let Some(max_tokens) = body.get("max_output_tokens") {
@@ -451,35 +454,6 @@ pub(crate) fn inject_openai_stream_include_usage(result: &mut Value) {
             result["stream_options"] = json!({ "include_usage": true });
         }
     }
-}
-
-// Keep instruction normalization stable for existing GPT Chat requests.
-fn collapse_system_messages_to_head(messages: Vec<Value>) -> Vec<Value> {
-    let mut system_chunks: Vec<String> = Vec::new();
-    let mut rest: Vec<Value> = Vec::with_capacity(messages.len());
-
-    for msg in messages {
-        if msg.get("role").and_then(|v| v.as_str()) == Some("system") {
-            if let Some(text) = msg.get("content").and_then(|v| v.as_str()) {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    system_chunks.push(text.to_string());
-                }
-                continue;
-            }
-        }
-        rest.push(msg);
-    }
-
-    let mut out: Vec<Value> = Vec::with_capacity(rest.len() + 1);
-    if !system_chunks.is_empty() {
-        out.push(json!({
-            "role": "system",
-            "content": system_chunks.join("\n\n")
-        }));
-    }
-    out.extend(rest);
-    out
 }
 
 fn instruction_text(value: &Value) -> String {
@@ -2903,7 +2877,7 @@ mod tests {
     }
 
     #[test]
-    fn responses_request_to_chat_merges_mid_stream_system_into_head() {
+    fn responses_request_to_chat_preserves_instruction_chronology() {
         let input = json!({
             "model": "gpt-5.4",
             "instructions": "You are Codex.",
@@ -2920,22 +2894,24 @@ mod tests {
         let result = responses_to_chat_completions(input).unwrap();
         let messages = result["messages"].as_array().unwrap();
 
-        for (idx, msg) in messages.iter().enumerate() {
-            let role = msg.get("role").and_then(|v| v.as_str()).unwrap();
-            if idx == 0 {
-                assert_eq!(role, "system", "first message must be system");
-            } else {
-                assert_ne!(
-                    role, "system",
-                    "no system role allowed past index 0 (got at {idx})"
-                );
-            }
-        }
-
-        let head_content = messages[0]["content"].as_str().unwrap();
-        assert!(head_content.contains("You are Codex."));
-        assert!(head_content.contains("Permissions block"));
-        assert!(head_content.contains("Collaboration Mode: Default"));
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| (
+                    message["role"].as_str().unwrap(),
+                    message["content"].as_str().unwrap()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("system", "You are Codex."),
+                ("system", "Permissions block"),
+                ("user", "AGENTS.md"),
+                ("user", "Hello"),
+                ("system", "Collaboration Mode: Default"),
+                ("user", "Hello"),
+                ("user", "Hello"),
+            ]
+        );
     }
 
     #[test]
@@ -5165,22 +5141,73 @@ mod tests {
         assert_eq!(result["tools"][0]["function"]["name"], "search_docs");
     }
     #[test]
-    fn collapse_system_messages_preserves_non_system_order() {
-        let input = vec![
-            json!({"role": "system", "content": "S1"}),
-            json!({"role": "user", "content": "U1"}),
-            json!({"role": "assistant", "content": "A1"}),
-            json!({"role": "system", "content": "S2"}),
-            json!({"role": "user", "content": "U2"}),
-        ];
-        let out = collapse_system_messages_to_head(input);
+    fn appended_instructions_preserve_the_chat_prefix_and_tool_history() {
+        let mut request = json!({
+            "model": "gemini-3.8-flash",
+            "instructions": "Stable base instructions.",
+            "tools": [{"type":"function", "name":"read", "parameters":{"type":"object"}}],
+            "input": [
+                {"role":"user", "content":"Read the file."},
+                {"type":"function_call", "call_id":"call_read", "name":"read", "arguments":"{}"},
+                {"type":"function_call_output", "call_id":"call_read", "output":"Retain this fact."},
+                {"role":"assistant", "content":"I have read it."}
+            ]
+        });
+        let before = responses_to_chat_completions(request.clone()).unwrap();
+        request["input"].as_array_mut().unwrap().extend([
+            json!({"role":"developer", "content":"Collaboration Mode: Plan"}),
+            json!({"role":"user", "content":"Continue using the earlier result."}),
+        ]);
+        let after = responses_to_chat_completions(request).unwrap();
+        let prefix = before["messages"].as_array().unwrap();
+        let messages = after["messages"].as_array().unwrap();
+        assert_eq!(&messages[..prefix.len()], prefix);
+        assert_eq!(after["tools"], before["tools"]);
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call_read");
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["content"], "Retain this fact.");
+        assert_eq!(
+            messages[prefix.len()]["content"],
+            "Collaboration Mode: Plan"
+        );
+    }
 
-        assert_eq!(out.len(), 4);
-        assert_eq!(out[0]["role"], "system");
-        assert_eq!(out[0]["content"], "S1\n\nS2");
-        assert_eq!(out[1]["content"], "U1");
-        assert_eq!(out[2]["content"], "A1");
-        assert_eq!(out[3]["content"], "U2");
+    #[test]
+    fn chat_rejects_opaque_history_instead_of_dropping_it() {
+        for item in [
+            json!({"type":"compaction", "encrypted_content":"opaque"}),
+            json!({"type":"item_reference", "id":"opaque_reference"}),
+        ] {
+            for input in [
+                item.clone(),
+                json!([item, {"role":"user", "content":"Continue"}]),
+            ] {
+                let error = responses_to_chat_completions(json!({
+                    "model":"gemini-3.8-flash", "input":input
+                }))
+                .unwrap_err();
+                assert!(matches!(error, ProxyError::InvalidRequest(_)));
+                assert!(error.to_string().contains("Start a new chat"));
+            }
+        }
+    }
+
+    #[test]
+    fn chat_keeps_text_compaction_and_opaque_shaped_tool_results() {
+        let result = responses_to_chat_completions(json!({
+            "input":[
+                {"role":"user", "content":"Summary: keep this fact."},
+                {"type":"function_call", "call_id":"call_read", "name":"read", "arguments":"{}"},
+                {"type":"function_call_output", "call_id":"call_read",
+                 "output":{"type":"compaction", "encrypted_content":"application data"}}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(result["messages"][0]["content"], "Summary: keep this fact.");
+        assert!(result["messages"][2]["content"]
+            .as_str()
+            .unwrap()
+            .contains("application data"));
     }
 
     #[test]

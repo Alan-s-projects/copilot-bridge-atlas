@@ -136,7 +136,7 @@ describe("Usage summary", () => {
       "text-2xl",
     );
     expect(within(tokenDetails).getByText("72.7%")).toHaveClass(
-      "text-emerald-700",
+      "text-orange-700",
     );
     expect(within(requestDetails).getByText("91.7%")).toHaveClass(
       "text-emerald-700",

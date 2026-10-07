@@ -127,17 +127,13 @@ fn merge_live_capabilities(
         .pointer_mut("/modelCatalog/models")
         .and_then(Value::as_array_mut)
     {
-        for row in rows.iter_mut() {
-            if !row.is_object() {
-                continue;
-            }
+        rows.retain_mut(|row| {
             let Some(model) = row
                 .get("model")
                 .and_then(Value::as_str)
-                .and_then(|id| models.iter().find(|m| m.id.eq_ignore_ascii_case(id)))
+                .and_then(|id| models.iter().find(|m| m.id.eq_ignore_ascii_case(id.trim())))
             else {
-                row["available"] = json!(false);
-                continue;
+                return false;
             };
             row["available"] = json!(true);
             row["model"] = json!(model.id);
@@ -170,7 +166,8 @@ fn merge_live_capabilities(
             if let Some(object) = row.as_object_mut() {
                 object.remove("defaultReasoningLevel");
             }
-        }
+            true
+        });
         let known: std::collections::HashSet<_> = rows
             .iter()
             .filter_map(|row| row.get("model").and_then(Value::as_str))
@@ -1095,7 +1092,7 @@ notify = ["unchanged"]
         ];
         assert!(merge_live_capabilities(&mut provider, &models));
         let rows = &provider.settings_config["modelCatalog"]["models"];
-        assert_eq!(rows.as_array().unwrap().len(), 3);
+        assert_eq!(rows.as_array().unwrap().len(), 2);
         assert_eq!(rows[0]["supportsParallelToolCalls"], true);
         assert_eq!(rows[0]["contextWindow"], 1050000);
         assert_eq!(
@@ -1107,10 +1104,6 @@ notify = ["unchanged"]
         assert_eq!(rows[1]["reasoningLevels"], json!(["low", "medium", "max"]));
         assert!(rows[1].get("defaultReasoningLevel").is_none());
         assert_eq!(
-            rows[2],
-            json!({"model": "custom-alias", "inputModalities": ["text"], "available": false})
-        );
-        assert_eq!(
             provider.settings_config["config"],
             "keep the stored template"
         );
@@ -1118,7 +1111,7 @@ notify = ["unchanged"]
     }
 
     #[test]
-    fn refresh_discovers_future_models_and_preserves_unavailable_and_disabled_rows() {
+    fn refresh_removes_missing_models_and_imports_returning_models_as_new() {
         use crate::proxy::providers::copilot_auth::CopilotModel;
         use serde_json::json;
         let mut provider = Provider::with_id(
@@ -1126,9 +1119,9 @@ notify = ["unchanged"]
             "Copilot".into(),
             json!({
                 "modelCatalog": {"models": [
-                    {"model":"grok-old", "enabled":false, "reasoningLevels":["high"]},
+                    {"model":"grok-old", "enabled":false, "reasoningLevels":["high"], "baseInstructions":"old preference"},
                     null,
-                    {"model":"gemini-returning", "available":false}
+                    {"model":"gemini-returning", "enabled":false, "available":false}
                 ]}
             }),
         );
@@ -1148,15 +1141,27 @@ notify = ["unchanged"]
         ];
         assert!(merge_live_capabilities(&mut provider, &models));
         let rows = &provider.settings_config["modelCatalog"]["models"];
-        assert_eq!(rows.as_array().unwrap().len(), 4);
+        assert_eq!(rows.as_array().unwrap().len(), 2);
+        assert_eq!(rows[0]["model"], "gemini-returning");
         assert_eq!(rows[0]["enabled"], false);
-        assert_eq!(rows[0]["available"], false);
-        assert_eq!(rows[0]["reasoningLevels"], json!(["high"]));
-        assert!(rows[1].is_null());
-        assert_eq!(rows[2]["available"], true);
-        assert_eq!(rows[3]["model"], "new-vendor/agent");
-        assert_ne!(rows[3]["enabled"], false);
-        assert_eq!(rows[3]["maxOutputTokens"], 4096);
+        assert_eq!(rows[0]["available"], true);
+        assert_eq!(rows[1]["model"], "new-vendor/agent");
+        assert_ne!(rows[1]["enabled"], false);
+        assert_eq!(rows[1]["maxOutputTokens"], 4096);
+        assert!(!merge_live_capabilities(&mut provider, &models));
+
+        let mut models = models.to_vec();
+        models.push(CopilotModel {
+            id: "grok-old".into(),
+            reasoning_efforts: Some(vec!["low".into()]),
+            ..Default::default()
+        });
+        assert!(merge_live_capabilities(&mut provider, &models));
+        let returned = &provider.settings_config["modelCatalog"]["models"][2];
+        assert_eq!(returned["model"], "grok-old");
+        assert!(returned.get("enabled").is_none());
+        assert!(returned.get("baseInstructions").is_none());
+        assert_eq!(returned["reasoningLevels"], json!(["low"]));
         assert!(!merge_live_capabilities(&mut provider, &models));
     }
 
@@ -1256,14 +1261,17 @@ notify = ["unchanged"]
             initialize(&state).unwrap();
             let id = current(&db).unwrap();
             let mut provider = db.get_provider_by_id(&id, "codex").unwrap().unwrap();
-            provider.settings_config["modelCatalog"] = json!({"models": [{
-                "model": "GPT-6-LUNA",
-                "contextWindow": 1000000,
-                "supportsParallelToolCalls": false,
-                "inputModalities": ["text"],
-                "reasoningLevels": ["low", "high", "ultra"],
-                "defaultReasoningLevel": "ultra"
-            }]});
+            provider.settings_config["modelCatalog"] = json!({"models": [
+                {
+                    "model": "GPT-6-LUNA",
+                    "contextWindow": 1000000,
+                    "supportsParallelToolCalls": false,
+                    "inputModalities": ["text"],
+                    "reasoningLevels": ["low", "high", "ultra"],
+                    "defaultReasoningLevel": "ultra"
+                },
+                {"model": "removed-model"}
+            ]});
             save(&db, &provider).unwrap();
             id
         };
@@ -1296,6 +1304,13 @@ notify = ["unchanged"]
                 .get_provider_by_id(&provider_id, "codex")
                 .unwrap()
                 .unwrap();
+            assert_eq!(
+                saved.settings_config["modelCatalog"]["models"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
             let row = &saved.settings_config["modelCatalog"]["models"][0];
             assert_eq!(row["reasoningLevels"], json!(["low", "medium", "high"]));
             assert!(row.get("defaultReasoningLevel").is_none());
@@ -1306,7 +1321,9 @@ notify = ["unchanged"]
             assert!(catalog_path().starts_with(fixture._dir.path().join(".copilot-bridge-atlas")));
             let catalog: Value =
                 serde_json::from_str(&std::fs::read_to_string(catalog_path()).unwrap()).unwrap();
+            assert_eq!(catalog["models"].as_array().unwrap().len(), 1);
             let entry = &catalog["models"][0];
+            assert_eq!(entry["slug"], "gpt-6-luna");
             let levels = entry["supported_reasoning_levels"]
                 .as_array()
                 .unwrap()
@@ -1316,6 +1333,22 @@ notify = ["unchanged"]
             assert_eq!(levels, ["low", "medium", "high"]);
             assert_eq!(entry["default_reasoning_level"], "medium");
         }
+        let db = Database::init().unwrap();
+        let mut provider = db
+            .get_provider_by_id(&provider_id, "codex")
+            .unwrap()
+            .unwrap();
+        assert!(merge_live_capabilities(&mut provider, &[]));
+        save(&db, &provider).unwrap();
+        assert_eq!(
+            db.get_provider_by_id(&provider_id, "codex")
+                .unwrap()
+                .unwrap()
+                .settings_config["modelCatalog"]["models"],
+            json!([])
+        );
+        assert!(!catalog_path().exists());
+        assert!(!merge_live_capabilities(&mut provider, &[]));
         for (name, contents) in files {
             assert_eq!(
                 std::fs::read_to_string(client_dir.join(name)).unwrap(),

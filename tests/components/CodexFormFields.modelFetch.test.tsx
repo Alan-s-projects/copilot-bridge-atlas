@@ -327,10 +327,13 @@ describe("Copilot model catalog import", () => {
     const failure = new Error("offline");
     vi.mocked(copilotGetModelsForAccount).mockRejectedValue(failure);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    render(<Harness {...props()} />);
+    const input = props({ catalogModels: [{ model: "saved-model" }] });
+    render(<Harness {...input} />);
     fireEvent.click(fetchButton());
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("offline"));
     await waitFor(() => expect(fetchButton()).not.toBeDisabled());
+    expect(screen.getByRole("heading", { name: "saved-model" })).toBeVisible();
+    expect(input.onCatalogModelsChange).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 
@@ -379,13 +382,18 @@ describe("Copilot model catalog import", () => {
     expect(copilotGetModels).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves missing models and disabled choices across catalog refreshes", async () => {
+  it("removes missing models and imports them as new when they return", async () => {
     vi.mocked(copilotGetModelsForAccount).mockResolvedValue([
       model("gemini-new", "/chat/completions"),
     ]);
     const input = props({
       catalogModels: [
-        { model: "grok-returning", enabled: false, reasoningLevels: ["high"] },
+        {
+          model: "grok-returning",
+          enabled: false,
+          reasoningLevels: ["high"],
+          baseInstructions: "old preference",
+        },
       ],
     });
     render(<Harness {...input} />);
@@ -393,18 +401,10 @@ describe("Copilot model catalog import", () => {
     await waitFor(() => expect(input.onCatalogModelsChange).toHaveBeenCalled());
     expect(input.onCatalogModelsChange).toHaveBeenLastCalledWith([
       expect.objectContaining({ model: "gemini-new", available: true }),
-      expect.objectContaining({
-        model: "grok-returning",
-        enabled: false,
-        available: false,
-        reasoningLevels: ["high"],
-      }),
     ]);
     expect(
-      screen.getAllByRole("switch", {
-        name: /codexConfig.modelAvailableInCodex/,
-      })[1],
-    ).toBeDisabled();
+      screen.queryByRole("heading", { name: "grok-returning" }),
+    ).not.toBeInTheDocument();
     vi.mocked(copilotGetModelsForAccount).mockResolvedValue([
       model("gemini-new", "/chat/completions"),
       model("grok-returning"),
@@ -421,18 +421,34 @@ describe("Copilot model catalog import", () => {
       screen.getAllByRole("switch", {
         name: /codexConfig.modelAvailableInCodex/,
       })[1],
-    ).not.toBeChecked();
+    ).toBeChecked();
+    const returned = vi
+      .mocked(input.onCatalogModelsChange)
+      .mock.lastCall![0].find((entry) => entry.model === "grok-returning")!;
+    expect(returned).not.toHaveProperty("enabled");
+    expect(returned).not.toHaveProperty("baseInstructions");
+    expect(returned.reasoningLevels).toEqual([]);
   });
 
-  it("marks saved models unavailable when a successful refresh returns no eligible models", async () => {
-    vi.mocked(copilotGetModelsForAccount).mockResolvedValue([]);
-    const input = props({ catalogModels: [{ model: "future-model" }] });
-    render(<Harness {...input} />);
-    fireEvent.click(fetchButton());
-    await waitFor(() =>
-      expect(input.onCatalogModelsChange).toHaveBeenCalledWith([
-        { model: "future-model", available: false },
-      ]),
-    );
-  });
+  it.each([
+    { name: "empty", models: [] },
+    { name: "unsupported", models: [model("unsupported", "/messages")] },
+  ])(
+    "clears saved models when a successful $name catalog has no eligible models",
+    async ({ models }) => {
+      vi.mocked(copilotGetModelsForAccount).mockResolvedValue(models);
+      const input = props({ catalogModels: [{ model: "future-model" }] });
+      render(<Harness {...input} />);
+      fireEvent.click(fetchButton());
+      await waitFor(() =>
+        expect(input.onCatalogModelsChange).toHaveBeenCalledWith([]),
+      );
+      expect(
+        screen.queryByRole("heading", { name: "future-model" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent(
+        /No models are in this catalog yet/,
+      );
+    },
+  );
 });

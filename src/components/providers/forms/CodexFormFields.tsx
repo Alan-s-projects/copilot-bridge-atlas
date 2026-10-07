@@ -133,33 +133,20 @@ export function CodexFormFields({
         catalogModels.map((model) => [model.model.trim().toLowerCase(), model]),
       );
       const usable = models.filter(isCopilotModelSupportedByCodex);
-      if (!usable.length) {
-        onCatalogModelsChange(
-          catalogModels.map((model) => ({ ...model, available: false })),
-        );
-        toast.error(
-          "No compatible chat models are available to this Copilot account.",
-        );
-        return;
-      }
-      const availableIds = new Set(
-        usable.map((model) => model.id.trim().toLowerCase()),
-      );
-      onCatalogModelsChange([
-        ...usable.map((model) =>
+      onCatalogModelsChange(
+        usable.map((model) =>
           mergeCopilotModelCapabilities(
             model,
             existing.get(model.id.trim().toLowerCase()),
           ),
         ),
-        ...catalogModels
-          .filter(
-            (model) =>
-              isValidModelId(model.model) &&
-              !availableIds.has(model.model.trim().toLowerCase()),
-          )
-          .map((model) => ({ ...model, available: false })),
-      ]);
+      );
+      if (!usable.length) {
+        toast.error(
+          "No compatible chat models are available to this Copilot account.",
+        );
+        return;
+      }
       toast.success(`Loaded ${usable.length} Copilot models.`);
     } catch (error) {
       if (sequence === fetchSequence.current)

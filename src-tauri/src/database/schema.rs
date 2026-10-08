@@ -101,37 +101,45 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
         }
     }
 
-    pub fn ensure_model_pricing_seeded(&self) -> Result<(), AppError> {
+    /// Insert missing bundled prices and return their IDs for cost backfill.
+    pub fn ensure_model_pricing_seeded(&self) -> Result<Vec<String>, AppError> {
         let conn = lock_conn!(self.conn);
         Self::ensure_model_pricing_seeded_on_conn(&conn)
     }
 
-    pub(crate) fn ensure_model_pricing_seeded_on_conn(conn: &Connection) -> Result<(), AppError> {
+    pub(crate) fn ensure_model_pricing_seeded_on_conn(
+        conn: &Connection,
+    ) -> Result<Vec<String>, AppError> {
         let tiers = Self::bundled_long_context_prices()?;
+        let mut seeded = Vec::new();
         // Fill missing estimates without overwriting custom prices.
         for [id, name, input, output, cache_read, cache_creation] in Self::bundled_model_prices()? {
-            conn.execute(
-                "INSERT OR IGNORE INTO model_pricing (model_id, display_name,
+            let inserted = conn
+                .execute(
+                    "INSERT OR IGNORE INTO model_pricing (model_id, display_name,
                  input_cost_per_million, output_cost_per_million,
                  cache_read_cost_per_million, cache_creation_cost_per_million, long_context)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                rusqlite::params![
-                    id,
-                    name,
-                    input,
-                    output,
-                    cache_read,
-                    cache_creation,
-                    tiers
-                        .get(&id)
-                        .map(serde_json::to_string)
-                        .transpose()
-                        .map_err(|e| AppError::Config(e.to_string()))?
-                ],
-            )
-            .map_err(|error| AppError::Database(error.to_string()))?;
+                    rusqlite::params![
+                        id,
+                        name,
+                        input,
+                        output,
+                        cache_read,
+                        cache_creation,
+                        tiers
+                            .get(&id)
+                            .map(serde_json::to_string)
+                            .transpose()
+                            .map_err(|e| AppError::Config(e.to_string()))?
+                    ],
+                )
+                .map_err(|error| AppError::Database(error.to_string()))?;
+            if inserted > 0 {
+                seeded.push(id);
+            }
         }
-        Ok(())
+        Ok(seeded)
     }
 
     pub(crate) fn bundled_model_prices() -> Result<Vec<[String; 6]>, AppError> {

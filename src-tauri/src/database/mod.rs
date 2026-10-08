@@ -71,8 +71,10 @@ impl Database {
         if let Err(e) = db.ensure_incremental_auto_vacuum() {
             log::warn!("Failed to ensure incremental auto-vacuum: {e}");
         }
-        db.ensure_model_pricing_seeded()?;
-        if let Err(e) = crate::services::model_pricing::sync_local_model_pricing(&db) {
+        let seeded_models = db.ensure_model_pricing_seeded()?;
+        if let Err(e) =
+            crate::services::model_pricing::sync_seeded_model_pricing(&db, &seeded_models)
+        {
             log::warn!("Failed to sync local model pricing file: {e}");
         }
 

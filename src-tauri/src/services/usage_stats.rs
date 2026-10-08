@@ -1623,7 +1623,7 @@ mod tests {
         let db = Database::memory()?;
         let conn = lock_conn!(db.conn);
         let tiers = Database::bundled_long_context_prices()?;
-        assert_eq!(tiers.len(), 11);
+        assert_eq!(tiers.len(), 12);
         for (model, tier) in tiers {
             let base = find_model_pricing_row(&conn, &model)?.unwrap();
             for total in [tier.threshold_input_tokens - 1, tier.threshold_input_tokens] {
@@ -1654,6 +1654,10 @@ mod tests {
         assert_eq!(
             find_model_pricing_for_input(&conn, "gemini-3.8-flash", 1_000_000)?,
             find_model_pricing_row(&conn, "gemini-3.8-flash")?,
+        );
+        assert_eq!(
+            find_model_pricing_for_input(&conn, "gpt-6.1-sol", 272001)?,
+            Some(("4".into(), "15".into(), "0.20".into(), "5".into())),
         );
         Ok(())
     }
@@ -1804,6 +1808,12 @@ mod tests {
         let db = Database::memory()?;
         let cases = [
             (
+                "gpt-6.1-sol",
+                "codex",
+                3_000_000,
+                ["4.000000", "15.000000", "0.200000", "5.000000", "24.200000"],
+            ),
+            (
                 "OpenAI/GPT-6-SOL@HIGH",
                 "codex",
                 3_000_000,
@@ -1841,7 +1851,7 @@ mod tests {
             // Simulate an existing database with unpriced usage before the update.
             conn.execute(
                 "DELETE FROM model_pricing WHERE model_id IN
-                 ('gpt-6-sol', 'gpt-6-luna', 'gpt-5.3-codex',
+                 ('gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.3-codex',
                   'gpt-5.4-nano', 'gpt-5-mini')",
                 [],
             )?;

@@ -13,6 +13,7 @@
     ["gpt-6-astra", "GPT-6 Astra", "10", "50", "1", "12.50"],
     ["gpt-6-luna", "GPT-6 Luna", "0.10", "0.50", "0.01", "0.125"],
     ["gpt-6-sol", "GPT-6 Sol", "2", "10", "0.20", "2.50"],
+    ["gpt-6.1-sol", "GPT-6.1 Sol", "2", "10", "0.10", "2.50"],
     ["claude-haiku-4.5", "Claude Haiku 4.5", "1", "5", "0.10", "1.25"],
     ["claude-sonnet-4", "Claude Sonnet 4", "3", "15", "0.30", "3.75"],
     ["claude-sonnet-4.6", "Claude Sonnet 4.6", "3", "15", "0.30", "3.75"],
@@ -44,6 +45,7 @@
     "gpt-6-astra": {"thresholdInputTokens": 272000, "inputCostPerMillion": "20", "outputCostPerMillion": "75", "cacheReadCostPerMillion": "2", "cacheCreationCostPerMillion": "25"},
     "gpt-6-luna": {"thresholdInputTokens": 272000, "inputCostPerMillion": "0.20", "outputCostPerMillion": "0.75", "cacheReadCostPerMillion": "0.02", "cacheCreationCostPerMillion": "0.25"},
     "gpt-6-sol": {"thresholdInputTokens": 272000, "inputCostPerMillion": "4", "outputCostPerMillion": "15", "cacheReadCostPerMillion": "0.40", "cacheCreationCostPerMillion": "5"},
+    "gpt-6.1-sol": {"thresholdInputTokens": 272000, "inputCostPerMillion": "4", "outputCostPerMillion": "15", "cacheReadCostPerMillion": "0.20", "cacheCreationCostPerMillion": "5"},
     "grok-4.5": {"thresholdInputTokens": 200000, "inputCostPerMillion": "4", "outputCostPerMillion": "12", "cacheReadCostPerMillion": "1", "cacheCreationCostPerMillion": "0"},
     "grok-4.6": {"thresholdInputTokens": 200000, "inputCostPerMillion": "4", "outputCostPerMillion": "12", "cacheReadCostPerMillion": "1", "cacheCreationCostPerMillion": "0"},
     "grok-4.7": {"thresholdInputTokens": 200000, "inputCostPerMillion": "4", "outputCostPerMillion": "12", "cacheReadCostPerMillion": "1", "cacheCreationCostPerMillion": "0"}
@@ -51,6 +53,7 @@
   "source": {
     "url": "https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing",
     "retrievedOn": "2026-09-27",
+    "modelVerifiedOn": {"gpt-6.1-sol": "2026-10-08"},
     "geminiFlashPromotionEndsOn": "2026-12-31"
   },
   "unit": "USD per 1 million tokens"

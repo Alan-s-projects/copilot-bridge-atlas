@@ -1,8 +1,9 @@
 # GitHub Copilot Pricing
 
-Atlas bundles the 33 model/mode entries listed in GitHub's
+Atlas bundles 34 model/mode entries from GitHub's
 [Models and pricing](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing)
-table, verified September 27, 2026. No unrelated vendor models are seeded.
+table. The initial 33 entries were verified September 27, 2026; GPT-6.1 Sol
+was added using the rates verified October 8, 2026.
 The snapshot is compiled from `src-tauri/src/resources/model-pricing.json`;
 Atlas does not fetch or scrape pricing at runtime.
 
@@ -12,9 +13,10 @@ request-based billing. GitHub defines one AI credit as USD 0.01.
 
 ## Long Context
 
-The `longContext` map records all 11 published long-context tiers:
+The `longContext` map records 12 published long-context tiers:
 
-- 272,000 input tokens: GPT-5.4, GPT-5.5, GPT-5.6 Sol/Terra, GPT-6 Astra/Luna/Sol.
+- 272,000 input tokens: GPT-5.4, GPT-5.5, GPT-5.6 Sol/Terra, GPT-6 Astra/Luna/Sol,
+  and GPT-6.1 Sol.
 - 200,000 input tokens: GPT-5.6 Luna and Grok 4.5/4.6/4.7.
 
 The higher tier applies **strictly above** the threshold, to the entire request,
@@ -41,9 +43,25 @@ and deletion tombstones apply to the current installation. Reset to defaults
 clears overrides and tombstones and restores the bundled entries and tiers.
 Recorded request costs are not repriced.
 
+When a new bundled price is inserted at startup or when loading Cost Pricing,
+Atlas applies local overrides and deletions first, then fills missing costs in
+retained request logs. Requests with a recorded price tier or positive cost
+remain unchanged. Daily rollups cannot be repriced once their individual
+requests have been pruned.
+
 Models absent from the price list remain usable and are reported as unpriced.
 Lookup does not borrow a price from a different model. Existing GPT date and
 reasoning aliases still resolve to their explicitly priced base model.
+
+## GPT-6.1 Sol
+
+GPT-6.1 Sol has its own entry; its cached-input price is not inherited from
+GPT-6 Sol. Rates are USD per one million tokens:
+
+| Total input per request | Fresh input | Output | Cached input | Cache write |
+| --- | ---: | ---: | ---: | ---: |
+| Up to 272,000 tokens | $2.00 | $10.00 | $0.10 | $2.50 |
+| Above 272,000 tokens | $4.00 | $15.00 | $0.20 | $5.00 |
 
 ## Snapshot Limits
 

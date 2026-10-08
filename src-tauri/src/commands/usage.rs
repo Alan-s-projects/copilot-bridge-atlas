@@ -113,8 +113,8 @@ pub fn get_request_diagnostics(
 /// Get model pricing list
 #[tauri::command]
 pub fn get_model_pricing(state: State<'_, AppState>) -> Result<Vec<ModelPricingInfo>, AppError> {
-    state.db.ensure_model_pricing_seeded()?;
-    crate::services::model_pricing::sync_local_model_pricing(&state.db)?;
+    let seeded_models = state.db.ensure_model_pricing_seeded()?;
+    crate::services::model_pricing::sync_seeded_model_pricing(&state.db, &seeded_models)?;
 
     let db = state.db.clone();
     let conn = crate::database::lock_conn!(db.conn);

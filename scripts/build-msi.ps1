@@ -42,6 +42,7 @@ try {
     if (-not (Test-Path -LiteralPath $builtMsi -PathType Leaf)) {
         throw "Expected installer is missing: $builtMsi"
     }
+    & (Join-Path $PSScriptRoot 'check-msi-shortcuts.ps1') -Path $builtMsi
     $releaseDir = Join-Path $atlasRoot 'release'
     New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
     $installerName = "Copilot-Bridge-Atlas-$atlasVersion-Windows-x64.msi"

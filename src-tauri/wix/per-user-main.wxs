@@ -66,8 +66,9 @@
 
     <DirectoryRef Id="ApplicationProgramsFolder">
       <Component Id="StartMenuShortcut" Guid="*" Win64="yes">
+        <!-- Use the target executable's icon; MSI-cached icons disappear on upgrade. -->
         <Shortcut Id="ApplicationStartMenuShortcut" Name="{{product_name}}"
-                  Description="Runs {{product_name}}" Target="[!Path]" Icon="ProductIcon"
+                  Description="Runs {{product_name}}" Target="[!Path]"
                   WorkingDirectory="INSTALLDIR">
           <ShortcutProperty Key="System.AppUserModel.ID" Value="{{bundle_id}}"/>
         </Shortcut>
@@ -81,7 +82,7 @@
     <DirectoryRef Id="DesktopFolder">
       <Component Id="DesktopShortcut" Guid="*" Win64="yes">
         <Shortcut Id="ApplicationDesktopShortcut" Name="{{product_name}}"
-                  Description="Runs {{product_name}}" Target="[!Path]" Icon="ProductIcon"
+                  Description="Runs {{product_name}}" Target="[!Path]"
                   WorkingDirectory="INSTALLDIR">
           <ShortcutProperty Key="System.AppUserModel.ID" Value="{{bundle_id}}"/>
         </Shortcut>

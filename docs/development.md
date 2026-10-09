@@ -23,6 +23,14 @@ In Usage → Request Logs, failed status codes open a centered detail dialog. Fa
 - **Connect:** configuration detection, comparison, copying, and a context-window option.
 - **Settings:** appearance/startup, outbound networking, GitHub authentication, unified model catalog, local backups, and About.
 
+The application checks for a newer stable Atlas release on startup. Settings in
+the main navigation and About in the Settings sidebar show compact **1** badges
+when an update is available. Both badges and About's existing release banner use
+the same result. Opening About or viewing the release does not dismiss the
+notice. Current versions show neither badges nor a banner. Checks are cached for
+five minutes and can refresh when the window regains focus; a failed initial
+check leaves the rest of the application usable without an update notice.
+
 Home usage updates are coalesced from request events instead of idle SQL polling. Status and quota polling pause while the window is inactive. Close the window to keep the bridge in the tray; use **Quit** to exit.
 
 The application log is always enabled at Info level and rotates locally. Each

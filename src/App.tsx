@@ -9,9 +9,11 @@ import {
 import { useProvidersQuery } from "@/lib/query";
 import { providersApi } from "@/lib/api";
 import { useProxyStatus } from "@/hooks/useProxyStatus";
+import { useAvailableRelease } from "@/hooks/useAvailableRelease";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { CopilotCard } from "@/components/providers/CopilotCard";
 import { SettingsPage } from "@/components/settings/SettingsPage";
+import { ReleaseUpdateBadge } from "@/components/settings/ReleaseUpdateBadge";
 import { UsagePage } from "@/components/usage/UsagePage";
 import { BridgeOverview } from "@/components/overview/BridgeOverview";
 import { BridgeWarnings } from "@/components/overview/BridgeWarnings";
@@ -32,6 +34,7 @@ const navigation = [
 export default function App() {
   const [view, setView] = useState<View>("provider");
   const { status } = useProxyStatus();
+  const { data: availableReleaseVersion } = useAvailableRelease();
   const { data, isLoading, refetch } = useProvidersQuery();
   const provider =
     data?.providers[data.currentProviderId] ??
@@ -90,6 +93,9 @@ export default function App() {
             >
               <Icon aria-hidden className="h-4 w-4" />
               {label}
+              {target === "settings" && availableReleaseVersion && (
+                <ReleaseUpdateBadge selected={view === target} />
+              )}
             </Button>
           ))}
         </nav>
@@ -99,7 +105,7 @@ export default function App() {
         className={`flex min-h-0 min-w-0 flex-1 flex-col ${view === "setup" || view === "settings" ? "overflow-hidden" : "overflow-y-auto"}`}
       >
         {view === "settings" ? (
-          <SettingsPage />
+          <SettingsPage availableReleaseVersion={availableReleaseVersion} />
         ) : view === "setup" ? (
           <CodexSetupSuggestion />
         ) : view === "usage" ? (

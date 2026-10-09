@@ -123,6 +123,26 @@ beforeEach(() => {
 });
 
 describe("SettingsPage", () => {
+  it("keeps the About update badge across section changes and clears it with the shared result", () => {
+    const { rerender } = render(
+      <SettingsPage availableReleaseVersion="6.0.6" />,
+    );
+    const about = screen.getByRole("button", {
+      name: "About 1 update available",
+    });
+    const badge = within(about).getByLabelText("1 update available");
+    expect(badge).toHaveClass("ml-auto", "bg-emerald-500/10");
+    fireEvent.click(about);
+    expect(badge).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Models" }));
+    expect(badge).toBeVisible();
+    rerender(<SettingsPage availableReleaseVersion={null} />);
+    expect(
+      screen.queryByLabelText("1 update available"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "About" })).toBeVisible();
+  });
+
   it("scrolls only content and resets its position when the section changes", () => {
     render(<SettingsPage />);
     const content = screen.getByRole("region", { name: "Settings content" });

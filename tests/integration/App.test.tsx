@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -6,11 +7,12 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "@/App";
 import { createTestQueryClient } from "../utils/testQueryClient";
 const mocks = vi.hoisted(() => ({
   autoSaveSettings: vi.fn().mockResolvedValue(true),
+  getAvailableReleaseVersion: vi.fn(),
   providers: vi.fn(() => ({
     data: {
       providers: {
@@ -28,6 +30,9 @@ vi.mock("@/lib/query", () => ({
 vi.mock("@/lib/api", () => ({
   providersApi: {
     onSwitched: vi.fn().mockResolvedValue(() => {}),
+  },
+  settingsApi: {
+    getAvailableReleaseVersion: mocks.getAvailableReleaseVersion,
   },
 }));
 vi.mock("@/hooks/useProxyStatus", () => ({
@@ -57,7 +62,18 @@ vi.mock("@/components/proxy/ProxyToggle", () => ({
   ),
 }));
 vi.mock("@/components/settings/SettingsPage", () => ({
-  SettingsPage: () => <div data-testid="settings-page">settings</div>,
+  SettingsPage: ({
+    availableReleaseVersion,
+  }: {
+    availableReleaseVersion?: string | null;
+  }) => (
+    <div
+      data-testid="settings-page"
+      data-available-release={availableReleaseVersion ?? ""}
+    >
+      settings
+    </div>
+  ),
 }));
 vi.mock("@/components/usage/UsageDashboard", () => ({
   UsageDashboard: ({
@@ -84,13 +100,77 @@ vi.mock("@/components/providers/CodexSetupSuggestion", () => ({
   ),
 }));
 function renderApp() {
-  return render(
-    <QueryClientProvider client={createTestQueryClient()}>
+  const client = createTestQueryClient();
+  const result = render(
+    <QueryClientProvider client={client}>
       <App />
     </QueryClientProvider>,
   );
+  return { ...result, client };
 }
+beforeEach(() => {
+  mocks.getAvailableReleaseVersion.mockReset().mockResolvedValue(null);
+});
 describe("Atlas application scope", () => {
+  it("shows the update badge before Settings opens and keeps it across navigation", async () => {
+    mocks.getAvailableReleaseVersion.mockResolvedValue("6.0.6");
+    renderApp();
+    const settings = await screen.findByRole("button", {
+      name: "Settings 1 update available",
+    });
+    const badge = within(settings).getByLabelText("1 update available");
+    expect(badge).toHaveTextContent("1");
+    expect(badge).toHaveClass("bg-emerald-500/10");
+    expect(screen.getByTestId("bridge-overview")).toBeVisible();
+    fireEvent.click(settings);
+    expect(screen.getByTestId("settings-page")).toHaveAttribute(
+      "data-available-release",
+      "6.0.6",
+    );
+    expect(badge).toHaveClass("bg-white", "text-blue-600");
+    fireEvent.click(screen.getByRole("button", { name: "Overview" }));
+    expect(badge).toBeVisible();
+    expect(badge).toHaveClass("bg-emerald-500/10");
+    expect(mocks.getAvailableReleaseVersion).toHaveBeenCalledOnce();
+  });
+
+  it("clears the badge and shared release result when a fresh check reports no update", async () => {
+    mocks.getAvailableReleaseVersion.mockResolvedValue("6.0.6");
+    const { client } = renderApp();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Settings 1 update available",
+      }),
+    );
+    mocks.getAvailableReleaseVersion.mockResolvedValue(null);
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["available-release"] });
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText("1 update available"),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByTestId("settings-page")).toHaveAttribute(
+      "data-available-release",
+      "",
+    );
+    expect(screen.getByRole("button", { name: "Settings" })).toBeVisible();
+  });
+
+  it("leaves navigation usable when the release check fails", async () => {
+    mocks.getAvailableReleaseVersion.mockRejectedValue(new Error("offline"));
+    renderApp();
+    await waitFor(() =>
+      expect(mocks.getAvailableReleaseVersion).toHaveBeenCalledOnce(),
+    );
+    expect(
+      screen.queryByLabelText("1 update available"),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByTestId("settings-page")).toBeVisible();
+  });
+
   it("opens the Copilot overview", () => {
     renderApp();
     expect(screen.getByText("GitHub Copilot")).toBeVisible();

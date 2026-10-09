@@ -69,6 +69,12 @@ tool-result data remain supported; native Responses forwarding is unchanged.
 
 The app uses its own installer identity, settings, logs, startup entry, and WebView profile. Atlas 6 creates its database in `%USERPROFILE%\.copilot-bridge-atlas` with its own application ID and schema version 1. Its backups can be restored through Settings → Backup & Restore.
 
+Start-menu and desktop shortcuts use the installed executable's embedded icon.
+They retain the application ID used by the running process, so taskbar pins do
+not depend on a previous MSI product's icon cache. Existing pins created by
+earlier installers can be repaired by unpinning Atlas and pinning it again from
+the updated Start-menu shortcut.
+
 ## Develop and release
 
 Requires Windows x64, Node.js, pnpm, the pinned Rust toolchain, Visual Studio C++ Build Tools, and WebView2.
@@ -99,6 +105,6 @@ Malformed saved provider JSON is reported instead of being replaced with empty
 settings. Protocol adapters and message-ID repairs remain necessary for existing
 Codex conversations and Copilot's supported transports.
 
-The local build writes the MSI and SHA256 file to `release/`. A reviewed PR targets `atlas` and includes matching versions in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, plus `docs/releases/<version>.md`. The Atlas Release workflow builds and checks each PR on Windows. After squash merge, push an `atlas-<version>` tag pointing to the merged commit. The workflow verifies that the tag is on `atlas` and matches the package version, then builds the MSI, verifies its SHA256 file, and publishes both assets with the checked-in release notes. The description begins with the pipeline run, UTC time, branch, and commit. No manual upload is needed. Remove temporary PR branches after merge.
+The local build checks the packaged shortcut targets, icon sources, and application IDs before writing the MSI and SHA256 file to `release/`. Run `scripts/check-msi-shortcuts.ps1 -Path <installer.msi>` to check an existing installer. A reviewed PR targets `atlas` and includes matching versions in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, plus `docs/releases/<version>.md`. The Atlas Release workflow builds and checks each PR on Windows. After squash merge, push an `atlas-<version>` tag pointing to the merged commit. The workflow verifies that the tag is on `atlas` and matches the package version, then builds the MSI, verifies its SHA256 file, and publishes both assets with the checked-in release notes. The description begins with the pipeline run, UTC time, branch, and commit. No manual upload is needed. Remove temporary PR branches after merge.
 
 [MIT license and copyright notice](../LICENSE).

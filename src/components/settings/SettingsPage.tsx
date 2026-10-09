@@ -20,6 +20,7 @@ import { ThemeSettings } from "@/components/settings/ThemeSettings";
 import { WindowSettings } from "@/components/settings/WindowSettings";
 import { BackupListSection } from "@/components/settings/BackupListSection";
 import { AboutSection } from "@/components/settings/AboutSection";
+import { ReleaseUpdateBadge } from "@/components/settings/ReleaseUpdateBadge";
 import { ProxyTabContent } from "@/components/settings/ProxyTabContent";
 import { AuthCenterPanel } from "@/components/settings/AuthCenterPanel";
 import { CopilotSettingsPanel } from "@/components/settings/CopilotSettingsPanel";
@@ -27,7 +28,11 @@ import { useSettings } from "@/hooks/useSettings";
 import { useTranslation } from "react-i18next";
 import type { SettingsFormState } from "@/hooks/useSettings";
 
-export function SettingsPage() {
+export function SettingsPage({
+  availableReleaseVersion,
+}: {
+  availableReleaseVersion?: string | null;
+}) {
   const { t } = useTranslation();
   const { settings, isLoading, isSaving, autoSaveSettings } = useSettings();
 
@@ -114,6 +119,9 @@ export function SettingsPage() {
               >
                 <Icon aria-hidden className="h-4 w-4 shrink-0" />
                 {label}
+                {value === "about" && availableReleaseVersion && (
+                  <ReleaseUpdateBadge className="ml-auto" />
+                )}
               </TabsTrigger>
             ))}
           </TabsList>
@@ -164,7 +172,9 @@ export function SettingsPage() {
               </TabsContent>
 
               <TabsContent value="about" className="mt-0 space-y-6 pb-4">
-                <AboutSection />
+                <AboutSection
+                  availableReleaseVersion={availableReleaseVersion}
+                />
                 {settings ? (
                   <motion.div
                     initial={{ opacity: 0, y: 10 }}

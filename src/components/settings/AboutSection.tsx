@@ -10,6 +10,10 @@ export function AboutSection({
   availableReleaseVersion?: string | null;
 }) {
   const [version, setVersion] = useState("");
+  const releasePackage =
+    import.meta.env.TAURI_ENV_PLATFORM === "darwin"
+      ? "macOS Intel DMG"
+      : "Windows MSI";
 
   useEffect(() => {
     let mounted = true;
@@ -38,7 +42,7 @@ export function AboutSection({
             <h2 className="font-semibold">New release available</h2>
             <p className="text-sm text-emerald-900/80 dark:text-emerald-100/80">
               Atlas {availableReleaseVersion} is available. View the release and
-              download the Windows MSI.
+              download the {releasePackage}.
             </p>
           </div>
           <Button

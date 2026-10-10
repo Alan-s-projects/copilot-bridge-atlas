@@ -30,6 +30,7 @@ use tauri::RunEvent;
 use tauri::{Emitter, Manager};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
+#[cfg(target_os = "windows")]
 fn set_windows_app_user_model_id(app: &tauri::AppHandle) {
     let app_id = app.config().identifier.clone();
     let wide_app_id: Vec<u16> = app_id.encode_utf16().chain(std::iter::once(0)).collect();
@@ -173,6 +174,7 @@ pub fn run() {
                 log::info!("=== Copilot Bridge Atlas v{} started ===", env!("CARGO_PKG_VERSION"));
             }
 
+            #[cfg(target_os = "windows")]
             set_windows_app_user_model_id(app.handle());
 
             // Inject AppHandle into usage_events so that no AppHandle holds the log path
@@ -317,7 +319,7 @@ pub fn run() {
 
             });
 
-            // The Windows window is shown after its first page finishes loading.
+            // Show the window after its first page finishes loading.
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_decorations(true);
             }
@@ -387,6 +389,14 @@ pub fn run() {
         .expect("error while running tauri application");
 
     app.run(|app_handle, event| {
+        #[cfg(target_os = "macos")]
+        if matches!(&event, RunEvent::Reopen { .. }) {
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
         if let RunEvent::ExitRequested { api, code, .. } = &event {
             match classify_exit_request(*code) {
                 ExitRequestAction::StayInTray => {

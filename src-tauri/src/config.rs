@@ -239,12 +239,31 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
         }
     }
 
+    #[cfg(not(windows))]
+    if let Err(source) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(AppError::io(path, source));
+    }
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn atomic_write_cleans_up_when_rename_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("keep-directory");
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("sentinel"), b"keep").unwrap();
+
+        assert!(atomic_write(&destination, b"new contents").is_err());
+        assert_eq!(fs::read(destination.join("sentinel")).unwrap(), b"keep");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 
     fn assert_atomic_write_replaces_existing_file(dir: &Path) {
         let path = dir.join("atomic-write-contract.json");

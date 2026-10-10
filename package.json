@@ -1,11 +1,12 @@
 {
   "name": "copilot-bridge-atlas",
-  "version": "6.0.6",
+  "version": "6.0.7",
   "description": "Codex GitHub Copilot bridge with usage dashboard",
   "type": "module",
   "scripts": {
     "dev": "pnpm tauri dev",
-    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-msi.ps1",
+    "build": "node scripts/build.mjs",
+    "build:macos": "bash scripts/build-macos-intel.sh",
     "tauri": "tauri",
     "dev:renderer": "vite",
     "build:renderer": "vite build",

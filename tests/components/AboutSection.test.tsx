@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AboutSection } from "@/components/settings/AboutSection";
 
 const mocks = vi.hoisted(() => ({
@@ -19,12 +19,26 @@ vi.mock("@/lib/api", () => ({
 }));
 
 beforeEach(() => {
+  vi.stubEnv("TAURI_ENV_PLATFORM", "win32");
   mocks.getVersion.mockReset().mockResolvedValue("6.0.5");
   mocks.openExternal.mockReset().mockResolvedValue(undefined);
   mocks.checkUpdates.mockReset().mockResolvedValue(undefined);
 });
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe("AboutSection release reminder", () => {
+  it("names the Intel DMG on macOS while keeping the release link", async () => {
+    vi.stubEnv("TAURI_ENV_PLATFORM", "darwin");
+    render(<AboutSection availableReleaseVersion="6.0.7" />);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "download the macOS Intel DMG",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "View release" }));
+    expect(mocks.openExternal).toHaveBeenCalledWith(
+      "https://github.com/Alan-s-projects/copilot-bridge-atlas/releases/tag/atlas-6.0.7",
+    );
+  });
   it("shows the shared release result above the About card without another check", async () => {
     render(<AboutSection availableReleaseVersion="6.0.6" />);
 

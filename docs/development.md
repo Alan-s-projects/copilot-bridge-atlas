@@ -1,6 +1,6 @@
 # Development
 
-Copilot Bridge Atlas is a Windows x64 desktop app connecting Codex to GitHub Copilot. It runs a local OpenAI-compatible server and provides account management, usage statistics, and read-only Codex configuration previews.
+Copilot Bridge Atlas is a Windows x64 and macOS Intel desktop app connecting Codex to GitHub Copilot. It runs a local OpenAI-compatible server and provides account management, usage statistics, and read-only Codex configuration previews.
 
 User installation and connection steps are in the [README](../README.md).
 
@@ -50,7 +50,7 @@ including Pricing Tier. Shared cache-hit percentages are red below 50%, orange
 from 50% to below 80%, and green from 80% upward; unavailable rates stay neutral.
 Colors use the unrounded rate, and cache writes still count as cache misses.
 
-Pricing has no models.dev downloads or automatic sync. Local price overrides are stored in `%USERPROFILE%\.copilot-bridge-atlas\model-pricing.json`; the bundled defaults are in `src-tauri/src/resources/model-pricing.json`. They contain 34 entries from GitHub's official Copilot pricing table, including 12 published long-context tiers and GPT-6.1 Sol. New bundled prices fill missing costs in retained request logs after local preferences are applied. Cost Pricing links to the source, filters model IDs and names as you type, and can reset all overrides to bundled defaults. Resetting removes price overrides and deletion tombstones while preserving recorded history. Custom models without a bundled default become unpriced. Unknown models and distinct vendor variants never borrow another model's price. See [pricing provenance and limitations](model-pricing.md).
+Pricing has no models.dev downloads or automatic sync. Local price overrides are stored in `model-pricing.json` in Atlas's data directory; the bundled defaults are in `src-tauri/src/resources/model-pricing.json`. They contain 34 entries from GitHub's official Copilot pricing table, including 12 published long-context tiers and GPT-6.1 Sol. New bundled prices fill missing costs in retained request logs after local preferences are applied. Cost Pricing links to the source, filters model IDs and names as you type, and can reset all overrides to bundled defaults. Resetting removes price overrides and deletion tombstones while preserving recorded history. Custom models without a bundled default become unpriced. Unknown models and distinct vendor variants never borrow another model's price. See [pricing provenance and limitations](model-pricing.md).
 
 Model names, input/total context limits, and reasoning levels are read-only Copilot metadata. Refresh preserves enable switches for models still available. A successful refresh removes missing or ineligible models from the saved list and Codex's generated catalog, including their model preferences; returning models are imported as new. A failed refresh leaves the saved catalog intact. An empty catalog explains when GitHub Copilot must be signed in. Catalog rows can be disabled to hide them from Codex without deleting their settings, pricing, or usage history. Enabled models sort before disabled models, then alphabetically by display name.
 
@@ -69,13 +69,13 @@ tool-result data remain supported; native Responses forwarding is unchanged.
 
 ## Independent application identity
 
-- Process: `copilot-bridge-atlas.exe`
+- Process: `copilot-bridge-atlas.exe` on Windows; `copilot-bridge-atlas` inside the Mac app
 - Application ID: `com.alansprojects.copilotbridgeatlas`
-- Default data directory: `%USERPROFILE%\.copilot-bridge-atlas`
+- Default data directory: `%USERPROFILE%\.copilot-bridge-atlas` on Windows; `~/.copilot-bridge-atlas` on macOS
 - Database: `copilot-bridge-atlas.db`
 - Generated catalog: `copilot-model-catalog.json` inside the data directory
 
-The app uses its own installer identity, settings, logs, startup entry, and WebView profile. Atlas 6 creates its database in `%USERPROFILE%\.copilot-bridge-atlas` with its own application ID and schema version 1. Its backups can be restored through Settings → Backup & Restore.
+The app uses its own installer identity, settings, logs, startup entry, and WebView profile. Atlas 6 creates its database in its data directory with its own application ID and schema version 1. Its backups can be restored through Settings → Backup & Restore.
 
 Start-menu and desktop shortcuts use the installed executable's embedded icon.
 They retain the application ID used by the running process, so taskbar pins do
@@ -85,13 +85,13 @@ the updated Start-menu shortcut.
 
 ## Develop and release
 
-Requires Windows x64, Node.js, pnpm, the pinned Rust toolchain, Visual Studio C++ Build Tools, and WebView2.
+Requires Node.js from `.node-version`, pnpm 10.12.3, Python 3, and the pinned Rust toolchain. Windows builds also require Visual Studio C++ Build Tools and WebView2. Mac builds require macOS and Xcode Command Line Tools.
 
 ```powershell
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test:unit --maxWorkers=4 --minWorkers=1
-./scripts/build-msi.ps1
+pnpm build
 ```
 
 Run Rust tests with isolated application data:
@@ -105,6 +105,36 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked --offline -- --test-thr
 Run the catalog validation script tests with `python -m unittest discover -s scripts/tests -v`.
 The release workflow runs these alongside the frontend and Rust checks.
 
+`pnpm build` dispatches to the Windows MSI or macOS Intel build for the current
+host. `pnpm build:macos` explicitly builds the Intel package on a Mac, including
+an Apple Silicon build host with the Intel Rust target installed. Windows cannot
+build or run the native Mac bundle without Apple's SDK.
+
+The Mac build uses `src-tauri/tauri.macos.conf.json`, the
+`x86_64-apple-darwin` target, and `MACOSX_DEPLOYMENT_TARGET=13.0`. It writes
+`Copilot-Bridge-Atlas-<version>-macOS-Intel.dmg` and its SHA256 file to `release/`.
+The DMG contains the app and an Applications link. License notices ship in
+`Copilot Bridge Atlas.app/Contents/Resources/BUNDLED_LICENSES.txt`, without a
+disk-image license prompt. Signing is ad-hoc; no Developer ID certificate or
+notarization credentials are configured.
+
+On a Mac, validate the packaged WebView, generated catalog, and loopback proxy:
+
+```bash
+export COPILOT_BRIDGE_ATLAS_TEST_HOME="$(mktemp -d)"
+cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1
+pnpm build:macos
+python3 scripts/check-macos-startup.py \
+  --app "src-tauri/target/x86_64-apple-darwin/release/bundle/macos/Copilot Bridge Atlas.app" \
+  --report .codex/validation/macos-startup.json
+```
+
+The startup check creates its own disposable data and synthetic model catalog,
+preserves sentinel Codex files, and needs no Copilot sign-in. Run it with no
+other Atlas instance open. Diagnostics are saved alongside its report.
+`scripts/check-macos-bundle.py` verifies Intel Mach-O metadata, bundle identity,
+version, icon, deployment target, code signature, and the mounted DMG.
+
 The renderer and Rust backend ship together: request logs always include
 `freshInputTokens`, normalized in Rust using the stored token semantics. Keep
 that calculation in the backend. Copilot authentication uses the shared atomic
@@ -113,6 +143,17 @@ Malformed saved provider JSON is reported instead of being replaced with empty
 settings. Protocol adapters and message-ID repairs remain necessary for existing
 Codex conversations and Copilot's supported transports.
 
-The local build checks the packaged shortcut targets, icon sources, and application IDs before writing the MSI and SHA256 file to `release/`. Run `scripts/check-msi-shortcuts.ps1 -Path <installer.msi>` to check an existing installer. A reviewed PR targets `atlas` and includes matching versions in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, plus `docs/releases/<version>.md`. The Atlas Release workflow builds and checks each PR on Windows. After squash merge, push an `atlas-<version>` tag pointing to the merged commit. The workflow verifies that the tag is on `atlas` and matches the package version, then builds the MSI, verifies its SHA256 file, and publishes both assets with the checked-in release notes. The description begins with the pipeline run, UTC time, branch, and commit. No manual upload is needed. Remove temporary PR branches after merge.
+The Windows build checks packaged shortcut targets, icon sources, and application IDs before writing the MSI and SHA256 file to `release/`. Run `scripts/check-msi-shortcuts.ps1 -Path <installer.msi>` to check an existing installer. A reviewed PR targets `atlas` and release PRs include matching versions in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, plus `docs/releases/<version>.md`.
+
+The Atlas Release workflow builds and checks each PR on Windows and the
+`macos-15-intel` runner. PR artifacts include both installers and the Mac startup
+report. A validation PR can keep the current version without publishing a release.
+After squash merge of a release PR, push an `atlas-<version>` tag pointing to
+the merged commit. The workflow verifies that the tag is on `atlas` and matches
+the package version. Publishing waits for both platform builds, verifies both
+SHA256 files, and uploads the MSI, Intel DMG, and their checksums with the
+checked-in release notes. The description begins with the pipeline run, UTC time,
+branch, and commit. No manual upload is needed. Remove temporary PR branches
+after merge.
 
 [MIT license and copyright notice](../LICENSE).

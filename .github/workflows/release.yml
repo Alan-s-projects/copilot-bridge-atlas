@@ -101,6 +101,7 @@ jobs:
         run: |
           test "$(uname -m)" = x86_64
           xcrun --sdk macosx --show-sdk-path
+          bash -n scripts/build-macos-intel.sh
 
       - uses: pnpm/action-setup@v4
         with:
@@ -133,7 +134,10 @@ jobs:
           cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1
 
       - name: Build and verify Intel app, DMG, and SHA256
-        run: pnpm build
+        run: |
+          set -o pipefail
+          mkdir -p .codex/validation
+          pnpm build 2>&1 | tee .codex/validation/macos-build.log
 
       - name: Check packaged WebView startup and local proxy
         run: |
@@ -146,6 +150,7 @@ jobs:
         with:
           name: atlas-macos-intel-validation
           path: .codex/validation/
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
 

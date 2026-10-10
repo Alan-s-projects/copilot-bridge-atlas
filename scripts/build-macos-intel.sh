@@ -8,7 +8,7 @@ fi
 
 atlas_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$atlas_root"
-atlas_version="$(node --input-type=module - <<'NODE'
+node --input-type=module -e '
 import { readFileSync } from "node:fs";
 const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
 const tauriVersion = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8")).version;
@@ -16,9 +16,8 @@ const cargoVersion = readFileSync("src-tauri/Cargo.toml", "utf8").match(/^versio
 if (!/^\d+\.\d+\.\d+$/.test(packageVersion) || packageVersion !== tauriVersion || packageVersion !== cargoVersion) {
   throw new Error("package.json, Cargo.toml, and tauri.conf.json must share one stable version.");
 }
-console.log(packageVersion);
-NODE
-)"
+'
+atlas_version="$(node -p 'require("./package.json").version')"
 atlas_minimum="$(node -p 'JSON.parse(require("fs").readFileSync("src-tauri/tauri.macos.conf.json", "utf8")).bundle.macOS.minimumSystemVersion')"
 if [[ -n "${MACOSX_DEPLOYMENT_TARGET:-}" && "$MACOSX_DEPLOYMENT_TARGET" != "$atlas_minimum" ]]; then
   printf '%s\n' 'MACOSX_DEPLOYMENT_TARGET must match tauri.macos.conf.json.' >&2

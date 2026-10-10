@@ -7,9 +7,15 @@ fn get_auto_launch() -> Result<AutoLaunch, AppError> {
     let exe_path = std::env::current_exe()
         .map_err(|e| AppError::Message(format!("Unable to obtain application path: {e}")))?;
 
-    let auto_launch = AutoLaunchBuilder::new()
+    let mut builder = AutoLaunchBuilder::new();
+    builder
         .set_app_name(app_name)
-        .set_app_path(&exe_path.to_string_lossy())
+        .set_app_path(&exe_path.to_string_lossy());
+    // The executable is inside the .app bundle; register it as a LaunchAgent.
+    #[cfg(target_os = "macos")]
+    builder.set_use_launch_agent(true);
+
+    let auto_launch = builder
         .build()
         .map_err(|e| AppError::Message(format!("Failed to create AutoLaunch: {e}")))?;
 

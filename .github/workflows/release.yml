@@ -80,18 +80,87 @@ jobs:
         run: ./scripts/build-msi.ps1
 
       - uses: actions/upload-artifact@v4
-        if: startsWith(github.ref, 'refs/tags/atlas-')
         with:
-          name: atlas-release-files
+          name: atlas-release-windows
           path: |
-            release/Copilot-Bridge-Atlas-${{ steps.release_tag.outputs.version }}-Windows-x64.msi
-            release/Copilot-Bridge-Atlas-${{ steps.release_tag.outputs.version }}-Windows-x64.msi.sha256
+            release/*-Windows-x64.msi
+            release/*-Windows-x64.msi.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  build_macos_intel:
+    runs-on: macos-15-intel
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Verify Intel Mac build host
+        run: |
+          test "$(uname -m)" = x86_64
+          xcrun --sdk macosx --show-sdk-path
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.3
+          run_install: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check TypeScript
+        run: pnpm typecheck
+
+      - name: Run frontend tests
+        run: pnpm test:unit --maxWorkers=4 --minWorkers=1
+
+      - name: Check validation scripts
+        run: python3 -m unittest discover -s scripts/tests -v
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Run Rust tests with disposable data
+        run: |
+          export COPILOT_BRIDGE_ATLAS_TEST_HOME="$(mktemp -d "${RUNNER_TEMP}/atlas-tests.XXXXXX")"
+          cargo test --manifest-path src-tauri/Cargo.toml --locked -- --test-threads=1
+
+      - name: Build and verify Intel app, DMG, and SHA256
+        run: pnpm build
+
+      - name: Check packaged WebView startup and local proxy
+        run: |
+          python3 scripts/check-macos-startup.py \
+            --app "src-tauri/target/x86_64-apple-darwin/release/bundle/macos/Copilot Bridge Atlas.app" \
+            --report .codex/validation/macos-startup.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: atlas-macos-intel-validation
+          path: .codex/validation/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atlas-release-macos-intel
+          path: |
+            release/*-macOS-Intel.dmg
+            release/*-macOS-Intel.dmg.sha256
           if-no-files-found: error
           retention-days: 7
 
   publish:
     if: startsWith(github.ref, 'refs/tags/atlas-')
-    needs: build
+    needs: [build, build_macos_intel]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -102,7 +171,8 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: atlas-release-files
+          pattern: atlas-release-*
+          merge-multiple: true
           path: release
 
       - name: Verify artifacts and publish release
@@ -113,10 +183,13 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           version="${tag#atlas-}"
-          installer="Copilot-Bridge-Atlas-${version}-Windows-x64.msi"
-          test -f "release/${installer}"
-          test -f "release/${installer}.sha256"
-          (cd release && sha256sum --check "${installer}.sha256")
+          windows_installer="Copilot-Bridge-Atlas-${version}-Windows-x64.msi"
+          macos_installer="Copilot-Bridge-Atlas-${version}-macOS-Intel.dmg"
+          for installer in "$windows_installer" "$macos_installer"; do
+            test -f "release/${installer}"
+            test -f "release/${installer}.sha256"
+            (cd release && sha256sum --check "${installer}.sha256")
+          done
           test -f "docs/releases/${version}.md"
 
           commit="$(git rev-parse HEAD)"
@@ -129,7 +202,8 @@ jobs:
           } > release-notes.md
 
           gh release create "${tag}" \
-            "release/${installer}" "release/${installer}.sha256" \
+            "release/${windows_installer}" "release/${windows_installer}.sha256" \
+            "release/${macos_installer}" "release/${macos_installer}.sha256" \
             --title "Copilot Bridge Atlas ${version}" \
             --notes-file release-notes.md \
             --verify-tag \

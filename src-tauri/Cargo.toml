@@ -29,6 +29,7 @@ tauri-plugin-log = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-window-state = "2"
+tauri-plugin-single-instance = "2"
 dirs = "5.0"
 toml = "0.8"
 toml_edit = "0.22"
@@ -60,7 +61,6 @@ uuid = { version = "1.11", features = ["v4"] }
 sha2 = "0.10"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-tauri-plugin-single-instance = "2"
 windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Win32_UI_Shell",

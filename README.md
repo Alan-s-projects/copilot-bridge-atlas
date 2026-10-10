@@ -4,9 +4,16 @@ A Desktop app connecting Codex → GitHub Copilot.
 
 ## Install and connect
 
-Download the Windows x64 MSI from [Releases](https://github.com/Alan-s-projects/copilot-bridge-atlas/releases).
+Packages are a Windows x64 MSI and a macOS Intel DMG for macOS 13 or newer.
+Published builds are on [Releases](https://github.com/Alan-s-projects/copilot-bridge-atlas/releases);
+pull-request builds are available as workflow artifacts for validation.
 
-Atlas 6.x stores its data in `%USERPROFILE%\.copilot-bridge-atlas`. Patch updates preserve this data.
+On macOS, drag **Copilot Bridge Atlas.app** from the DMG into **Applications**.
+The Mac package is ad-hoc signed and is not Apple notarized; macOS may require
+approval in **System Settings → Privacy & Security** on first launch.
+
+Atlas 6.x stores its data in `%USERPROFILE%\.copilot-bridge-atlas` on Windows
+and `~/.copilot-bridge-atlas` on macOS. Patch updates preserve this data.
 
 1. Open **Settings → Accounts** to sign in to GitHub.
 2. Then **Settings → Models** to refresh your models.

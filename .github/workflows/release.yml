@@ -68,6 +68,10 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          workspaces: src-tauri -> target
+
       - name: Run Rust tests
         shell: pwsh
         run: |
@@ -127,6 +131,12 @@ jobs:
 
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          workspaces: src-tauri -> target
+          env-vars: MACOSX_DEPLOYMENT_TARGET
+          cache-on-failure: true
 
       - name: Run Rust tests with disposable data
         run: |

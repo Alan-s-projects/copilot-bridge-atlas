@@ -3,6 +3,10 @@
   "bundle": {
     "targets": ["app", "dmg"],
     "icon": ["icons/icon.icns"],
+    "licenseFile": null,
+    "resources": {
+      "../BUNDLED_LICENSES.txt": "BUNDLED_LICENSES.txt"
+    },
     "macOS": {
       "minimumSystemVersion": "13.0",
       "signingIdentity": "-"

@@ -11,9 +11,17 @@ from pathlib import Path
 
 
 def run(*args):
-    return subprocess.run(
-        [str(arg) for arg in args], check=True, capture_output=True, text=True
-    )
+    try:
+        return subprocess.run(
+            [str(arg) for arg in args], check=True, capture_output=True, text=True
+        )
+    except subprocess.CalledProcessError as error:
+        details = "\n".join(
+            text.strip() for text in (error.stdout, error.stderr) if text and text.strip()
+        )
+        raise RuntimeError(
+            f"{args[0]} failed with status {error.returncode}:\n{details}"
+        ) from error
 
 
 def macho_metadata(binary):
@@ -93,6 +101,9 @@ def check_metadata(app, root):
         raise ValueError("The app does not contain a valid ICNS icon.")
     if struct.unpack(">I", icon_header[4:])[0] != icon.stat().st_size:
         raise ValueError("The bundled ICNS icon is truncated.")
+    notices = app / "Contents/Resources/BUNDLED_LICENSES.txt"
+    if notices.read_bytes() != (root / "BUNDLED_LICENSES.txt").read_bytes():
+        raise ValueError("The app's bundled license notices do not match the source.")
     binary = app / "Contents/MacOS" / info["CFBundleExecutable"]
     macho = macho_metadata(binary)
     if version_tuple(macho["minimum_os_version"]) != version_tuple(minimum):
@@ -101,6 +112,7 @@ def check_metadata(app, root):
         "version": package_version,
         "bundle_id": info["CFBundleIdentifier"],
         "icon": icon_name,
+        "license_notices_bundled": True,
         **macho,
         "executable_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
     }

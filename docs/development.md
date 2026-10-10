@@ -113,8 +113,10 @@ build or run the native Mac bundle without Apple's SDK.
 The Mac build uses `src-tauri/tauri.macos.conf.json`, the
 `x86_64-apple-darwin` target, and `MACOSX_DEPLOYMENT_TARGET=13.0`. It writes
 `Copilot-Bridge-Atlas-<version>-macOS-Intel.dmg` and its SHA256 file to `release/`.
-The DMG contains the app and an Applications link. Signing is ad-hoc; no
-Developer ID certificate or notarization credentials are configured.
+The DMG contains the app and an Applications link. License notices ship in
+`Copilot Bridge Atlas.app/Contents/Resources/BUNDLED_LICENSES.txt`, without a
+disk-image license prompt. Signing is ad-hoc; no Developer ID certificate or
+notarization credentials are configured.
 
 On a Mac, validate the packaged WebView, generated catalog, and loopback proxy:
 

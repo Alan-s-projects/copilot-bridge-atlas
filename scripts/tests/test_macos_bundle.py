@@ -2,6 +2,7 @@ import importlib.util
 import json
 import plistlib
 import struct
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -49,6 +50,9 @@ class MacBundleValidation(unittest.TestCase):
         self.binary = self.app / "Contents/MacOS/copilot-bridge-atlas"
         self.binary.write_bytes(macho())
         (self.app / "Contents/Resources/icon.icns").write_bytes(b"icns" + struct.pack(">I", 8))
+        notices = b"Atlas application and dependency license notices.\n"
+        (self.root / "BUNDLED_LICENSES.txt").write_bytes(notices)
+        (self.app / "Contents/Resources/BUNDLED_LICENSES.txt").write_bytes(notices)
 
     def write_info(self):
         (self.app / "Contents/Info.plist").write_bytes(plistlib.dumps(self.info))
@@ -104,6 +108,23 @@ class MacBundleValidation(unittest.TestCase):
         self.assertEqual(run.call_args_list[0].args[:2], ("hdiutil", "verify"))
         self.assertEqual(run.call_args_list[1].args[:2], ("hdiutil", "attach"))
         self.assertEqual(run.call_args_list[2].args[:2], ("hdiutil", "detach"))
+
+    def test_rejects_missing_or_changed_license_notices(self):
+        notices = self.app / "Contents/Resources/BUNDLED_LICENSES.txt"
+        notices.write_text("Incomplete notices", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "license notices"):
+            checker.check_metadata(self.app, self.root)
+        notices.unlink()
+        with self.assertRaises(FileNotFoundError):
+            checker.check_metadata(self.app, self.root)
+
+    def test_native_tool_failure_keeps_diagnostic_stderr(self):
+        failure = subprocess.CalledProcessError(
+            1, ["hdiutil", "attach"], stderr="hdiutil: attach failed - no mountable file systems"
+        )
+        with patch.object(checker.subprocess, "run", side_effect=failure):
+            with self.assertRaisesRegex(RuntimeError, "no mountable file systems"):
+                checker.run("hdiutil", "attach", self.root / "test.dmg")
 
 
 if __name__ == "__main__":

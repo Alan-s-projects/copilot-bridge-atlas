@@ -216,7 +216,7 @@ pub fn run() {
             let menu = tray::create_tray_menu(app.handle())?;
 
             // build pallet
-            let mut tray_builder = TrayIconBuilder::with_id(tray::TRAY_ID)
+            let tray_builder = TrayIconBuilder::with_id(tray::TRAY_ID)
                 .menu(&menu)
                 .tooltip("Copilot Bridge Atlas") // Mouseover tips
                 .on_menu_event(|app, event| {
@@ -224,11 +224,18 @@ pub fn run() {
                 })
                 .show_menu_on_left_click(true);
 
-            if let Some(icon) = app.default_window_icon() {
-                tray_builder = tray_builder.icon(icon.clone());
+            #[cfg(target_os = "macos")]
+            let tray_builder = tray_builder
+                .icon(tauri::include_image!("icons/tray-macos-template.png"))
+                .icon_as_template(true);
+
+            #[cfg(not(target_os = "macos"))]
+            let tray_builder = if let Some(icon) = app.default_window_icon() {
+                tray_builder.icon(icon.clone())
             } else {
                 log::warn!("The default window icon is unavailable for the tray");
-            }
+                tray_builder
+            };
 
             let _tray = tray_builder.build(app)?;
             // Inject the same instance into the global state to avoid inconsistencies caused by repeated creation

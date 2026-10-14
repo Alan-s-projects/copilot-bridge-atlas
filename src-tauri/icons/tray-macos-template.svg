@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="22" height="18" viewBox="0 2 22 18" fill="none">
+  <title>Atlas macOS menu bar template</title>
+  <desc>The classic bridge with three supports, centered on a transparent canvas.</desc>
+  <!-- tray-icon 0.21 renders images at 18pt tall. Export at 44×36px for a
+       22×18pt image containing the approved 18×12pt bridge at Retina scale. -->
+  <g stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.75 16.25C4.5 9.25 7.5 5.75 11 5.75C14.5 5.75 17.5 9.25 19.25 16.25"/>
+    <path d="M6.75 8V16.25M11 5.75V16.25M15.25 8V16.25"/>
+    <path d="M2.75 16.25H19.25"/>
+  </g>
+</svg>

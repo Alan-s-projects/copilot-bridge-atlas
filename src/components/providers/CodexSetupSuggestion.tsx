@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Copy, Eye, FolderSearch, RefreshCw } from "lucide-react";
+import { Copy, FolderSearch, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,9 +16,22 @@ import {
 } from "@/components/ui/select";
 import { copyText } from "@/lib/clipboard";
 import { ConfigDiff, type ConfigDiffLine } from "./ConfigDiff";
+import { ConfigDiffStatus } from "./ConfigDiffStatus";
 
 const PREVIEW_PATH_KEY = "copilot-bridge-atlas-codex-preview-path";
+const MODEL_LIST_KEY = "copilot-bridge-atlas-codex-model-list";
+type ModelList = "atlas" | "codex";
 const normalizePath = (path: string) => path.trim().replace(/^"(.*)"$/, "$1");
+function readSavedModelList(): ModelList {
+  try {
+    return window.localStorage.getItem(MODEL_LIST_KEY) === "codex"
+      ? "codex"
+      : "atlas";
+  } catch {
+    return "atlas";
+  }
+}
+
 function readSavedPath(): string | null {
   try {
     return (
@@ -41,6 +54,7 @@ interface SetupSuggestion {
 
 export function CodexSetupSuggestion() {
   const [target, setTarget] = useState<"copilot" | "openai">("copilot");
+  const [modelList, setModelList] = useState<ModelList>(readSavedModelList);
   const [selectedPath, setSelectedPath] = useState<string | null>(
     readSavedPath,
   );
@@ -50,10 +64,11 @@ export function CodexSetupSuggestion() {
     configPath: string;
   } | null>(null);
   const { data, error, isFetching, refetch } = useQuery({
-    queryKey: ["codex-setup-suggestion", selectedPath],
+    queryKey: ["codex-setup-suggestion", selectedPath, modelList],
     queryFn: () =>
       invoke<SetupSuggestion>("get_codex_setup_suggestion", {
         configPath: selectedPath,
+        useCustomModelCatalog: modelList === "atlas",
       }),
     staleTime: 0,
     retry: false,
@@ -133,7 +148,7 @@ export function CodexSetupSuggestion() {
         <div className="min-w-0 space-y-1">
           <h1 className="text-2xl font-bold tracking-tight">Connect</h1>
           <p className="text-sm text-muted-foreground">
-            Preview Codex configuration for Copilot or OpenAI sign-in
+            Preview only. Apply TOML file changes yourself manually.
           </p>
         </div>
       </div>
@@ -231,17 +246,45 @@ export function CodexSetupSuggestion() {
             </SelectContent>
           </Select>
         </div>
+        {target === "copilot" && (
+          <div className="col-span-3 grid grid-cols-subgrid items-center gap-3">
+            <Label htmlFor="codex-model-list" className="text-xs">
+              Model list
+            </Label>
+            <Select
+              value={modelList}
+              onValueChange={(value) => {
+                if (value !== "atlas" && value !== "codex") return;
+                setModelList(value);
+                try {
+                  window.localStorage.setItem(MODEL_LIST_KEY, value);
+                } catch {
+                  // The current preview still works without persisted preferences.
+                }
+              }}
+            >
+              <SelectTrigger id="codex-model-list">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="atlas">
+                  Atlas customized list (Settings → Models)
+                </SelectItem>
+                <SelectItem value="codex">Codex default list</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
       </div>
+      {!data && isFetching && !isPathEdited && (
+        <p role="status" className="text-xs text-muted-foreground">
+          Loading suggestion…
+        </p>
+      )}
       {data && !error && !isPathEdited && (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border">
           <div className="flex shrink-0 items-center justify-between gap-4 border-b bg-muted/40 p-2">
-            <div className="flex min-w-0 items-start gap-2 px-1 text-xs leading-4 text-muted-foreground">
-              <Eye aria-hidden className="h-4 w-4 shrink-0" />
-              <p>
-                Preview only. Atlas reads your configuration and never writes
-                it. Apply changes yourself after reviewing them.
-              </p>
-            </div>
+            <ConfigDiffStatus lines={lines ?? []} loading={isFetching} />
             <Button
               size="sm"
               className="shrink-0"

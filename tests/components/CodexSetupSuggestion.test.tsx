@@ -32,6 +32,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.open }));
 vi.mock("@/lib/clipboard", () => ({ copyText: mocks.copy }));
 
 const previewPathKey = "copilot-bridge-atlas-codex-preview-path";
+const modelListKey = "copilot-bridge-atlas-codex-model-list";
 const profilePath = "D:/Codex profiles/work config.toml";
 const oldUrl = 'base_url = "http://127.0.0.1:4142/v1"';
 const newUrl = 'base_url = "http://127.0.0.1:15722/v1"';
@@ -103,6 +104,37 @@ const preview = {
   openaiConfig: proposedText(openaiLines),
   openaiLines,
 };
+const catalogLine =
+  'model_catalog_json = "/Users/test/.copilot-bridge-atlas/copilot-model-catalog.json"\n';
+const catalogCurrentLines = [catalogLine.trim(), ...currentLines];
+const atlasListPreview = {
+  ...preview,
+  copilotConfig: catalogLine + currentConfig,
+  copilotLines: catalogCurrentLines.map((text, index) => ({
+    kind: "context" as const,
+    oldLineNumber: index + 1,
+    newLineNumber: index + 1,
+    text: text + "\n",
+  })),
+};
+const codexListPreview = {
+  ...atlasListPreview,
+  copilotConfig: currentConfig,
+  copilotLines: [
+    {
+      kind: "removed" as const,
+      oldLineNumber: 1,
+      newLineNumber: null,
+      text: catalogLine,
+    },
+    ...currentLines.map((text, index) => ({
+      kind: "context" as const,
+      oldLineNumber: index + 2,
+      newLineNumber: index + 1,
+      text: text + "\n",
+    })),
+  ],
+};
 const profilePreview = {
   ...preview,
   configPath: profilePath,
@@ -132,6 +164,8 @@ const copyProposal = () =>
   screen.getByRole("button", { name: "Copy proposed TOML" });
 const connectionControl = () =>
   screen.getByRole("combobox", { name: "Connection" });
+const modelListControl = () =>
+  screen.getByRole("combobox", { name: "Model list" });
 async function selectOption(control: HTMLElement, option: string) {
   fireEvent.keyDown(control, { key: "ArrowDown" });
   fireEvent.click(await screen.findByRole("option", { name: option }));
@@ -174,6 +208,7 @@ describe("read-only Codex connection suggestions", () => {
   });
   beforeEach(() => {
     localStorage.removeItem(previewPathKey);
+    localStorage.removeItem(modelListKey);
     mocks.invoke.mockReset().mockResolvedValue(preview);
     mocks.copy.mockReset().mockResolvedValue(undefined);
     mocks.open.mockReset().mockResolvedValue(null);
@@ -181,6 +216,7 @@ describe("read-only Codex connection suggestions", () => {
 
   afterEach(() => {
     localStorage.removeItem(previewPathKey);
+    localStorage.removeItem(modelListKey);
   });
 
   it("places the file controls before the separate connection destination row", async () => {
@@ -206,6 +242,112 @@ describe("read-only Codex connection suggestions", () => {
     expect(
       screen.getAllByRole("option").map((option) => option.textContent),
     ).toEqual(["Copilot Bridge", "Official OpenAI sign-in"]);
+  });
+
+  it("defaults to the Atlas list and remembers the preview-only choice", async () => {
+    mocks.invoke.mockImplementation((_command, { useCustomModelCatalog }) =>
+      Promise.resolve(
+        useCustomModelCatalog ? atlasListPreview : codexListPreview,
+      ),
+    );
+    const first = renderPanel();
+    await screen.findByText("No changes needed in this file.");
+    expect(modelListControl()).toHaveTextContent(
+      "Atlas customized list (Settings → Models)",
+    );
+    fireEvent.keyDown(modelListControl(), { key: "ArrowDown" });
+    await screen.findByRole("option", { name: "Codex default list" });
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual([
+      "Atlas customized list (Settings → Models)",
+      "Codex default list",
+    ]);
+    fireEvent.click(screen.getByRole("option", { name: "Codex default list" }));
+    await screen.findByText("1 line removed from the suggestion.");
+    expect(mocks.invoke).toHaveBeenLastCalledWith(
+      "get_codex_setup_suggestion",
+      { configPath: null, useCustomModelCatalog: false },
+    );
+    const cells = rowFor(catalogLine.trim()).getAllByRole("cell");
+    expect(cells[0]).toHaveTextContent(catalogLine.trim());
+    expect(cells[1]).toHaveTextContent(/^$/);
+    expect(copyProposal().parentElement).toContainElement(
+      screen.getByRole("status"),
+    );
+    fireEvent.click(copyProposal());
+    await waitFor(() =>
+      expect(mocks.copy).toHaveBeenLastCalledWith(currentConfig),
+    );
+    expect(localStorage.getItem(modelListKey)).toBe("codex");
+    first.unmount();
+    renderPanel();
+    await screen.findByText("1 line removed from the suggestion.");
+    expect(modelListControl()).toHaveTextContent("Codex default list");
+    await selectOption(connectionControl(), "Official OpenAI sign-in");
+    expect(
+      screen.queryByRole("combobox", { name: "Model list" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(copyProposal());
+    await waitFor(() =>
+      expect(mocks.copy).toHaveBeenLastCalledWith(preview.openaiConfig),
+    );
+    expect(
+      mocks.invoke.mock.calls.every(
+        ([command]) => command === "get_codex_setup_suggestion",
+      ),
+    ).toBe(true);
+  });
+
+  it("uses the Atlas default for an unrecognized saved preference", async () => {
+    localStorage.setItem(modelListKey, "invalid");
+    renderPanel();
+    await screen.findByRole("region", { name: "Configuration diff" });
+    expect(modelListControl()).toHaveTextContent(
+      "Atlas customized list (Settings → Models)",
+    );
+    expect(mocks.invoke).toHaveBeenCalledWith("get_codex_setup_suggestion", {
+      configPath: null,
+      useCustomModelCatalog: true,
+    });
+  });
+
+  it("does not show or copy a late result from the previously selected model list", async () => {
+    let resolve!: (value: typeof codexListPreview) => void;
+    mocks.invoke.mockImplementation((_command, { useCustomModelCatalog }) =>
+      useCustomModelCatalog
+        ? Promise.resolve(atlasListPreview)
+        : new Promise<typeof codexListPreview>((done) => {
+            resolve = done;
+          }),
+    );
+    renderPanel();
+    await screen.findByText("No changes needed in this file.");
+    await selectOption(modelListControl(), "Codex default list");
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenLastCalledWith(
+        "get_codex_setup_suggestion",
+        { configPath: null, useCustomModelCatalog: false },
+      ),
+    );
+    expectNoPreview();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading suggestion");
+    await selectOption(
+      modelListControl(),
+      "Atlas customized list (Settings → Models)",
+    );
+    await waitFor(() => expect(copyProposal()).toBeEnabled());
+    await act(async () => resolve(codexListPreview));
+    expect(modelListControl()).toHaveTextContent("Atlas customized list");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "No changes needed in this file.",
+    );
+    fireEvent.click(copyProposal());
+    await waitFor(() =>
+      expect(mocks.copy).toHaveBeenLastCalledWith(
+        atlasListPreview.copilotConfig,
+      ),
+    );
   });
 
   it("shows current TOML on the left and proposed TOML on the right in a keyboard-scrollable pane", async () => {
@@ -258,6 +400,17 @@ describe("read-only Codex connection suggestions", () => {
     expect(
       await screen.findByText("No changes needed in this file."),
     ).toBeVisible();
+    expect(screen.getAllByText("No changes needed in this file.")).toHaveLength(
+      1,
+    );
+    expect(screen.getByRole("status")).toContainElement(
+      screen.getByText("No changes needed in this file."),
+    );
+    expect(screen.getByRole("status").querySelector("svg")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    expect(comparison()).not.toContainElement(screen.getByRole("status"));
     for (const line of currentLines.filter(Boolean)) {
       expect(within(comparison()).getAllByText(line)).toHaveLength(2);
     }
@@ -287,7 +440,10 @@ describe("read-only Codex connection suggestions", () => {
       within(cells[1]).getByText(/No newline at end of file/),
     ).toBeVisible();
     expect(mocks.invoke.mock.calls).toEqual([
-      ["get_codex_setup_suggestion", { configPath: null }],
+      [
+        "get_codex_setup_suggestion",
+        { configPath: null, useCustomModelCatalog: true },
+      ],
     ]);
     expect(localStorage.getItem(previewPathKey)).toBeNull();
   });
@@ -297,10 +453,12 @@ describe("read-only Codex connection suggestions", () => {
     await screen.findByRole("region", { name: "Configuration diff" });
     expect(pathInput()).toHaveValue(preview.configPath);
     expect(
-      screen.getByText(/Atlas reads your configuration and never writes it/),
+      screen.getByText(
+        "Preview only. Apply TOML file changes yourself manually.",
+      ),
     ).toBeVisible();
     expect(copyProposal().parentElement).toContainElement(
-      screen.getByText(/Atlas reads your configuration and never writes it/),
+      screen.getByText("5 lines added, 3 lines removed from the suggestion."),
     );
     expect(screen.getAllByRole("textbox")).toEqual([pathInput()]);
     expect(
@@ -329,6 +487,7 @@ describe("read-only Codex connection suggestions", () => {
     ).toBe(true);
     expect(mocks.invoke).toHaveBeenCalledWith("get_codex_setup_suggestion", {
       configPath: null,
+      useCustomModelCatalog: true,
     });
   });
 
@@ -342,6 +501,7 @@ describe("read-only Codex connection suggestions", () => {
     expect(mocks.copy).not.toHaveBeenCalled();
     expect(mocks.invoke).toHaveBeenCalledWith("get_codex_setup_suggestion", {
       configPath: null,
+      useCustomModelCatalog: true,
     });
     expect(pathInput()).toBeEnabled();
     expect(
@@ -377,7 +537,7 @@ describe("read-only Codex connection suggestions", () => {
       await waitFor(() =>
         expect(mocks.invoke).toHaveBeenLastCalledWith(
           "get_codex_setup_suggestion",
-          { configPath: profilePath },
+          { configPath: profilePath, useCustomModelCatalog: true },
         ),
       );
       expectNoPreview();
@@ -398,8 +558,14 @@ describe("read-only Codex connection suggestions", () => {
         ),
       );
       expect(mocks.invoke.mock.calls).toEqual([
-        ["get_codex_setup_suggestion", { configPath: null }],
-        ["get_codex_setup_suggestion", { configPath: profilePath }],
+        [
+          "get_codex_setup_suggestion",
+          { configPath: null, useCustomModelCatalog: true },
+        ],
+        [
+          "get_codex_setup_suggestion",
+          { configPath: profilePath, useCustomModelCatalog: true },
+        ],
       ]);
       await waitFor(() =>
         expect(localStorage.getItem(previewPathKey)).toBe(profilePath),
@@ -432,7 +598,7 @@ describe("read-only Codex connection suggestions", () => {
     await waitFor(() => expect(pathInput()).toHaveValue(profilePath));
     expect(mocks.invoke).toHaveBeenLastCalledWith(
       "get_codex_setup_suggestion",
-      { configPath: profilePath },
+      { configPath: profilePath, useCustomModelCatalog: true },
     );
     await waitFor(() => expect(copyProposal()).toBeEnabled());
     fireEvent.click(copyProposal());
@@ -451,7 +617,7 @@ describe("read-only Codex connection suggestions", () => {
     expect(pathInput()).toHaveValue(profilePath);
     expect(mocks.invoke).toHaveBeenLastCalledWith(
       "get_codex_setup_suggestion",
-      { configPath: profilePath },
+      { configPath: profilePath, useCustomModelCatalog: true },
     );
     first.unmount();
 
@@ -463,7 +629,7 @@ describe("read-only Codex connection suggestions", () => {
     expect(localStorage.getItem(previewPathKey)).toBeNull();
     expect(mocks.invoke).toHaveBeenLastCalledWith(
       "get_codex_setup_suggestion",
-      { configPath: null },
+      { configPath: null, useCustomModelCatalog: true },
     );
     reopened.unmount();
 
@@ -472,7 +638,7 @@ describe("read-only Codex connection suggestions", () => {
     expect(pathInput()).toHaveValue(preview.configPath);
     expect(mocks.invoke).toHaveBeenLastCalledWith(
       "get_codex_setup_suggestion",
-      { configPath: null },
+      { configPath: null, useCustomModelCatalog: true },
     );
   });
 
@@ -522,6 +688,9 @@ describe("read-only Codex connection suggestions", () => {
     await screen.findByRole("region", { name: "Configuration diff" });
     fireEvent.click(refresh());
     await waitFor(() => expect(copyProposal()).toBeDisabled());
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Refreshing suggestion",
+    );
     await act(async () => reject(new Error("Cannot read this TOML file")));
     expect(await screen.findByRole("alert")).toHaveTextContent("Cannot read");
     expectNoPreview();
@@ -533,7 +702,7 @@ describe("read-only Codex connection suggestions", () => {
     expect(mocks.invoke.mock.calls).toEqual(
       Array.from({ length: 3 }, () => [
         "get_codex_setup_suggestion",
-        { configPath: profilePath },
+        { configPath: profilePath, useCustomModelCatalog: true },
       ]),
     );
   });
@@ -556,7 +725,7 @@ describe("read-only Codex connection suggestions", () => {
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenLastCalledWith(
         "get_codex_setup_suggestion",
-        { configPath: profilePath },
+        { configPath: profilePath, useCustomModelCatalog: true },
       ),
     );
     fireEvent.click(screen.getByRole("button", { name: "Auto-detect" }));

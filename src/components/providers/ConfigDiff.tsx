@@ -73,7 +73,6 @@ function LineText({ line }: { line?: ConfigDiffLine }) {
 }
 
 export function ConfigDiff({ lines }: { lines: ConfigDiffLine[] }) {
-  const unchanged = lines.every((line) => line.kind === "context");
   const numberStyle =
     "select-none px-2 text-right align-top font-mono text-muted-foreground";
   return (
@@ -83,11 +82,6 @@ export function ConfigDiff({ lines }: { lines: ConfigDiffLine[] }) {
       tabIndex={0}
       className="code-diff-scrollbar relative min-h-0 flex-1 overflow-x-auto overflow-y-scroll overscroll-contain"
     >
-      {unchanged && (
-        <p className="border-b p-4 text-sm text-muted-foreground">
-          No changes needed in this file.
-        </p>
-      )}
       {lines.length > 0 && (
         <table className="w-full min-w-[640px] table-fixed border-collapse text-xs leading-6">
           <caption className="sr-only">

@@ -597,11 +597,24 @@ fn setup_suggestion_from_file(
         .map_err(|error| error.to_string())
 }
 
+fn setup_suggestion_for_model_list(
+    path: &Path,
+    explicit: bool,
+    endpoint: &str,
+    catalog: &Path,
+    recommendations: Option<&SetupRecommendations>,
+    use_custom_model_catalog: Option<bool>,
+) -> Result<CodexSetupSuggestion, String> {
+    let catalog = (use_custom_model_catalog.unwrap_or(true) && catalog.exists()).then_some(catalog);
+    setup_suggestion_from_file(path, explicit, endpoint, catalog, recommendations)
+}
+
 #[tauri::command]
 pub async fn get_codex_setup_suggestion(
     state: tauri::State<'_, AppState>,
     config_path: Option<String>,
     recommendations: Option<SetupRecommendations>,
+    use_custom_model_catalog: Option<bool>,
 ) -> Result<CodexSetupSuggestion, String> {
     let explicit = config_path.is_some();
     let path = match config_path {
@@ -627,12 +640,13 @@ pub async fn get_codex_setup_suggestion(
     // A user-selected UNC path can be slow; keep filesystem reads and diff
     // generation off the asynchronous command worker.
     tauri::async_runtime::spawn_blocking(move || {
-        setup_suggestion_from_file(
+        setup_suggestion_for_model_list(
             &path,
             explicit,
             &endpoint,
-            catalog.exists().then_some(catalog.as_path()),
+            &catalog,
             recommendations.as_ref(),
+            use_custom_model_catalog,
         )
     })
     .await
@@ -724,6 +738,95 @@ mod tests {
             let current = text.parse::<toml_edit::DocumentMut>().unwrap();
             assert_eq!(config_uses_endpoint(&current, "http://127.0.0.1:15722/v1"), expected, "{text}");
         }
+    }
+
+    #[test]
+    fn model_list_choice_changes_only_the_suggestion_catalog_reference() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        let catalog = directory.path().join("atlas-models.json");
+        let text = "model = 'gpt-6.1-sol'\nmodel_catalog_json = 'old-models.json'\n\
+                    model_reasoning_effort = 'high'\n[custom]\nkeep = true\n";
+        std::fs::write(&path, text).unwrap();
+        std::fs::write(&catalog, "catalog contents").unwrap();
+        let preview = |choice| {
+            setup_suggestion_for_model_list(
+                &path,
+                true,
+                "http://127.0.0.1:15722/v1",
+                &catalog,
+                None,
+                choice,
+            )
+            .unwrap()
+        };
+        let atlas = preview(Some(true));
+        let codex = preview(Some(false));
+        assert_eq!(preview(None).copilot_config, atlas.copilot_config);
+        let mut atlas_config = atlas
+            .copilot_config
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        assert_eq!(
+            atlas_config["model_catalog_json"].as_str(),
+            Some(catalog.to_string_lossy().as_ref())
+        );
+        atlas_config.remove("model_catalog_json");
+        assert_eq!(atlas_config.to_string(), codex.copilot_config);
+        assert_eq!(atlas.openai_config, codex.openai_config);
+        assert_diff_snapshots(&atlas.copilot_lines, text, &atlas.copilot_config);
+        assert_diff_snapshots(&codex.copilot_lines, text, &codex.copilot_config);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        assert_eq!(
+            std::fs::read_to_string(&catalog).unwrap(),
+            "catalog contents"
+        );
+
+        std::fs::remove_file(&catalog).unwrap();
+        assert_eq!(preview(Some(true)).copilot_config, codex.copilot_config);
+        assert!(!catalog.exists(), "Preview must not generate a catalog");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn catalog_keeps_refreshing_while_preview_uses_codex_default_list() {
+        let fixture = TestHome::new();
+        let db = Database::memory().unwrap();
+        let mut provider = Provider::with_id(
+            "copilot-preview".into(),
+            "Copilot".into(),
+            serde_json::json!({
+                "modelCatalog": {"models": [{"model": "gpt-6.1-sol", "contextWindow": 922000}]}
+            }),
+        );
+        provider.meta = Some(
+            serde_json::from_value(serde_json::json!({"providerType":"github_copilot"})).unwrap(),
+        );
+        db.save_provider("codex", &provider).unwrap();
+        select(&db, &provider.id).unwrap();
+        let path = fixture._dir.path().join("config.toml");
+        std::fs::write(&path, "model = 'gpt-6.1-sol'\n").unwrap();
+        let preview = setup_suggestion_for_model_list(
+            &path,
+            true,
+            "http://127.0.0.1:15722/v1",
+            &catalog_path(),
+            None,
+            Some(false),
+        )
+        .unwrap();
+        assert!(!preview.copilot_config.contains("model_catalog_json"));
+
+        provider.settings_config["modelCatalog"]["models"][0]["contextWindow"] =
+            serde_json::json!(800000);
+        save(&db, &provider).unwrap();
+        let catalog: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(catalog_path()).unwrap()).unwrap();
+        assert_eq!(catalog["models"][0]["context_window"], 800000);
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "model = 'gpt-6.1-sol'\n"
+        );
     }
 
     #[test]

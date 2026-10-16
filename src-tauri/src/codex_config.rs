@@ -16,7 +16,8 @@ struct CodexCatalogTemplate {
     instructions: serde_json::Map<String, Value>,
 }
 
-const OPENAI_INSTRUCTION_PROFILES: [&str; 3] = ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol"];
+const OPENAI_INSTRUCTION_PROFILES: [&str; 4] =
+    ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"];
 const OPENAI_FALLBACK_PROFILE: &str = "gpt-6-astra";
 
 /// Get Codex configuration directory path
@@ -668,6 +669,8 @@ mod tests {
             ("gpt-6-astra", "gpt-6-astra"),
             ("GPT-6-LUNA", "gpt-6-luna"),
             ("gpt-6-sol", "gpt-6-sol"),
+            ("gpt-6.1-sol", "gpt-6.1-sol"),
+            ("GPT-6.1-SOL", "gpt-6.1-sol"),
             ("gemini-3.8-flash", "gpt-6-astra"),
             ("grok-4.7", "gpt-6-astra"),
             ("gpt-5.5", "gpt-6-astra"),
@@ -692,6 +695,11 @@ mod tests {
             assert_eq!(entry["input_modalities"], json!(["text"]));
         }
         assert!(template.compatibility.get("slug").is_none());
+        assert_ne!(
+            template.instructions["gpt-6.1-sol"]["modelMessages"]["instructions_template"],
+            template.instructions[OPENAI_FALLBACK_PROFILE]["modelMessages"]
+                ["instructions_template"]
+        );
         for flag in [
             "supports_reasoning_summaries",
             "support_verbosity",
@@ -709,7 +717,7 @@ mod tests {
             serde_json::from_str(include_str!("resources/openai-codex-instructions.json")).unwrap();
         assert_eq!(
             snapshot["source"]["commit"],
-            "d8ec479c34895214b44c062f060d97224c191a50"
+            "83086188ae0614bd882818ff1aa23f3194962012"
         );
         assert_eq!(snapshot["fallbackModel"], OPENAI_FALLBACK_PROFILE);
         for (slug, expected) in [
@@ -724,6 +732,10 @@ mod tests {
             (
                 "gpt-6-sol",
                 "b1dd8718c037906c53a305c5cbccb4a4be35ccbb7837461ec349bfc495412f0d",
+            ),
+            (
+                "gpt-6.1-sol",
+                "e1bdd4f8f0df4b20f4a0ffc8a861ce819df45325d8cecdfb92e80379cf8d142e",
             ),
         ] {
             let profile = &snapshot["models"][slug];

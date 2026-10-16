@@ -6,10 +6,10 @@ import json
 from pathlib import Path
 from urllib.request import urlopen
 
-COMMIT = "d8ec479c34895214b44c062f060d97224c191a50"
+COMMIT = "83086188ae0614bd882818ff1aa23f3194962012"  # rust-v0.163.0
 SOURCE_PATH = "codex-rs/models-manager/models.json"
 BASE_URL = f"https://raw.githubusercontent.com/openai/codex/{COMMIT}"
-PROFILES = ("gpt-6-astra", "gpt-6-luna", "gpt-6-sol")
+PROFILES = ("gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol")
 ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT = ROOT / "src-tauri/src/resources/openai-codex-instructions.json"
 BUNDLED_LICENSES = ROOT / "BUNDLED_LICENSES.txt"
@@ -23,15 +23,77 @@ def canonical_json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def download(path):
-    with urlopen(f"{BASE_URL}/{path}", timeout=30) as response:
+def download(path, ref=COMMIT):
+    with urlopen(f"https://raw.githubusercontent.com/openai/codex/{ref}/{path}", timeout=30) as response:
         return response.read()
+
+
+def changed_paths(before, after, path=""):
+    """Compare every nested value; a missing key is distinct from JSON null."""
+    if type(before) is not type(after):
+        return [path or "/"]
+    if isinstance(before, dict):
+        changes = []
+        for key in sorted(before.keys() | after.keys()):
+            pointer = key.replace("~", "~0").replace("/", "~1")
+            child = f"{path}/{pointer}"
+            if key not in before or key not in after:
+                changes.append(child)
+            else:
+                changes.extend(changed_paths(before[key], after[key], child))
+        return changes
+    if isinstance(before, list) and len(before) == len(after):
+        return [
+            change
+            for index, (old, new) in enumerate(zip(before, after))
+            for change in changed_paths(old, new, f"{path}/{index}")
+        ]
+    return [] if before == after else [path or "/"]
+
+
+def compare_profiles(snapshot, upstream):
+    models = {model["slug"]: model for model in upstream["models"]}
+    profiles = snapshot["models"]
+    changes = {}
+    for slug in sorted(set(PROFILES) | profiles.keys()):
+        old = profiles.get(slug)
+        new = models.get(slug, {}).get("model_messages")
+        if old is None or new is None:
+            changes[slug] = {"status": "missing_snapshot" if old is None else "missing_upstream"}
+            continue
+        paths = changed_paths(old["modelMessages"], new)
+        if paths:
+            changes[slug] = {"status": "changed", "paths": paths}
+    untracked = sorted(
+        slug for slug, model in models.items()
+        if slug.startswith("gpt-6") and slug not in profiles
+        and isinstance(model.get("model_messages"), dict)
+    )
+    return {
+        "profileChanges": changes,
+        "untrackedGpt6Profiles": untracked,
+        "reviewNeeded": bool(changes or untracked),
+    }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true", help="Verify vendored content without writing")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true", help="Verify vendored content without writing")
+    mode.add_argument("--compare-ref", metavar="CODEX_REF",
+                      help="Review upstream profile drift without writing; exits 1 when review is needed")
     args = parser.parse_args()
+    if args.compare_ref:
+        snapshot = json.loads(SNAPSHOT.read_bytes())
+        report = compare_profiles(
+            snapshot, json.loads(download(SOURCE_PATH, args.compare_ref))
+        )
+        print(json.dumps({
+            "pinnedCommit": snapshot["source"]["commit"],
+            "comparedRef": args.compare_ref,
+            **report,
+        }, indent=2))
+        return int(report["reviewNeeded"])
     raw = download(SOURCE_PATH)
     models = {model["slug"]: model for model in json.loads(raw)["models"]}
     profiles = {}
@@ -86,4 +148,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

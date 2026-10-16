@@ -32,6 +32,28 @@ def expected_instructions(entry):
     return text
 
 
+def request_base_instructions(data):
+    """Read the two observed Codex wire formats without rewriting prompt text."""
+    instructions = data.get("instructions")
+    if isinstance(instructions, str) and instructions:
+        return instructions, "instructions"
+    if instructions is not None and not isinstance(instructions, str):
+        raise ValueError("Responses instructions must be a string or null")
+    # Codex 0.163.0 prefixes base instructions as a single developer message.
+    # Only this leading message qualifies; user text and later messages cannot
+    # substitute for a missing base prompt.
+    items = data.get("input") or []
+    if items and isinstance(items[0], dict) and items[0].get("role") == "developer":
+        content = items[0].get("content")
+        if isinstance(content, list) and len(content) == 1:
+            block = content[0]
+            if isinstance(block, dict) and block.get("type") == "input_text":
+                text = block.get("text")
+                if isinstance(text, str):
+                    return text, "input[0].developer"
+    return "", "missing"
+
+
 def verify_instructions(requests, entries):
     known_prompts = {expected_instructions(entry) for entry in entries.values()}
     for request in requests:
@@ -93,7 +115,7 @@ class CaptureHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         data = json.loads(body)
-        instructions = data.get("instructions", "")
+        instructions, instruction_source = request_base_instructions(data)
         self.server.requests.append({
             "model": data["model"],
             "stream": data.get("stream"),
@@ -103,6 +125,7 @@ class CaptureHandler(BaseHTTPRequestHandler):
             "input_chars": len(json.dumps(data.get("input", []))),
             "tool_chars": len(json.dumps(data.get("tools", []))),
             "instructions": instructions,
+            "instruction_source": instruction_source,
             "model_switch_messages": [
                 content.get("text", "") for item in data.get("input", [])
                 if isinstance(item, dict) and item.get("role") == "developer"
@@ -292,7 +315,8 @@ def main():
                         help="Capture synthetic Responses payloads with a local mock server")
     parser.add_argument("--live", help="Opt-in local Atlas base URL; consumes upstream tokens")
     parser.add_argument("--report", type=Path)
-    parser.add_argument("--models", nargs="+", default=["gpt-6-astra", "gpt-6-luna", "gpt-6-sol"],
+    parser.add_argument("--models", nargs="+",
+                        default=["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
                         help="Models to validate, in same-session switching order")
     parser.add_argument("--fresh-threads", action="store_true",
                         help="Also usable to check each model's initial base prompt separately")

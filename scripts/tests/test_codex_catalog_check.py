@@ -17,6 +17,44 @@ def entry(slug, text):
     }
 
 
+class InstructionCapture(unittest.TestCase):
+    def developer_input(self, text):
+        return {"role": "developer", "content": [{"type": "input_text", "text": text}]}
+
+    def test_legacy_and_leading_developer_formats_preserve_the_literal_prompt(self):
+        text = "Literal {{connector_id}}\n"
+        self.assertEqual(
+            check.request_base_instructions({"instructions": text}),
+            (text, "instructions"),
+        )
+        self.assertEqual(
+            check.request_base_instructions({"input": [self.developer_input(text)]}),
+            (text, "input[0].developer"),
+        )
+
+    def test_user_text_or_later_developer_text_cannot_replace_base_instructions(self):
+        developer = self.developer_input("A\n")
+        user = {**developer, "role": "user"}
+        self.assertEqual(check.request_base_instructions({"input": [user]}), ("", "missing"))
+        self.assertEqual(
+            check.request_base_instructions({"input": [user, developer]}), ("", "missing")
+        )
+
+    def test_wrong_top_level_instructions_cannot_be_hidden_by_a_valid_developer_prompt(self):
+        text, _ = check.request_base_instructions({
+            "instructions": "wrong",
+            "input": [self.developer_input("A\n")],
+        })
+        with self.assertRaises(AssertionError):
+            check.verify_instructions(
+                [{"model": "astra", "instructions": text}], {"astra": entry("astra", "A\n")}
+            )
+        with self.assertRaises(ValueError):
+            check.request_base_instructions({
+                "instructions": ["A\n"], "input": [self.developer_input("A\n")],
+            })
+
+
 class InstructionVerification(unittest.TestCase):
     def test_literal_examples_and_trailing_newlines_are_not_rewritten(self):
         text = "An example: {{connector_id}}\n"

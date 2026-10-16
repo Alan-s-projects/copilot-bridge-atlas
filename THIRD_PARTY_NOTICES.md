@@ -3,9 +3,10 @@
 Atlas includes instruction data from OpenAI Codex, licensed under Apache-2.0:
 
 - Repository: https://github.com/openai/codex
-- Commit: `d8ec479c34895214b44c062f060d97224c191a50`
+- Release: `rust-v0.163.0`
+- Commit: `83086188ae0614bd882818ff1aa23f3194962012`
 - Source: `codex-rs/models-manager/models.json`
-- Extracted entries: `gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol`
+- Extracted entries: `gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol`
 - Snapshot: `src-tauri/src/resources/openai-codex-instructions.json`
 
 Modification notice: Atlas extracts each entry's complete `model_messages`

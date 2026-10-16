@@ -27,7 +27,7 @@ SOFTWARE.
 
 OpenAI Codex instruction data
 ============================
-Source: https://raw.githubusercontent.com/openai/codex/d8ec479c34895214b44c062f060d97224c191a50/codex-rs/models-manager/models.json
+Source: https://raw.githubusercontent.com/openai/codex/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/models-manager/models.json
 Modification: extracted GPT-6 model_messages objects into an Atlas JSON snapshot.
 Instruction wording and nested values are unchanged. Catalog metadata is separate.
 

@@ -1,8 +1,8 @@
 # Atlas Codex Catalog
 
 Atlas combines Copilot capabilities with unchanged OpenAI Codex instruction data.
-The instruction source is pinned to the user-selected OpenAI commit
-`d8ec479c34895214b44c062f060d97224c191a50`, file
+The instruction source is pinned to OpenAI Codex release `rust-v0.163.0`, commit
+`83086188ae0614bd882818ff1aa23f3194962012`, file
 `codex-rs/models-manager/models.json`. Generation never reads `models_cache.json`
 or fetches a newer prompt at application startup.
 
@@ -11,6 +11,7 @@ or fetches a newer prompt at application startup.
 | `gpt-6-astra` | `gpt-6-astra` |
 | `gpt-6-luna` | `gpt-6-luna` |
 | `gpt-6-sol` | `gpt-6-sol` |
+| `gpt-6.1-sol` | `gpt-6.1-sol` |
 | Every other ID, including non-GPT models | `gpt-6-astra` |
 
 Matching is case-insensitive for these exact GPT-6 IDs. The fallback deliberately
@@ -21,7 +22,7 @@ actual model ID, provider, routing, enabled choices, or billing model.
 
 - `src-tauri/src/resources/codex-model-template.json` contains the small,
   model-neutral Codex compatibility profile.
-- `src-tauri/src/resources/openai-codex-instructions.json` contains the three
+- `src-tauri/src/resources/openai-codex-instructions.json` contains the four
   complete, unchanged upstream `model_messages` objects, source provenance,
   and SHA-256 fingerprints. The former Atlas-authored prompt is removed.
 - Model identity, context limits, parallel calls, image input, and supported
@@ -45,6 +46,21 @@ Attribution and Apache-2.0 license/NOTICE content are retained in
 `THIRD_PARTY_NOTICES.md` and `BUNDLED_LICENSES.txt`; the latter is distributed
 in the MSI's `LICENSE.rtf`.
 
+For each Codex release review, run
+`python scripts/vendor-openai-instructions.py --compare-ref <release-tag-or-commit>`.
+This read-only check compares all nested instruction values against the saved
+snapshot, distinguishes absent keys from explicit nulls, and reports untracked
+GPT-6 profiles. Exit code 1 means a maintainer review is needed; it does not
+establish incompatibility or update the pin automatically. `--check` remains
+the separate fidelity check against the already-reviewed pin.
+
+When a refresh is warranted, update the pin and maintained profile list in the
+vendor script and Rust validator together, regenerate the snapshot and licenses,
+then update fingerprints, notices, and this document. Run the Rust catalog tests,
+Python instruction checks, and synthetic fresh-thread and model-switch captures
+against the target Codex client. Record the reviewed source commit in release
+notes when the refresh ships. See issue #47 for the maintenance checklist.
+
 Atlas explicitly selects shell-command and freeform-patch compatibility. Tool
 output truncation and the effective context budget are client-side policies.
 Reasoning summaries, verbosity control, original-detail images, and native search
@@ -58,7 +74,8 @@ modifies global Codex configuration nor adds another settings switch.
 
 ## Installed-Client Checks
 
-The external catalog was accepted by both installed clients on September 27, 2026:
+The earlier three-profile snapshot was accepted by both installed clients on
+September 27, 2026:
 
 - Codex Desktop 26.924.2738.0, bundled CLI `0.158.0-alpha.2.1`.
 - Standalone CLI `0.146.1`.
@@ -75,7 +92,7 @@ $env:ATLAS_CODEX_CATALOG_SETTINGS = "<settings-fixture.json>"
 $env:ATLAS_CODEX_CATALOG_OUT = "<generated-catalog.json>"
 cargo test --manifest-path src-tauri/Cargo.toml --lib export_catalog_compatibility_fixture -- --ignored
 python scripts/check-codex-catalog.py --codex <codex.exe> --catalog <generated-catalog.json> --capture --report <capture-report.json>
-python scripts/check-codex-catalog.py --codex <codex.exe> --catalog <generated-catalog.json> --capture --fresh-threads --models gpt-6-astra gpt-6-luna gpt-6-sol gemini-3.8-flash grok-4.7
+python scripts/check-codex-catalog.py --codex <codex.exe> --catalog <generated-catalog.json> --capture --fresh-threads --models gpt-6-astra gpt-6-luna gpt-6-sol gpt-6.1-sol gemini-3.8-flash grok-4.7
 ```
 
 The capture server is local and synthetic. It verifies catalog loading, streamed
@@ -95,11 +112,26 @@ known catalog prompt and compares every request's latest applicable instruction
 text, not just the first request. Literal example placeholders cannot bypass
 verification. Fresh-thread captures match each selected profile directly.
 
+Codex `0.163.0` sends the initial base prompt as the first developer input
+message instead of the older top-level `instructions` field. The checker accepts
+both observed formats and still compares the complete literal prompt, including
+trailing newlines. User text or a later developer message cannot substitute for
+the initial base prompt. Model-switch verification still requires the latest
+switch message to contain the selected model's unchanged template.
+
+The October 17, 2026 macOS review checked all four current profiles and two
+fallback models with Codex `0.163.0`: six fresh conversations and seven turns
+in one conversation, including switching back to GPT-6.1 Sol. All turns
+completed against a local synthetic server. The checks preserved literal base
+and model-switch instructions, the active default collaboration template, and
+workspace-write permission context.
+
 | Upstream template | Characters | Words |
 | --- | ---: | ---: |
 | Astra | 21,420 | 3,314 |
 | Luna | 18,037 | 2,790 |
 | Sol | 18,992 | 2,949 |
+| 6.1 Sol | 21,769 | 3,366 |
 
 These full upstream prompts are longer than the former Atlas-authored prompt.
 No token or cost reduction is claimed. Tool definitions, other developer

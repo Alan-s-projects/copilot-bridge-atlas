@@ -119,7 +119,10 @@ const atlasListPreview = {
 };
 const codexListPreview = {
   ...atlasListPreview,
-  copilotConfig: currentConfig,
+  copilotConfig: currentConfig.replace(
+    "model_auto_compact_token_limit = 900000",
+    "model_context_window = 872000\nmodel_auto_compact_token_limit = 780000",
+  ),
   copilotLines: [
     {
       kind: "removed" as const,
@@ -127,10 +130,19 @@ const codexListPreview = {
       newLineNumber: null,
       text: catalogLine,
     },
-    ...currentLines.map((text, index) => ({
+    {
       kind: "context" as const,
-      oldLineNumber: index + 2,
-      newLineNumber: index + 1,
+      oldLineNumber: 2,
+      newLineNumber: 1,
+      text: currentLines[0] + "\n",
+    },
+    { ...removed(2), oldLineNumber: 3 },
+    added(2, "model_context_window = 872000"),
+    added(3, "model_auto_compact_token_limit = 780000"),
+    ...currentLines.slice(2).map((text, index) => ({
+      kind: "context" as const,
+      oldLineNumber: index + 4,
+      newLineNumber: index + 4,
       text: text + "\n",
     })),
   ],
@@ -264,7 +276,9 @@ describe("read-only Codex connection suggestions", () => {
       "Codex default list",
     ]);
     fireEvent.click(screen.getByRole("option", { name: "Codex default list" }));
-    await screen.findByText("1 line removed from the suggestion.");
+    await screen.findByText(
+      "2 lines added, 2 lines removed from the suggestion.",
+    );
     expect(mocks.invoke).toHaveBeenLastCalledWith(
       "get_codex_setup_suggestion",
       { configPath: null, useCustomModelCatalog: false },
@@ -272,17 +286,28 @@ describe("read-only Codex connection suggestions", () => {
     const cells = rowFor(catalogLine.trim()).getAllByRole("cell");
     expect(cells[0]).toHaveTextContent(catalogLine.trim());
     expect(cells[1]).toHaveTextContent(/^$/);
+    for (const line of [
+      "model_context_window = 872000",
+      "model_auto_compact_token_limit = 780000",
+    ]) {
+      const cells = rowFor(line).getAllByRole("cell");
+      expect(cells[1]).toHaveTextContent(line);
+    }
     expect(copyProposal().parentElement).toContainElement(
       screen.getByRole("status"),
     );
     fireEvent.click(copyProposal());
     await waitFor(() =>
-      expect(mocks.copy).toHaveBeenLastCalledWith(currentConfig),
+      expect(mocks.copy).toHaveBeenLastCalledWith(
+        codexListPreview.copilotConfig,
+      ),
     );
     expect(localStorage.getItem(modelListKey)).toBe("codex");
     first.unmount();
     renderPanel();
-    await screen.findByText("1 line removed from the suggestion.");
+    await screen.findByText(
+      "2 lines added, 2 lines removed from the suggestion.",
+    );
     expect(modelListControl()).toHaveTextContent("Codex default list");
     await selectOption(connectionControl(), "Official OpenAI sign-in");
     expect(

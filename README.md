@@ -19,4 +19,12 @@ and `~/.copilot-bridge-atlas` on macOS. Patch updates preserve this data.
 2. Then **Settings → Models** to refresh your models.
 3. Turn on the proxy switch (right top). The default address is `http://127.0.0.1:15722/v1`.
 4. Open **Connect**, review the proposed TOML, copy it, and apply it yourself.
-5. Reload Codex so it loads the selected provider and generated model catalog.
+5. Reload Codex so it loads the selected provider, model list, and context settings.
+
+Connect defaults to **Atlas customized list (Settings → Models)**. Selecting
+**Codex default list** omits `model_catalog_json` and proposes
+`model_context_window = 872000` with `model_auto_compact_token_limit = 780000`.
+This keeps Codex's native list and instructions while requesting a larger context
+budget. The installed Codex client and upstream model still enforce their limits.
+The choice changes the preview only; review and apply the TOML manually. Atlas
+continues refreshing its generated catalog in either mode.

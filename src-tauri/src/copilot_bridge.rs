@@ -384,6 +384,7 @@ fn setup_suggestion(
     endpoint: &str,
     catalog: Option<&Path>,
     _recommendations: Option<&SetupRecommendations>,
+    use_codex_default_list: bool,
 ) -> Result<CodexSetupSuggestion, AppError> {
     let current = current_text
         .parse::<toml_edit::DocumentMut>()
@@ -515,9 +516,19 @@ fn setup_suggestion(
             openai.remove("model_providers");
         }
     }
-    // Per-model context windows are defined in the catalog (model_catalog_json).
-    // Remove top-level model_context_window in both proposals so Codex relies on catalog definitions.
-    copilot.remove("model_context_window");
+    if use_codex_default_list {
+        // Native Codex metadata defaults to a smaller window. Suggest the
+        // installed client's supported ceiling and leave room for compaction.
+        for (key, tokens) in [
+            ("model_context_window", 872_000),
+            ("model_auto_compact_token_limit", 780_000),
+        ] {
+            set_connection_value(copilot.as_table_mut(), key, toml_edit::value(tokens));
+        }
+    } else {
+        // Atlas's customized list supplies per-model context windows.
+        copilot.remove("model_context_window");
+    }
     openai.remove("model_context_window");
     let copilot_config = copilot.to_string();
     let openai_config = openai.to_string();
@@ -565,6 +576,7 @@ fn setup_suggestion_from_file(
     endpoint: &str,
     catalog: Option<&Path>,
     recommendations: Option<&SetupRecommendations>,
+    use_codex_default_list: bool,
 ) -> Result<CodexSetupSuggestion, String> {
     let read_error =
         |error: std::io::Error| format!("Cannot read TOML file {}: {error}", path.display());
@@ -593,8 +605,16 @@ fn setup_suggestion_from_file(
         }
         Err(error) => return Err(read_error(error)),
     };
-    setup_suggestion(&text, path, exists, endpoint, catalog, recommendations)
-        .map_err(|error| error.to_string())
+    setup_suggestion(
+        &text,
+        path,
+        exists,
+        endpoint,
+        catalog,
+        recommendations,
+        use_codex_default_list,
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn setup_suggestion_for_model_list(
@@ -606,7 +626,14 @@ fn setup_suggestion_for_model_list(
     use_custom_model_catalog: Option<bool>,
 ) -> Result<CodexSetupSuggestion, String> {
     let catalog = (use_custom_model_catalog.unwrap_or(true) && catalog.exists()).then_some(catalog);
-    setup_suggestion_from_file(path, explicit, endpoint, catalog, recommendations)
+    setup_suggestion_from_file(
+        path,
+        explicit,
+        endpoint,
+        catalog,
+        recommendations,
+        use_custom_model_catalog == Some(false),
+    )
 }
 
 #[tauri::command]
@@ -741,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn model_list_choice_changes_only_the_suggestion_catalog_reference() {
+    fn model_list_choice_suggests_native_context_without_changing_files() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.toml");
         let catalog = directory.path().join("atlas-models.json");
@@ -772,7 +799,23 @@ mod tests {
             Some(catalog.to_string_lossy().as_ref())
         );
         atlas_config.remove("model_catalog_json");
-        assert_eq!(atlas_config.to_string(), codex.copilot_config);
+        assert!(atlas_config.get("model_context_window").is_none());
+        assert!(atlas_config.get("model_auto_compact_token_limit").is_none());
+        let mut codex_config = codex
+            .copilot_config
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        assert_eq!(
+            codex_config["model_context_window"].as_integer(),
+            Some(872000)
+        );
+        assert_eq!(
+            codex_config["model_auto_compact_token_limit"].as_integer(),
+            Some(780000)
+        );
+        codex_config.remove("model_context_window");
+        codex_config.remove("model_auto_compact_token_limit");
+        assert_eq!(atlas_config.to_string(), codex_config.to_string());
         assert_eq!(atlas.openai_config, codex.openai_config);
         assert_diff_snapshots(&atlas.copilot_lines, text, &atlas.copilot_config);
         assert_diff_snapshots(&codex.copilot_lines, text, &codex.copilot_config);
@@ -783,8 +826,128 @@ mod tests {
         );
 
         std::fs::remove_file(&catalog).unwrap();
-        assert_eq!(preview(Some(true)).copilot_config, codex.copilot_config);
+        assert_eq!(preview(Some(true)).copilot_config, atlas_config.to_string());
+        assert_eq!(preview(None).copilot_config, atlas_config.to_string());
+        assert_eq!(preview(Some(false)).copilot_config, codex.copilot_config);
         assert!(!catalog.exists(), "Preview must not generate a catalog");
+    }
+
+    #[test]
+    fn native_context_suggestion_replaces_overrides_and_preserves_other_preferences() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("work.toml");
+        let catalog = directory.path().join("missing-catalog.json");
+        let text = r#"# Keep my preferences
+model = "gpt-6-astra"
+model_context_window = 1_050_000 # Context comment
+model_auto_compact_token_limit = 900_000 # Compaction comment
+model_reasoning_effort = "max"
+[profiles.keep]
+model_context_window = 128000
+model_auto_compact_token_limit = 100000
+[custom]
+keep = true
+"#;
+        std::fs::write(&path, text).unwrap();
+        let original = text.parse::<toml_edit::DocumentMut>().unwrap();
+        let preview = setup_suggestion_for_model_list(
+            &path,
+            true,
+            "http://127.0.0.1:15722/v1",
+            &catalog,
+            None,
+            Some(false),
+        )
+        .unwrap();
+        let proposed = preview
+            .copilot_config
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        assert_eq!(proposed["model_context_window"].as_integer(), Some(872000));
+        assert_eq!(
+            proposed["model_auto_compact_token_limit"].as_integer(),
+            Some(780000)
+        );
+        assert!(!proposed.contains_key("model_catalog_json"));
+        for key in ["model", "model_reasoning_effort", "profiles", "custom"] {
+            assert_eq!(
+                proposed[key].to_string(),
+                original[key].to_string(),
+                "{key}"
+            );
+        }
+        for comment in [
+            "# Keep my preferences",
+            "# Context comment",
+            "# Compaction comment",
+        ] {
+            assert!(preview.copilot_config.contains(comment));
+        }
+        let official = preview
+            .openai_config
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        assert!(!official.contains_key("model_context_window"));
+        assert_eq!(
+            official["model_auto_compact_token_limit"].as_integer(),
+            Some(900000)
+        );
+        assert_diff_snapshots(&preview.copilot_lines, text, &preview.copilot_config);
+        assert_diff_snapshots(&preview.openai_lines, text, &preview.openai_config);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        assert!(!catalog.exists());
+
+        // Previewing an already-applied proposal must not introduce another diff.
+        std::fs::write(&path, &preview.copilot_config).unwrap();
+        let repeated = setup_suggestion_for_model_list(
+            &path,
+            true,
+            "http://127.0.0.1:15722/v1",
+            &catalog,
+            None,
+            Some(false),
+        )
+        .unwrap();
+        assert_eq!(repeated.copilot_config, preview.copilot_config);
+        assert!(repeated
+            .copilot_lines
+            .iter()
+            .all(|line| line.kind == "context"));
+    }
+
+    #[test]
+    fn native_context_suggestion_for_a_new_config_does_not_create_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("missing-parent/config.toml");
+        let catalog = directory.path().join("atlas-models.json");
+        let preview = setup_suggestion_for_model_list(
+            &path,
+            false,
+            "http://127.0.0.1:15722/v1",
+            &catalog,
+            None,
+            Some(false),
+        )
+        .unwrap();
+        assert!(!preview.config_exists);
+        let proposed = preview
+            .copilot_config
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        assert_eq!(proposed["model_context_window"].as_integer(), Some(872000));
+        assert_eq!(
+            proposed["model_auto_compact_token_limit"].as_integer(),
+            Some(780000)
+        );
+        let official = preview
+            .openai_config
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        assert!(!official.contains_key("model_context_window"));
+        assert!(!official.contains_key("model_auto_compact_token_limit"));
+        assert_diff_snapshots(&preview.copilot_lines, "", &preview.copilot_config);
+        assert!(!path.parent().unwrap().exists());
+        assert!(!catalog.exists());
     }
 
     #[test]
@@ -862,7 +1025,7 @@ model_reasoning_effort = "medium"
         std::fs::write(&path, text).unwrap();
         let original = text.parse::<toml_edit::DocumentMut>().unwrap();
         let baseline =
-            setup_suggestion_from_file(&path, true, "http://127.0.0.1:15722/v1", None, None)
+            setup_suggestion_from_file(&path, true, "http://127.0.0.1:15722/v1", None, None, false)
                 .unwrap();
         for flags in [
             json!({}),
@@ -876,6 +1039,7 @@ model_reasoning_effort = "medium"
                 "http://127.0.0.1:15722/v1",
                 None,
                 Some(&recommendations),
+                false,
             )
             .unwrap();
             if !recommendations.context_1m {
@@ -937,6 +1101,7 @@ notify = ["unchanged"]
             "http://127.0.0.1:15722/v1",
             None,
             Some(&recommendations),
+            false,
         )
         .unwrap();
         for config in [&preview.copilot_config, &preview.openai_config] {
@@ -983,6 +1148,7 @@ notify = ["unchanged"]
                 "http://127.0.0.1:15722/v1",
                 None,
                 None,
+                false,
             )
             .unwrap();
             assert!(preview.config_exists);
@@ -1016,20 +1182,31 @@ notify = ["unchanged"]
     fn missing_auto_file_is_distinct_from_missing_selection_and_existing_empty_file() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("missing-parent").join("config.toml");
-        let preview =
-            setup_suggestion_from_file(&path, false, "http://127.0.0.1:15722/v1", None, None)
-                .unwrap();
+        let preview = setup_suggestion_from_file(
+            &path,
+            false,
+            "http://127.0.0.1:15722/v1",
+            None,
+            None,
+            false,
+        )
+        .unwrap();
         assert!(!preview.config_exists);
         assert_eq!(
             serde_json::to_value(&preview).unwrap()["configExists"],
             false
         );
         assert_diff_snapshots(&preview.copilot_lines, "", &preview.copilot_config);
-        assert!(
-            setup_suggestion_from_file(&path, true, "http://127.0.0.1:15722/v1", None, None)
-                .unwrap_err()
-                .contains("does not exist")
-        );
+        assert!(setup_suggestion_from_file(
+            &path,
+            true,
+            "http://127.0.0.1:15722/v1",
+            None,
+            None,
+            false
+        )
+        .unwrap_err()
+        .contains("does not exist"));
         assert!(!path.parent().unwrap().exists());
 
         let empty = directory.path().join("empty.toml");
@@ -1041,6 +1218,7 @@ notify = ["unchanged"]
                 "http://127.0.0.1:15722/v1",
                 None,
                 None,
+                false,
             )
             .unwrap();
             assert!(preview.config_exists);
@@ -1067,26 +1245,42 @@ notify = ["unchanged"]
 
         let folder = directory.path().join("folder.toml");
         std::fs::create_dir(&folder).unwrap();
-        assert!(
-            setup_suggestion_from_file(&folder, true, "http://localhost/v1", None, None).is_err()
-        );
+        assert!(setup_suggestion_from_file(
+            &folder,
+            true,
+            "http://localhost/v1",
+            None,
+            None,
+            false
+        )
+        .is_err());
 
         let broken = directory.path().join("broken.toml");
         std::fs::write(&broken, "broken = [").unwrap();
-        assert!(
-            setup_suggestion_from_file(&broken, true, "http://localhost/v1", None, None)
-                .unwrap_err()
-                .contains("invalid")
-        );
+        assert!(setup_suggestion_from_file(
+            &broken,
+            true,
+            "http://localhost/v1",
+            None,
+            None,
+            false
+        )
+        .unwrap_err()
+        .contains("invalid"));
         assert_eq!(std::fs::read_to_string(&broken).unwrap(), "broken = [");
 
         let unreadable = directory.path().join("not-utf8.toml");
         std::fs::write(&unreadable, [0xff_u8]).unwrap();
-        assert!(
-            setup_suggestion_from_file(&unreadable, true, "http://localhost/v1", None, None)
-                .unwrap_err()
-                .contains("Cannot read TOML file")
-        );
+        assert!(setup_suggestion_from_file(
+            &unreadable,
+            true,
+            "http://localhost/v1",
+            None,
+            None,
+            false
+        )
+        .unwrap_err()
+        .contains("Cannot read TOML file"));
         assert_eq!(std::fs::read(&unreadable).unwrap(), [0xff_u8]);
     }
 
@@ -1495,6 +1689,7 @@ command = "unchanged"
             "http://127.0.0.1:15722/v1",
             Some(&catalog),
             None,
+            false,
         )
         .unwrap();
         assert!(preview.config_exists);
@@ -1557,6 +1752,7 @@ command = "unchanged"
             "http://127.0.0.1:15722/v1",
             Some(&catalog),
             None,
+            false,
         )
         .unwrap();
         assert_diff_snapshots(
@@ -1579,7 +1775,7 @@ command = "unchanged"
             "model_provider = 'missing'\n",
             "model_provider = 'openai'\n[model_providers.openai]\nbase_url = 'http://127.0.0.1:15722/v1'\n",
         ] {
-            let preview = setup_suggestion(text, Path::new("config.toml"), false, "http://127.0.0.1:15722/v1", None, None).unwrap();
+            let preview = setup_suggestion(text, Path::new("config.toml"), false, "http://127.0.0.1:15722/v1", None, None, false).unwrap();
             let doc = preview.copilot_config.parse::<toml_edit::DocumentMut>().unwrap();
             let id = doc["model_provider"].as_str().unwrap();
             assert_ne!(id, "openai");
@@ -1605,7 +1801,7 @@ command = "keep-me"
         let path = temp.path().join("config.toml");
         std::fs::write(&path, text).unwrap();
         let result =
-            setup_suggestion_from_file(&path, true, "http://127.0.0.1:15722/v1", None, None)
+            setup_suggestion_from_file(&path, true, "http://127.0.0.1:15722/v1", None, None, false)
                 .unwrap();
         assert!(result.configured);
         let parsed = result
@@ -1634,9 +1830,16 @@ command = "keep-me"
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("config.toml");
         for text in ["", "model_provider = \"openai\"\n"] {
-            let result =
-                setup_suggestion(text, &path, false, "http://127.0.0.1:15722/v1", None, None)
-                    .unwrap();
+            let result = setup_suggestion(
+                text,
+                &path,
+                false,
+                "http://127.0.0.1:15722/v1",
+                None,
+                None,
+                false,
+            )
+            .unwrap();
             assert_diff_snapshots(&result.copilot_lines, text, &result.copilot_config);
             assert_diff_snapshots(&result.openai_lines, text, &result.openai_config);
             assert!(!result.configured);
@@ -1651,7 +1854,8 @@ command = "keep-me"
             false,
             "http://localhost/v1",
             None,
-            None
+            None,
+            false
         )
         .is_err());
         assert!(!path.exists());
@@ -1663,7 +1867,8 @@ command = "keep-me"
                 false,
                 "http://127.0.0.1:15722/v1",
                 None,
-                None
+                None,
+                false
             )
             .unwrap()
             .configured

@@ -528,7 +528,7 @@ impl Database {
                 "The imported SQL is missing required Copilot Bridge Atlas tables: {names}"
             )));
         }
-        Ok(())
+        Self::initialize_schema_on_conn(conn)
     }
 
     /// Export database as SQL text in the internal serialization tests.
@@ -1127,6 +1127,25 @@ mod tests {
                 target.display()
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn importing_pre_client_export_adds_unknown_without_losing_history() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let source = Database::memory()?;
+        source.conn.lock().unwrap().execute_batch("ALTER TABLE proxy_request_logs DROP COLUMN client_name; ALTER TABLE proxy_request_logs DROP COLUMN client_source; ALTER TABLE proxy_request_logs DROP COLUMN client_version;
+            INSERT INTO proxy_request_logs (request_id, provider_id, app_type, model, latency_ms, status_code, created_at) VALUES ('legacy-client', 'p', 'codex', 'm', 1, 200, 1);")?;
+        let sql = source.export_sql_string()?;
+        let target = Database::memory()?;
+        target.import_sql_string(&sql)?;
+        let name: String = target.conn.lock().unwrap().query_row(
+            "SELECT client_name FROM proxy_request_logs WHERE request_id='legacy-client'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(name, "Unknown");
         Ok(())
     }
 

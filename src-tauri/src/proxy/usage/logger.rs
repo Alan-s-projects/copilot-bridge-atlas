@@ -91,11 +91,20 @@ pub struct RequestLog {
 /// Usage logger
 pub struct UsageLogger<'a> {
     db: &'a Database,
+    client: crate::proxy::client_identity::ClientIdentity,
 }
 
 impl<'a> UsageLogger<'a> {
     pub fn new(db: &'a Database) -> Self {
-        Self { db }
+        Self {
+            db,
+            client: Default::default(),
+        }
+    }
+
+    pub fn with_client(mut self, client: crate::proxy::client_identity::ClientIdentity) -> Self {
+        self.client = client;
+        self
     }
 
     /// Log successful requests
@@ -175,8 +184,8 @@ impl<'a> UsageLogger<'a> {
                 input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
                 latency_ms, first_token_ms, status_code, error_message, session_id,
                 provider_type, is_streaming, cost_multiplier, created_at,
-                requested_reasoning_effort, applied_reasoning_effort, pricing_tier
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)"
+                requested_reasoning_effort, applied_reasoning_effort, pricing_tier, client_name, client_source, client_version
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)"
         );
         let affected_rows = conn
             .execute(
@@ -210,6 +219,9 @@ impl<'a> UsageLogger<'a> {
                     log.reasoning_effort.requested,
                     log.reasoning_effort.applied,
                     log.cost.as_ref().map(|cost| cost.pricing_tier),
+                    self.client.client_name,
+                    self.client.client_source,
+                    self.client.client_version,
                 ],
             )
             .map_err(|e| AppError::Database(format!("Failed to log request: {e}")))?;
@@ -778,6 +790,27 @@ mod tests {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         assert_eq!(pair, ("ultra".into(), "high".into()));
+        Ok(())
+    }
+    #[test]
+    fn client_identity_round_trips_and_does_not_change_deduplication() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let client = crate::proxy::client_identity::ClientIdentity {
+            client_name: "Codex CLI".into(),
+            client_source: "originator".into(),
+            client_version: Some("1.2.3".into()),
+        };
+        let logger = UsageLogger::new(&db).with_client(client.clone());
+        let log = request_log("client-fixture", 12);
+        logger.log_request(&log)?;
+        UsageLogger::new(&db).log_request(&log)?;
+        let logs =
+            db.get_request_logs(&crate::services::usage_stats::LogFilters::default(), 0, 20)?;
+        assert_eq!(logs.total, 1);
+        assert_eq!(logs.data[0].client, client);
+        let json = serde_json::to_value(&logs.data[0]).unwrap();
+        assert_eq!(json["clientName"], "Codex CLI");
+        assert_eq!(json["clientVersion"], "1.2.3");
         Ok(())
     }
 }

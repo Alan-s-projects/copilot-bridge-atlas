@@ -94,6 +94,7 @@ export function RequestLogTable({
       ) : (
         <>
           <RequestLogsGrid
+            showClient
             logs={logs}
             columns={columns}
             onInspectError={setSelectedError}

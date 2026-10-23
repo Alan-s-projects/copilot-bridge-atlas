@@ -1,4 +1,7 @@
 export interface RequestLog {
+  clientName?: string;
+  clientSource?: string;
+  clientVersion?: string;
   requestId: string;
   providerId: string;
   providerName?: string;
@@ -44,6 +47,9 @@ export interface RequestDiagnosticDetail {
 export interface PendingRequestLog
   extends Pick<
     RequestLog,
+    | "clientName"
+    | "clientSource"
+    | "clientVersion"
     | "requestId"
     | "createdAt"
     | "model"

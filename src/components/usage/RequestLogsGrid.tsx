@@ -32,12 +32,14 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
   logs,
   caption,
   showTokenDetails = true,
+  showClient = false,
   columns,
   onInspectError,
 }: {
   logs: RequestLogRow[];
   caption?: string;
   showTokenDetails?: boolean;
+  showClient?: boolean;
   columns?: string[];
   onInspectError?: (log: RequestLog) => void;
 }) {
@@ -48,8 +50,9 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
       columns,
       REQUEST_LOG_COLUMNS.filter(
         ({ id }) =>
-          showTokenDetails ||
-          !["output", "cacheWrite", "pricingTier"].includes(id),
+          (showClient || id !== "client") &&
+          (showTokenDetails ||
+            !["output", "cacheWrite", "pricingTier"].includes(id)),
       ),
     ),
   );
@@ -65,6 +68,12 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
               className="text-center whitespace-nowrap"
             >
               {t("usage.time", "Time")}
+            </TableHead>
+            <TableHead
+              hidden={!visible.has("client")}
+              className="text-center whitespace-nowrap"
+            >
+              Client
             </TableHead>
             <TableHead
               hidden={!visible.has("model")}
@@ -161,6 +170,12 @@ export const RequestLogsGrid = memo(function RequestLogsGrid({
                       hour: "2-digit",
                       minute: "2-digit",
                     })}
+                  </TableCell>
+                  <TableCell
+                    hidden={!visible.has("client")}
+                    className="text-center whitespace-nowrap text-xs px-1.5"
+                  >
+                    {log.clientName || "Unknown"}
                   </TableCell>
                   <TableCell
                     hidden={!visible.has("model")}

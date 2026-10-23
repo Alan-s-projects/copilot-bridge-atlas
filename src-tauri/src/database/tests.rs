@@ -266,3 +266,42 @@ fn incremental_vacuum_rebuild_preserves_rows() {
         "keep"
     );
 }
+
+#[test]
+fn client_columns_migrate_legacy_rows_and_preferences_once() -> Result<(), AppError> {
+    let db = Database::memory()?;
+    let conn = db.conn.lock().unwrap();
+    conn.execute_batch("ALTER TABLE proxy_request_logs DROP COLUMN client_name; ALTER TABLE proxy_request_logs DROP COLUMN client_source; ALTER TABLE proxy_request_logs DROP COLUMN client_version;
+        INSERT INTO proxy_request_logs (request_id, provider_id, app_type, model, latency_ms, status_code, created_at) VALUES ('old', 'p', 'codex', 'm', 1, 200, 1);")?;
+    conn.execute(
+        "INSERT INTO settings (key,value) VALUES ('usage_table_columns', ?1)",
+        [r#"{"requestLogs":["time","model"],"modelStats":["model"]}"#],
+    )?;
+    Database::initialize_schema_on_conn(&conn)?;
+    let client: (String, String, Option<String>) = conn.query_row("SELECT client_name, client_source, client_version FROM proxy_request_logs WHERE request_id='old'", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    assert_eq!(client, ("Unknown".into(), "unknown".into(), None));
+    let saved: String = conn.query_row(
+        "SELECT value FROM settings WHERE key='usage_table_columns'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&saved).unwrap(),
+        json!({"requestLogs":["time","client","model"],"modelStats":["model"]})
+    );
+    conn.execute(
+        "UPDATE settings SET value=?1 WHERE key='usage_table_columns'",
+        [r#"{"requestLogs":["time","model"]}"#],
+    )?;
+    Database::initialize_schema_on_conn(&conn)?;
+    let saved: String = conn.query_row(
+        "SELECT value FROM settings WHERE key='usage_table_columns'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&saved).unwrap(),
+        json!({"requestLogs":["time","model"]})
+    );
+    Ok(())
+}

@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
         conn.execute_batch("SAVEPOINT atlas_schema;")
             .map_err(|error| AppError::Database(error.to_string()))?;
         let result = Self::create_tables_on_conn(conn)
+            .and_then(|_| Self::ensure_client_columns(conn))
             .and_then(|_| Self::set_user_version(conn, SCHEMA_VERSION))
             .and_then(|_| Self::set_application_id(conn, APPLICATION_ID));
         match result {
@@ -99,6 +100,61 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
                 Err(error)
             }
         }
+    }
+
+    pub(crate) fn ensure_client_columns(conn: &Connection) -> Result<(), AppError> {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(proxy_request_logs)")
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let columns = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(|e| AppError::Database(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        drop(stmt);
+        for (name, definition) in [
+            ("client_name", "TEXT NOT NULL DEFAULT 'Unknown'"),
+            ("client_source", "TEXT NOT NULL DEFAULT 'unknown'"),
+            ("client_version", "TEXT"),
+        ] {
+            if !columns.iter().any(|c| c == name) {
+                conn.execute(
+                    &format!("ALTER TABLE proxy_request_logs ADD COLUMN {name} {definition}"),
+                    [],
+                )
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            }
+        }
+        if !columns.iter().any(|c| c == "client_name") {
+            use rusqlite::OptionalExtension;
+            let saved: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM settings WHERE key = 'usage_table_columns'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            if let Some(mut value) =
+                saved.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            {
+                if let Some(list) = value.get_mut("requestLogs").and_then(|v| v.as_array_mut()) {
+                    if !list.is_empty() && !list.iter().any(|v| v.as_str() == Some("client")) {
+                        let at = list
+                            .iter()
+                            .position(|v| v.as_str() == Some("time"))
+                            .map_or(0, |i| i + 1);
+                        list.insert(at, serde_json::json!("client"));
+                        conn.execute(
+                            "UPDATE settings SET value = ?1 WHERE key = 'usage_table_columns'",
+                            [value.to_string()],
+                        )
+                        .map_err(|e| AppError::Database(e.to_string()))?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Insert missing bundled prices and return their IDs for cost backfill.

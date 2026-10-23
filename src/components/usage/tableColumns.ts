@@ -1,5 +1,6 @@
 export const REQUEST_LOG_COLUMNS = [
   { id: "time", label: "Time" },
+  { id: "client", label: "Client" },
   { id: "model", label: "Billing Model" },
   { id: "reasoning", label: "Reasoning (requested/applied)" },
   { id: "status", label: "Status" },

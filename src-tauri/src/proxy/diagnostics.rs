@@ -32,6 +32,7 @@ const MAX_SNAPSHOT_HEADERS: usize = 8 * 1024;
 
 #[derive(Default, Clone)]
 struct Details {
+    client: crate::proxy::client_identity::ClientIdentity,
     endpoint: String,
     upstream_model: String,
     transport: &'static str,
@@ -99,6 +100,10 @@ impl RequestDiagnostics {
             response_truncated: AtomicBool::new(false),
             failure_logged: AtomicBool::new(false),
         })
+    }
+
+    pub fn set_client(&self, client: crate::proxy::client_identity::ClientIdentity) {
+        self.details().client = client;
     }
 
     fn details(&self) -> std::sync::MutexGuard<'_, Details> {
@@ -302,7 +307,8 @@ impl RequestDiagnostics {
     pub fn proxy_failure(&self, stage: &'static str, error: &ProxyError) {
         // The client receives the original error. Only the private diagnostic
         // and history row use these bounded, sanitized categories.
-        self.completed(self.details().status.is_some(), stage);
+        let has_response = self.details().status.is_some();
+        self.completed(has_response, stage);
         self.record_failure(stage, map_proxy_error_to_status(error));
     }
 
@@ -358,7 +364,7 @@ impl RequestDiagnostics {
             summary
         );
 
-        let logger = UsageLogger::new(&self.db);
+        let logger = UsageLogger::new(&self.db).with_client(details.client.clone());
         let history_recorded = logger
             .log_error_with_context(
                 self.id.clone(),
@@ -1331,5 +1337,27 @@ mod tests {
             .request_headers
             .unwrap()
             .contains("authorization: [redacted]"));
+    }
+    #[test]
+    fn failed_request_keeps_incoming_client_identity() {
+        let db = Arc::new(Database::memory().unwrap());
+        let diagnostics = make_diagnostics(db.clone());
+        let client = crate::proxy::client_identity::detect_client(&HeaderMap::from_iter([(
+            "originator".parse().unwrap(),
+            "Codex Desktop".parse().unwrap(),
+        )]));
+        diagnostics.set_client(client.clone());
+        diagnostics.proxy_failure(
+            "upstream",
+            &ProxyError::UpstreamError {
+                status: 400,
+                body: None,
+            },
+        );
+        let logs = db
+            .get_request_logs(&crate::services::usage_stats::LogFilters::default(), 0, 20)
+            .unwrap();
+        assert_eq!(logs.total, 1);
+        assert_eq!(logs.data[0].client, client);
     }
 }

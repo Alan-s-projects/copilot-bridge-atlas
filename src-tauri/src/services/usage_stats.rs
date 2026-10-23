@@ -127,6 +127,8 @@ pub struct PaginatedLogs {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestLogDetail {
+    #[serde(flatten)]
+    pub client: crate::proxy::client_identity::ClientIdentity,
     pub request_id: String,
     pub provider_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -171,7 +173,7 @@ pub struct RequestLogDetail {
     pub pricing_tier: Option<String>,
 }
 
-/// Map the 30-column request-log projection.
+/// Map the 33-column request-log projection.
 ///
 /// The SELECT must return columns in this order:
 /// `request_id, provider_id, provider_name, app_type, model, request_model,
@@ -180,7 +182,7 @@ pub struct RequestLogDetail {
 ///  cache_creation_cost_usd, total_cost_usd, is_streaming, latency_ms,
 ///  first_token_ms, duration_ms, status_code, error_message, created_at,
 ///  data_source, pricing_model, input_token_semantics,
-///  requested_reasoning_effort, applied_reasoning_effort, fresh_input_tokens, pricing_tier`
+///  requested_reasoning_effort, applied_reasoning_effort, fresh_input_tokens, pricing_tier, client_name, client_source, client_version`
 ///
 /// When provider_name is not needed (such as backfill), SELECT `NULL AS provider_name` can be used as a placeholder.
 fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestLogDetail> {
@@ -217,6 +219,11 @@ fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
         applied_reasoning_effort: row.get(27)?,
         fresh_input_tokens: row.get::<_, i64>(28)? as u64,
         pricing_tier: row.get(29)?,
+        client: crate::proxy::client_identity::ClientIdentity {
+            client_name: row.get(30)?,
+            client_source: row.get(31)?,
+            client_version: row.get(32)?,
+        },
     })
 }
 
@@ -935,7 +942,7 @@ impl Database {
                     l.is_streaming, l.latency_ms, l.first_token_ms, l.duration_ms,
                     l.status_code, l.error_message, l.created_at, l.data_source, l.pricing_model,
                     l.input_token_semantics, l.requested_reasoning_effort, l.applied_reasoning_effort,
-                    {fresh_input} AS fresh_input_tokens, l.pricing_tier
+                    {fresh_input} AS fresh_input_tokens, l.pricing_tier, l.client_name, l.client_source, l.client_version
              FROM proxy_request_logs l
              LEFT JOIN providers p ON l.provider_id = p.id AND l.app_type = p.app_type
              {where_clause}
@@ -1004,7 +1011,7 @@ impl Database {
                         first_token_ms, duration_ms, status_code, error_message, created_at,
                         data_source, pricing_model, input_token_semantics,
                         requested_reasoning_effort, applied_reasoning_effort,
-                        {fresh_input} AS fresh_input_tokens, pricing_tier
+                        {fresh_input} AS fresh_input_tokens, pricing_tier, client_name, client_source, client_version
              FROM proxy_request_logs
              WHERE app_type = 'codex' AND data_source = 'proxy'
                AND CAST(total_cost_usd AS REAL) <= 0

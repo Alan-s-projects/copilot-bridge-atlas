@@ -76,6 +76,7 @@ impl ActiveConnectionGuard {
         status: Arc<RwLock<ProxyStatus>>,
         app_handle: Option<tauri::AppHandle>,
         body: &Value,
+        headers: &http::HeaderMap,
     ) -> Self {
         let request_id = format!("pending:{}", uuid::Uuid::new_v4());
         let model = body
@@ -89,6 +90,7 @@ impl ActiveConnectionGuard {
             s.active_requests.insert(
                 0,
                 ActiveProxyRequest {
+                    client: crate::proxy::client_identity::detect_client(headers),
                     request_id: request_id.clone(),
                     request_model: model.clone(),
                     model,
@@ -207,9 +209,13 @@ impl RequestForwarder {
             diagnostics.request_shape(endpoint, &body);
         }
         *reasoning_effort = ReasoningEffort::from_request(&body);
-        let guard =
-            ActiveConnectionGuard::acquire(self.status.clone(), self.app_handle.clone(), &body)
-                .await;
+        let guard = ActiveConnectionGuard::acquire(
+            self.status.clone(),
+            self.app_handle.clone(),
+            &body,
+            &headers,
+        )
+        .await;
         {
             let mut status = self.status.write().await;
             status.total_requests = status.total_requests.saturating_add(1);
@@ -1201,6 +1207,10 @@ mod tests {
                 "model": "gpt-6-astra", "reasoning": {"effort": "ultra"},
                 "input": "private request content"
             }),
+            &http::HeaderMap::from_iter([(
+                "originator".parse().unwrap(),
+                "Codex Desktop".parse().unwrap(),
+            )]),
         )
         .await;
         let second = ActiveConnectionGuard::acquire(
@@ -1209,6 +1219,7 @@ mod tests {
             &json!({
                 "model": "gpt-6-luna"
             }),
+            &http::HeaderMap::new(),
         )
         .await;
         first
@@ -1224,6 +1235,8 @@ mod tests {
             let state = status.read().await;
             assert_eq!(state.active_connections, 2);
             assert_eq!(state.active_requests[0].model, "gpt-6-luna");
+            assert_eq!(state.active_requests[0].client.client_name, "Unknown");
+            assert_eq!(state.active_requests[1].client.client_name, "Codex Desktop");
             assert_eq!(
                 state.active_requests[1]
                     .requested_reasoning_effort
@@ -1267,9 +1280,13 @@ mod tests {
         let task_status = status.clone();
         let (started, ready) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            let _guard =
-                ActiveConnectionGuard::acquire(task_status, None, &json!({"model": "gpt-6-sol"}))
-                    .await;
+            let _guard = ActiveConnectionGuard::acquire(
+                task_status,
+                None,
+                &json!({"model": "gpt-6-sol"}),
+                &http::HeaderMap::new(),
+            )
+            .await;
             let _ = started.send(());
             std::future::pending::<()>().await;
         });

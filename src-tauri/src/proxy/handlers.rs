@@ -482,6 +482,7 @@ async fn handle_codex_chat_to_responses_transform(
             let app_type_str = ctx.app_type_str;
             let start_time = ctx.start_time;
             let session_id = ctx.session_id.clone();
+            let client = ctx.client.clone();
             let reasoning_effort = ctx.reasoning_effort.clone();
 
             Some(SseUsageCollector::new(
@@ -510,6 +511,7 @@ async fn handle_codex_chat_to_responses_transform(
                     let provider_id = provider_id.clone();
                     let request_model = request_model.clone();
                     let session_id = session_id.clone();
+                    let client = client.clone();
                     let reasoning_effort = reasoning_effort.clone();
 
                     tokio::spawn(async move {
@@ -526,6 +528,7 @@ async fn handle_codex_chat_to_responses_transform(
                             status.as_u16(),
                             Some(session_id),
                             reasoning_effort,
+                            client,
                         )
                         .await;
                     });
@@ -624,6 +627,7 @@ async fn handle_codex_chat_to_responses_transform(
             let provider_id = ctx.provider.id.clone();
             let session_id = ctx.session_id.clone();
             let latency_ms = ctx.latency_ms();
+            let client = ctx.client.clone();
             let reasoning_effort = ctx.reasoning_effort.clone();
             async move {
                 log_usage(
@@ -639,6 +643,7 @@ async fn handle_codex_chat_to_responses_transform(
                     status.as_u16(),
                     Some(session_id),
                     reasoning_effort,
+                    client,
                 )
                 .await;
             }
@@ -1448,6 +1453,12 @@ mod tests {
                     app_handle: None,
                 };
                 let ctx = RequestContext {
+                    client: crate::proxy::client_identity::detect_client(
+                        &axum::http::HeaderMap::from_iter([(
+                            "originator".parse().unwrap(),
+                            "Codex Desktop".parse().unwrap(),
+                        )]),
+                    ),
                     start_time: Instant::now(),
                     provider: Provider::with_id("fixture".into(), "Fixture".into(), json!({})),
                     request_model: "gpt-6-astra".into(),
@@ -1540,6 +1551,8 @@ mod tests {
                     Some("high")
                 );
                 assert_eq!(logs.data[0].is_streaming, stream);
+                assert_eq!(logs.data[0].client.client_name, "Codex Desktop");
+                assert_eq!(logs.data[0].client.client_source, "originator");
             }
         }
     }

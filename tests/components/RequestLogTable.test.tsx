@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { RequestLogsGrid } from "@/components/usage/RequestLogsGrid";
 import { RequestLogTable } from "@/components/usage/RequestLogTable";
 import type { UsageRangeSelection } from "@/types/usage";
 import { createTestQueryClient } from "../utils/testQueryClient";
@@ -182,10 +183,10 @@ describe("RequestLogTable", () => {
       );
       const headings = screen.getAllByRole("columnheader");
       expect(screen.getByRole("table")).not.toHaveClass("[&_td]:py-1.5");
-      expect(headings).toHaveLength(10);
-      expect(headings[1]).toHaveTextContent("usage.billingModel");
-      expect(headings[2]).toHaveTextContent("Reasoning(requested/applied)");
-      expect(headings.slice(3).map((heading) => heading.textContent)).toEqual([
+      expect(headings).toHaveLength(11);
+      expect(headings[2]).toHaveTextContent("usage.billingModel");
+      expect(headings[3]).toHaveTextContent("Reasoning(requested/applied)");
+      expect(headings.slice(4).map((heading) => heading.textContent)).toEqual([
         "usage.status",
         "Input(fresh/cached/hit)",
         "usage.outputTokens",
@@ -204,9 +205,9 @@ describe("RequestLogTable", () => {
       expect(screen.queryByText("proxy")).not.toBeInTheDocument();
       if (hasLogs) {
         const cells = screen.getAllByRole("cell");
-        expect(cells).toHaveLength(10);
-        expect(cells[2]).toHaveTextContent("ultra / max");
-        expect(cells.slice(3).map((cell) => cell.textContent)).toEqual([
+        expect(cells).toHaveLength(11);
+        expect(cells[3]).toHaveTextContent("ultra / max");
+        expect(cells.slice(4).map((cell) => cell.textContent)).toEqual([
           "200",
           "700 / 200 / 20.0%",
           "20/20 tps",
@@ -218,7 +219,7 @@ describe("RequestLogTable", () => {
         expect(screen.getByText("gpt-6-astra")).toBeVisible();
         expect(screen.getByText("$0.0100")).toBeVisible();
       } else {
-        expect(screen.getByRole("cell")).toHaveAttribute("colspan", "10");
+        expect(screen.getByRole("cell")).toHaveAttribute("colspan", "11");
       }
     },
   );
@@ -364,5 +365,36 @@ describe("RequestLogTable", () => {
         }),
       );
     });
+  });
+});
+
+describe("request client column", () => {
+  it("appears immediately after Time and labels known and legacy requests", () => {
+    const rows = ["Codex Desktop", "Codex CLI", "Codex VS Code", undefined].map(
+      (clientName, i) => ({
+        requestId: String(i),
+        createdAt: 1792800000,
+        model: "gpt-6-astra",
+        clientName,
+        pending: true as const,
+      }),
+    );
+    render(<RequestLogsGrid showClient logs={rows} />);
+    expect(screen.getAllByRole("columnheader")[1]).toHaveTextContent("Client");
+    for (const label of [
+      "Codex Desktop",
+      "Codex CLI",
+      "Codex VS Code",
+      "Unknown",
+    ])
+      expect(screen.getByText(label)).toBeVisible();
+  });
+  it("respects the existing column visibility controls", () => {
+    render(
+      <RequestLogsGrid showClient logs={[]} columns={["time", "model"]} />,
+    );
+    expect(
+      screen.queryByRole("columnheader", { name: "Client" }),
+    ).not.toBeInTheDocument();
   });
 });

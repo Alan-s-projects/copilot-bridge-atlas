@@ -85,6 +85,8 @@ pub struct ProxyStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveProxyRequest {
+    #[serde(flatten)]
+    pub client: crate::proxy::client_identity::ClientIdentity,
     pub request_id: String,
     pub model: String,
     pub request_model: String,

@@ -450,6 +450,7 @@ pub(crate) fn create_usage_collector(
     let stream_parser = parser_config.stream_parser;
     let model_extractor = parser_config.model_extractor;
     let session_id = ctx.session_id.clone();
+    let client = ctx.client.clone();
     let reasoning_effort = ctx.reasoning_effort.clone();
 
     Some(SseUsageCollector::new(
@@ -464,6 +465,7 @@ pub(crate) fn create_usage_collector(
                 let provider_id = provider_id.clone();
                 let session_id = session_id.clone();
                 let request_model = request_model.clone();
+                let client = client.clone();
                 let reasoning_effort = reasoning_effort.clone();
 
                 tokio::spawn(async move {
@@ -480,6 +482,7 @@ pub(crate) fn create_usage_collector(
                         status_code,
                         Some(session_id),
                         reasoning_effort,
+                        client,
                     )
                     .await;
                 });
@@ -490,6 +493,7 @@ pub(crate) fn create_usage_collector(
                 let provider_id = provider_id.clone();
                 let session_id = session_id.clone();
                 let request_model = request_model.clone();
+                let client = client.clone();
                 let reasoning_effort = reasoning_effort.clone();
 
                 tokio::spawn(async move {
@@ -506,6 +510,7 @@ pub(crate) fn create_usage_collector(
                         status_code,
                         Some(session_id),
                         reasoning_effort,
+                        client,
                     )
                     .await;
                 });
@@ -532,6 +537,7 @@ fn spawn_log_usage(
     let request_model = request_model.to_string();
     let latency_ms = ctx.latency_ms();
     let session_id = ctx.session_id.clone();
+    let client = ctx.client.clone();
     let reasoning_effort = ctx.reasoning_effort.clone();
 
     tokio::spawn(async move {
@@ -548,6 +554,7 @@ fn spawn_log_usage(
             status_code,
             Some(session_id),
             reasoning_effort,
+            client,
         )
         .await;
     });
@@ -568,10 +575,11 @@ pub(super) async fn log_usage(
     status_code: u16,
     session_id: Option<String>,
     reasoning_effort: ReasoningEffort,
+    client: crate::proxy::client_identity::ClientIdentity,
 ) {
     use super::usage::logger::UsageLogger;
 
-    let logger = UsageLogger::new(&state.db);
+    let logger = UsageLogger::new(&state.db).with_client(client);
     let pricing_model = model;
 
     let request_id = usage.dedup_request_id(app_type, provider_id);
@@ -1139,6 +1147,7 @@ mod tests {
             200,
             None,
             ReasoningEffort::default(),
+            Default::default(),
         )
         .await;
 

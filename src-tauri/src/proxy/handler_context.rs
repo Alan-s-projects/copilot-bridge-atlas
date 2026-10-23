@@ -14,6 +14,7 @@ use std::time::Instant;
 
 pub struct RequestContext {
     pub start_time: Instant,
+    pub client: crate::proxy::client_identity::ClientIdentity,
     pub provider: Provider,
     pub request_model: String,
     /// Actual outbound identity anchors request-based pricing.
@@ -67,7 +68,10 @@ impl RequestContext {
             session.session_id.clone(),
             start_time,
         );
+        let client = crate::proxy::client_identity::detect_client(headers);
+        diagnostics.set_client(client.clone());
         Ok(Self {
+            client,
             start_time,
             provider,
             request_model,

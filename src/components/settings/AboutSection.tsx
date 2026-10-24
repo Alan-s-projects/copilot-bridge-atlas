@@ -63,10 +63,6 @@ export function AboutSection({
         <h2 className="text-xl font-semibold">
           Copilot Bridge Atlas {version}
         </h2>
-        <p className="text-sm text-muted-foreground">
-          A local OpenAI-compatible server connecting Codex to GitHub Copilot,
-          with usage statistics and read-only configuration suggestions.
-        </p>
         <div className="flex flex-wrap gap-3">
           <Button
             variant="outline"

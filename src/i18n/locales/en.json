@@ -23,13 +23,9 @@
     "tabGeneral": "General",
     "tabAuth": "Accounts",
     "tabProxy": "Routing",
-    "authCenter": {
-      "copilotDescription": "Manage GitHub Copilot accounts"
-    },
     "about": {
       "backup": {
-        "title": "Backup & Restore",
-        "description": "Manage automatic backups, view and restore database snapshots"
+        "title": "Backup & Restore"
       }
     },
     "theme": "Theme",
@@ -69,7 +65,6 @@
     },
     "windowBehavior": "Window Behavior",
     "launchOnStartup": "Launch on Startup",
-    "launchOnStartupDescription": "Automatically run Copilot Bridge Atlas when system starts",
     "autoLaunchFailed": "Failed to set auto-launch",
     "saving": "Saving...",
     "saved": "Saved",

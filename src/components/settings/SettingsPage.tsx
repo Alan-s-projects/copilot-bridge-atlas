@@ -191,19 +191,11 @@ export function SettingsPage({
                         <AccordionTrigger className="px-6 py-4 hover:no-underline hover:bg-muted/50 data-[state=open]:bg-muted/50">
                           <div className="flex items-center gap-3">
                             <HardDriveDownload className="h-5 w-5 text-muted-foreground" />
-                            <div className="text-left">
-                              <h3 className="text-base font-semibold">
-                                {t("settings.about.backup.title", {
-                                  defaultValue: "Backup & Restore",
-                                })}
-                              </h3>
-                              <p className="text-sm text-muted-foreground font-normal">
-                                {t("settings.about.backup.description", {
-                                  defaultValue:
-                                    "Manage automatic backups, view and restore database snapshots",
-                                })}
-                              </p>
-                            </div>
+                            <span className="text-left text-base font-semibold">
+                              {t("settings.about.backup.title", {
+                                defaultValue: "Backup & Restore",
+                              })}
+                            </span>
                           </div>
                         </AccordionTrigger>
                         <AccordionContent className="px-6 pb-6 pt-4 border-t border-border/50">

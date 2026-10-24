@@ -729,7 +729,15 @@ mod tests {
             db.get_global_proxy_config().await.unwrap().claude.port,
             before.claude_port
         );
-        service.stop().await.unwrap();
+        let mut mapped = db.get_global_proxy_config().await.unwrap();
+        mapped.claude.haiku = "gpt-6-astra".into();
+        let (stop, save) = tokio::join!(service.stop(), service.update_global_settings(mapped));
+        stop.unwrap();
+        save.unwrap();
+        assert_eq!(
+            db.get_global_proxy_config().await.unwrap().claude.haiku,
+            "gpt-6-astra"
+        );
         assert!(!db.get_global_proxy_config().await.unwrap().proxy_enabled);
     }
 

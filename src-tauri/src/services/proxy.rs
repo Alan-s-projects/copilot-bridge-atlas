@@ -127,20 +127,14 @@ impl ProxyService {
 
     /// A manual Off action also persists the preference for the next launch.
     pub async fn stop(&self) -> Result<(), String> {
-        self.shutdown().await?;
-        let mut config = self
-            .db
-            .get_global_proxy_config()
-            .await
-            .map_err(|e| e.to_string())?;
-        if config.proxy_enabled {
-            config.proxy_enabled = false;
-            self.db
-                .update_global_proxy_config(config)
-                .await
-                .map_err(|e| e.to_string())?;
+        let mut guard = self.server.write().await;
+        if let Some(server) = guard.take() {
+            server.stop().await.map_err(|e| e.to_string())?;
         }
-        Ok(())
+        self.db
+            .set_proxy_enabled(false)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub async fn get_status(&self) -> Result<ProxyStatus, String> {
@@ -260,9 +254,5 @@ impl ProxyService {
         }
 
         Ok(())
-    }
-
-    pub async fn is_running(&self) -> bool {
-        self.server.read().await.is_some()
     }
 }

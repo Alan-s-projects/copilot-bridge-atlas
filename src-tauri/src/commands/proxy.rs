@@ -16,22 +16,7 @@ pub async fn start_proxy_server(
 /// Stop the proxy server (only stops the service, does not restore/clean up the Live takeover state)
 #[tauri::command]
 pub async fn stop_proxy_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    if state.proxy_service.is_running().await {
-        state.proxy_service.stop().await?;
-    } else {
-        let mut config = state
-            .db
-            .get_global_proxy_config()
-            .await
-            .map_err(|e| e.to_string())?;
-        config.proxy_enabled = false;
-        state
-            .db
-            .update_global_proxy_config(config)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    state.proxy_service.stop().await
 }
 
 /// Get proxy server status

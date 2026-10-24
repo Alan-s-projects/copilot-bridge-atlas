@@ -12,6 +12,12 @@ impl Database {
         Ok(())
     }
 
+    pub async fn set_proxy_enabled(&self, enabled: bool) -> Result<(), AppError> {
+        self.ensure_proxy_config_row_exists("codex")?;
+        lock_conn!(self.conn).execute("UPDATE proxy_config SET proxy_enabled=?1, updated_at=datetime('now') WHERE app_type='codex'", [enabled])?;
+        Ok(())
+    }
+
     pub async fn get_global_proxy_config(&self) -> Result<GlobalProxyConfig, AppError> {
         self.ensure_proxy_config_row_exists("codex")?;
         let mut config = lock_conn!(self.conn)

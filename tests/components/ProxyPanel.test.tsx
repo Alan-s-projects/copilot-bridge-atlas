@@ -6,10 +6,22 @@ const mocks = vi.hoisted(() => ({
   save: vi.fn(),
   copy: vi.fn(),
   config: {
+    claude: {
+      address: "127.0.0.1",
+      port: 15723,
+      sonnet: "",
+      opus: "",
+      haiku: "",
+      fable: "",
+    },
     proxyEnabled: true,
     listenAddress: "127.0.0.1",
     listenPort: 15722,
   },
+}));
+
+vi.mock("@/lib/query", () => ({
+  useProvidersQuery: () => ({ data: { providers: {}, currentProviderId: "" } }),
 }));
 
 vi.mock("react-i18next", () => ({
@@ -40,7 +52,9 @@ describe("ProxyPanel auto-save", () => {
 
   it("auto-saves listener edits and removes the Save button", async () => {
     render(<ProxyPanel />);
-    const address = screen.getByRole("textbox", { name: "Listen address" });
+    const address = screen.getByRole("textbox", {
+      name: "Responses API listen address",
+    });
     await waitFor(() => expect(address).toHaveValue("127.0.0.1"));
 
     fireEvent.change(address, { target: { value: "0.0.0.0" } });
@@ -75,7 +89,9 @@ describe("ProxyPanel auto-save", () => {
 
   it("flushes a pending listener edit when the settings panel closes", async () => {
     const { unmount } = render(<ProxyPanel />);
-    const address = screen.getByRole("textbox", { name: "Listen address" });
+    const address = screen.getByRole("textbox", {
+      name: "Responses API listen address",
+    });
     fireEvent.change(address, { target: { value: "0.0.0.0" } });
 
     unmount();
@@ -88,4 +104,14 @@ describe("ProxyPanel auto-save", () => {
       }),
     );
   });
+});
+
+it("shows two copyable URLs and mappings without per-server switches or display-name inputs", () => {
+  render(<ProxyPanel />);
+  expect(screen.getByRole("region", { name: "Responses API" })).toBeVisible();
+  expect(screen.getByRole("region", { name: "Messages API" })).toBeVisible();
+  expect(screen.getByText("http://127.0.0.1:15723")).toBeVisible();
+  expect(screen.getAllByRole("combobox")).toHaveLength(4);
+  expect(screen.queryByText("Display name")).not.toBeInTheDocument();
+  expect(screen.queryByRole("switch")).not.toBeInTheDocument();
 });

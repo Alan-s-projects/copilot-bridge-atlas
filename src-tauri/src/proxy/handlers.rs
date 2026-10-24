@@ -145,7 +145,7 @@ fn decode_codex_request_body(
 
 /// Limit both wire bytes and decoded bytes, including chunked and compressed
 /// requests. Axum's DefaultBodyLimit does not cover direct Request body reads.
-async fn read_codex_request_body(
+pub(crate) async fn read_codex_request_body(
     headers: &mut axum::http::HeaderMap,
     body: axum::body::Body,
     max_bytes: usize,

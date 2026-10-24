@@ -18,7 +18,7 @@ import { UsagePage } from "@/components/usage/UsagePage";
 import { BridgeOverview } from "@/components/overview/BridgeOverview";
 import { BridgeWarnings } from "@/components/overview/BridgeWarnings";
 import { OverviewRefreshButton } from "@/components/overview/OverviewRefreshButton";
-import { CodexSetupSuggestion } from "@/components/providers/CodexSetupSuggestion";
+import { ConnectPage } from "@/components/providers/ConnectPage";
 import { ProxyToggle } from "@/components/proxy/ProxyToggle";
 import { Button } from "@/components/ui/button";
 
@@ -107,7 +107,7 @@ export default function App() {
         {view === "settings" ? (
           <SettingsPage availableReleaseVersion={availableReleaseVersion} />
         ) : view === "setup" ? (
-          <CodexSetupSuggestion />
+          <ConnectPage />
         ) : view === "usage" ? (
           <UsagePage />
         ) : (

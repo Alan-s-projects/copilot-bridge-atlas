@@ -12,7 +12,7 @@ On macOS, drag **Copilot Bridge Atlas.app** from the DMG into **Applications**.
 The Mac package is ad-hoc signed and is not Apple notarized; macOS may require
 approval in **System Settings → Privacy & Security** on first launch.
 
-Atlas 6.x stores its data in `%USERPROFILE%\.copilot-bridge-atlas` on Windows
+Atlas stores its data in `%USERPROFILE%\.copilot-bridge-atlas` on Windows
 and `~/.copilot-bridge-atlas` on macOS. Patch updates preserve this data.
 
 1. Open **Settings → Accounts** to sign in to GitHub.
@@ -28,3 +28,16 @@ This keeps Codex's native list and instructions while requesting a larger contex
 budget. The installed Codex client and upstream model still enforce their limits.
 The choice changes the preview only; review and apply the TOML manually. Atlas
 continues refreshing its generated catalog in either mode.
+
+## Claude Desktop and Claude Code
+
+Atlas 7 adds a separate Anthropic Messages listener. In Settings → Routing,
+configure **Responses API** (default `127.0.0.1:15722`) and **Messages API**
+(default `127.0.0.1:15723`). The existing global proxy switch controls both.
+Codex continues using `http://127.0.0.1:15722/v1`. Claude clients use
+`http://127.0.0.1:15723` without an extra path prefix.
+
+Configure Sonnet, Opus, Haiku, and Fable mappings using the existing selected
+Copilot models. Other roles can inherit Sonnet; names shown by discovery are
+the actual target model names. Connect includes setup values for both Claude
+Desktop and Claude Code. See [Claude gateway details](docs/claude-gateway.md).

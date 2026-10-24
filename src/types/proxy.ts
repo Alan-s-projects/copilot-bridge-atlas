@@ -1,6 +1,8 @@
 import type { PendingRequestLog } from "./usage";
 
 export interface ProxyStatus {
+  claude_address?: string;
+  claude_port?: number;
   active_requests?: Omit<PendingRequestLog, "pending">[];
   running: boolean;
   address: string;
@@ -30,7 +32,17 @@ export interface ProxyServerInfo {
   started_at: string;
 }
 
+export interface ClaudeGatewayConfig {
+  address: string;
+  port: number;
+  sonnet: string;
+  opus: string;
+  haiku: string;
+  fable: string;
+}
+
 export interface GlobalProxyConfig {
+  claude?: ClaudeGatewayConfig;
   proxyEnabled: boolean;
   listenAddress: string;
   listenPort: number;

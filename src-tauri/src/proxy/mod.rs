@@ -3,6 +3,8 @@
 //! Local OpenAI-compatible HTTP server for GitHub Copilot.
 
 pub mod body_filter;
+pub(crate) mod claude;
+pub(crate) mod claude_protocol;
 pub mod client_identity;
 pub(crate) mod content_encoding;
 pub mod copilot_optimizer;

@@ -34,6 +34,8 @@ pub struct ProxyConfig {
     pub listen_address: String,
     /// listening port
     pub listen_port: u16,
+    #[serde(default)]
+    pub claude: super::claude::ClaudeConfig,
 }
 
 impl Default for ProxyConfig {
@@ -41,6 +43,7 @@ impl Default for ProxyConfig {
         Self {
             listen_address: "127.0.0.1".to_string(),
             listen_port: 15722, // Use less occupied high-order ports
+            claude: Default::default(),
         }
     }
 }
@@ -56,6 +59,10 @@ pub struct ProxyStatus {
     pub address: String,
     /// listening port
     pub port: u16,
+    #[serde(default)]
+    pub claude_address: String,
+    #[serde(default)]
+    pub claude_port: u16,
     /// Number of active connections
     pub active_connections: usize,
     /// Total requests
@@ -121,6 +128,8 @@ pub struct GlobalProxyConfig {
     pub listen_address: String,
     /// listening port
     pub listen_port: u16,
+    #[serde(default)]
+    pub claude: super::claude::ClaudeConfig,
 }
 
 fn default_true() -> bool {

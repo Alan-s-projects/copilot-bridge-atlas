@@ -14,6 +14,11 @@ use std::time::Duration;
 static GLOBAL_CLIENT: OnceCell<RwLock<Client>> = OnceCell::new();
 
 /// Copilot Bridge Atlas proxy server is currently listening on the port
+static CLAUDE_PROXY_PORT: AtomicU16 = AtomicU16::new(15723);
+pub fn set_claude_proxy_port(port: u16) {
+    CLAUDE_PROXY_PORT.store(port, Ordering::Relaxed);
+}
+
 static COPILOT_BRIDGE_ATLAS_PROXY_PORT: AtomicU16 = AtomicU16::new(15722);
 
 /// Set the listening port of the Copilot Bridge Atlas proxy server
@@ -180,7 +185,9 @@ fn proxy_points_to_loopback(value: &str) -> bool {
             }
             None => false,
         };
-        loopback && url.port_or_known_default() == Some(get_proxy_port())
+        loopback
+            && (url.port_or_known_default() == Some(get_proxy_port())
+                || url.port_or_known_default() == Some(CLAUDE_PROXY_PORT.load(Ordering::Relaxed)))
     })
 }
 

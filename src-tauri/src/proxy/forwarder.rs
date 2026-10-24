@@ -151,12 +151,16 @@ impl Drop for ActiveConnectionGuard {
 
 /// Replace remote account/catalog dependencies in HTTP integration tests only.
 #[cfg(test)]
-struct CopilotFixture {
-    endpoint: String,
-    token: String,
-    models: Vec<super::providers::copilot_auth::CopilotModel>,
-    client: reqwest::Client,
+#[derive(Clone)]
+pub(crate) struct CopilotFixture {
+    pub endpoint: String,
+    pub token: String,
+    pub models: Vec<super::providers::copilot_auth::CopilotModel>,
+    pub client: reqwest::Client,
 }
+
+#[cfg(test)]
+tokio::task_local! { pub(crate) static TEST_COPILOT: CopilotFixture; }
 
 pub struct RequestForwarder {
     status: Arc<RwLock<ProxyStatus>>,
@@ -191,7 +195,7 @@ impl RequestForwarder {
             copilot_optimizer_config,
             diagnostics,
             #[cfg(test)]
-            copilot_fixture: None,
+            copilot_fixture: TEST_COPILOT.try_with(Clone::clone).ok(),
         }
     }
 

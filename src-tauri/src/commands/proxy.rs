@@ -63,10 +63,5 @@ pub async fn update_global_proxy_config(
     state: tauri::State<'_, AppState>,
     config: GlobalProxyConfig,
 ) -> Result<(), String> {
-    let db = &state.db;
-    db.update_global_proxy_config(config)
-        .await
-        .map_err(|e| e.to_string())?;
-    let current = state.proxy_service.get_config().await?;
-    state.proxy_service.update_config(&current).await
+    state.proxy_service.update_global_settings(config).await
 }

@@ -52,7 +52,9 @@ interface SetupSuggestion {
   openaiLines: ConfigDiffLine[];
 }
 
-export function CodexSetupSuggestion() {
+export function CodexSetupSuggestion({
+  clientSelector,
+}: { clientSelector?: import("react").ReactNode } = {}) {
   const [target, setTarget] = useState<"copilot" | "openai">("copilot");
   const [modelList, setModelList] = useState<ModelList>(readSavedModelList);
   const [selectedPath, setSelectedPath] = useState<string | null>(
@@ -151,6 +153,7 @@ export function CodexSetupSuggestion() {
             Preview only. Apply TOML file changes yourself manually.
           </p>
         </div>
+        {clientSelector}
       </div>
       <div className="grid shrink-0 grid-cols-[6rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2.5">
         <form

@@ -68,7 +68,11 @@ impl ProxyService {
             .await
             .map_err(|e| format!("Failed to start proxy server: {e}"))?;
         if let Err(e) = self
-            .persist_ephemeral_listen_port_if_needed(&config, info.port)
+            .persist_ephemeral_listen_port_if_needed(
+                &config,
+                info.port,
+                server.get_status().await.claude_port,
+            )
             .await
         {
             let _ = server.stop().await;
@@ -86,8 +90,9 @@ impl ProxyService {
         &self,
         config: &ProxyConfig,
         actual_port: u16,
+        claude_port: u16,
     ) -> Result<(), String> {
-        if config.listen_port != 0 {
+        if config.listen_port != 0 && config.claude.port != 0 {
             return Ok(());
         }
 
@@ -97,7 +102,12 @@ impl ProxyService {
             .get_global_proxy_config()
             .await
             .map_err(|e| format!("Failed to obtain global proxy configuration: {e}"))?;
-        resolved_config.listen_port = actual_port;
+        if config.listen_port == 0 {
+            resolved_config.listen_port = actual_port;
+        }
+        if config.claude.port == 0 || (config.listen_port == 0 && config.claude.port == 15723) {
+            resolved_config.claude.port = claude_port;
+        }
         self.db
             .update_global_proxy_config(resolved_config)
             .await
@@ -117,20 +127,14 @@ impl ProxyService {
 
     /// A manual Off action also persists the preference for the next launch.
     pub async fn stop(&self) -> Result<(), String> {
-        self.shutdown().await?;
-        let mut config = self
-            .db
-            .get_global_proxy_config()
-            .await
-            .map_err(|e| e.to_string())?;
-        if config.proxy_enabled {
-            config.proxy_enabled = false;
-            self.db
-                .update_global_proxy_config(config)
-                .await
-                .map_err(|e| e.to_string())?;
+        let mut guard = self.server.write().await;
+        if let Some(server) = guard.take() {
+            server.stop().await.map_err(|e| e.to_string())?;
         }
-        Ok(())
+        self.db
+            .set_proxy_enabled(false)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub async fn get_status(&self) -> Result<ProxyStatus, String> {
@@ -145,6 +149,7 @@ impl ProxyService {
         }
     }
 
+    #[cfg(test)]
     pub async fn get_config(&self) -> Result<ProxyConfig, String> {
         self.db
             .get_proxy_config()
@@ -152,6 +157,43 @@ impl ProxyService {
             .map_err(|e| format!("Failed to get proxy configuration: {e}"))
     }
 
+    /// Serialize edits with the global start/stop control. Mapping edits do not restart either socket.
+    pub async fn update_global_settings(
+        &self,
+        mut config: GlobalProxyConfig,
+    ) -> Result<(), String> {
+        let guard = self.server.write().await;
+        let old = self
+            .db
+            .get_global_proxy_config()
+            .await
+            .map_err(|e| e.to_string())?;
+        if guard.is_some()
+            && (old.listen_address != config.listen_address
+                || old.listen_port != config.listen_port
+                || old.claude.address != config.claude.address
+                || old.claude.port != config.claude.port)
+        {
+            return Err("Stop the proxy before editing listener addresses or ports".into());
+        }
+        config.proxy_enabled = old.proxy_enabled;
+        self.db
+            .update_global_proxy_config(config.clone())
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Some(server) = guard.as_ref() {
+            server
+                .apply_runtime_config(&ProxyConfig {
+                    listen_address: config.listen_address,
+                    listen_port: config.listen_port,
+                    claude: config.claude,
+                })
+                .await;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub async fn update_config(&self, config: &ProxyConfig) -> Result<(), String> {
         let new_config = config.clone();
 
@@ -168,8 +210,10 @@ impl ProxyService {
 
         // Determine whether a restart is required (address or port change)
         let status = server_guard.as_ref().unwrap().get_status().await;
-        let require_restart =
-            new_config.listen_address != status.address || new_config.listen_port != status.port;
+        let require_restart = new_config.listen_address != status.address
+            || new_config.listen_port != status.port
+            || new_config.claude.address != status.claude_address
+            || new_config.claude.port != status.claude_port;
 
         if require_restart {
             if let Some(server) = server_guard.take() {
@@ -186,7 +230,11 @@ impl ProxyService {
                 .await
                 .map_err(|e| format!("Failed to restart proxy server: {e}"))?;
             if let Err(e) = self
-                .persist_ephemeral_listen_port_if_needed(&new_config, info.port)
+                .persist_ephemeral_listen_port_if_needed(
+                    &new_config,
+                    info.port,
+                    new_server.get_status().await.claude_port,
+                )
                 .await
             {
                 let _ = new_server.stop().await;
@@ -206,9 +254,5 @@ impl ProxyService {
         }
 
         Ok(())
-    }
-
-    pub async fn is_running(&self) -> bool {
-        self.server.read().await.is_some()
     }
 }

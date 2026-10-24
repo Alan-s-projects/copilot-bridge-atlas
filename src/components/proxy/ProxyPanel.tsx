@@ -1,206 +1,314 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useProvidersQuery } from "@/lib/query";
 import {
   useGlobalProxyConfig,
   useUpdateGlobalProxyConfig,
   useProxyStatusQuery,
 } from "@/lib/query/proxy";
 import { copyText } from "@/lib/clipboard";
+import type { GlobalProxyConfig, ClaudeGatewayConfig } from "@/types/proxy";
 
+const defaultClaude: ClaudeGatewayConfig = {
+  address: "127.0.0.1",
+  port: 15723,
+  sonnet: "",
+  opus: "",
+  haiku: "",
+  fable: "",
+};
+type Draft = {
+  address: string;
+  port: string;
+  claudeAddress: string;
+  claudePort: string;
+  mappings: Pick<ClaudeGatewayConfig, "sonnet" | "opus" | "haiku" | "fable">;
+};
+const initial: Draft = {
+  address: "127.0.0.1",
+  port: "15722",
+  claudeAddress: "127.0.0.1",
+  claudePort: "15723",
+  mappings: { sonnet: "", opus: "", haiku: "", fable: "" },
+};
+const roles = ["sonnet", "opus", "haiku", "fable"] as const;
+function endpoint(address: string, port: string, suffix: string) {
+  return `http://${address.includes(":") && !address.startsWith("[") ? `[${address}]` : address}:${port}${suffix}`;
+}
 export function ProxyPanel() {
-  const { t } = useTranslation();
   const { data: config } = useGlobalProxyConfig();
   const { data: status } = useProxyStatusQuery();
+  const { data: providers } = useProvidersQuery();
   const { mutateAsync, isPending } = useUpdateGlobalProxyConfig({
     showSuccessToast: false,
   });
-  const [address, setAddress] = useState("127.0.0.1");
-  const [port, setPort] = useState("15722");
-  const [dirty, setDirty] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<
-    "idle" | "saving" | "saved" | "error" | "invalid"
-  >("idle");
-  const configRef = useRef(config);
-  const loadedConfigRef = useRef<typeof config>();
-  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const editVersionRef = useRef(0);
-  const queuedVersionRef = useRef(0);
-  const failedVersionRef = useRef(0);
-  const mountedRef = useRef(false);
-  const flushSaveRef = useRef<() => void>(() => {});
-
-  useEffect(() => {
-    if (!config || loadedConfigRef.current === config) return;
-    loadedConfigRef.current = config;
-    configRef.current = config;
-    if (!dirty) {
-      setAddress(config.listenAddress);
-      setPort(String(config.listenPort));
-    }
-  }, [config, dirty]);
+  const [draft, setDraft] = useState<Draft>(initial);
+  const [notice, setNotice] = useState("");
+  const [invalid, setInvalid] = useState(false);
+  const current = useRef(config);
+  current.current = config;
+  const loaded = useRef(config);
+  const latest = useRef(draft);
+  const dirty = useRef(false);
+  const version = useRef(0),
+    queued = useRef(-1),
+    mounted = useRef(false);
+  const queue = useRef<Promise<void>>(Promise.resolve());
   const running = status?.running ?? false;
-  const endpoint = `http://${address.includes(":") && !address.startsWith("[") ? `[${address}]` : address}:${port}/v1`;
-  const persistConfig = useCallback(
-    (patch: Partial<NonNullable<typeof config>>) => {
-      const request = saveQueueRef.current
-        .catch(() => undefined)
-        .then(async () => {
-          const current = configRef.current;
-          if (!current) return;
-          const next = { ...current, ...patch };
-          await mutateAsync(next);
-          configRef.current = next;
-        });
-      saveQueueRef.current = request.then(
-        () => undefined,
-        () => undefined,
-      );
-      return request;
-    },
-    [mutateAsync],
-  );
-  const saveAddress = useCallback(async () => {
-    if (!dirty || !configRef.current || running) return;
-    const value = Number(port);
-    if (
-      !address.trim() ||
-      !Number.isInteger(value) ||
-      value < 1 ||
-      value > 65535
-    ) {
-      if (mountedRef.current) setSaveStatus("invalid");
-      return;
-    }
-    const version = editVersionRef.current;
-    if (
-      version < queuedVersionRef.current ||
-      (version === queuedVersionRef.current &&
-        failedVersionRef.current !== version)
-    ) {
-      await saveQueueRef.current;
-      return;
-    }
-
-    queuedVersionRef.current = version;
-    failedVersionRef.current = 0;
-    if (mountedRef.current) setSaveStatus("saving");
-    try {
-      await persistConfig({
-        listenAddress: address.trim(),
-        listenPort: value,
-      });
-      if (editVersionRef.current === version) {
-        if (mountedRef.current) {
-          setDirty(false);
-          setSaveStatus("saved");
-        }
-      }
-    } catch {
-      failedVersionRef.current = version;
-      if (mountedRef.current && editVersionRef.current === version) {
-        setSaveStatus("error");
-      }
-    }
-  }, [address, dirty, port, persistConfig, running]);
-
-  flushSaveRef.current = () => void saveAddress();
-
   useEffect(() => {
-    mountedRef.current = true;
+    if (!config || (loaded.current === config && version.current !== 0)) return;
+    loaded.current = config;
+    if (dirty.current) return;
+    const c = config.claude ?? defaultClaude;
+    const next = {
+      address: config.listenAddress,
+      port: String(config.listenPort),
+      claudeAddress: c.address,
+      claudePort: String(c.port),
+      mappings: {
+        sonnet: c.sonnet,
+        opus: c.opus,
+        haiku: c.haiku,
+        fable: c.fable,
+      },
+    };
+    latest.current = next;
+    setDraft(next);
+  }, [config]);
+  const save = useCallback(() => {
+    if (!dirty.current || !current.current) return;
+    const next = latest.current;
+    const a = Number(next.port),
+      b = Number(next.claudePort);
+    if (
+      !next.address.trim() ||
+      !next.claudeAddress.trim() ||
+      !/^\d+$/.test(next.port) ||
+      !/^\d+$/.test(next.claudePort) ||
+      a < 1 ||
+      a > 65535 ||
+      b < 1 ||
+      b > 65535 ||
+      a === b
+    ) {
+      if (mounted.current) {
+        setInvalid(true);
+        setNotice(
+          "Use valid addresses and different ports between 1 and 65535.",
+        );
+      }
+      return;
+    }
+    const rev = version.current;
+    if (queued.current === rev) return;
+    queued.current = rev;
+    if (mounted.current) {
+      setInvalid(false);
+      setNotice("Saving…");
+    }
+    queue.current = queue.current
+      .catch(() => undefined)
+      .then(async () => {
+        const base = current.current;
+        if (!base) return;
+        const value: GlobalProxyConfig = {
+          ...base,
+          listenAddress: next.address.trim(),
+          listenPort: a,
+          claude: {
+            address: next.claudeAddress.trim(),
+            port: b,
+            ...next.mappings,
+          },
+        };
+        try {
+          await mutateAsync(value);
+          if (version.current === rev) {
+            dirty.current = false;
+            if (mounted.current) setNotice("Saved");
+          }
+        } catch {
+          if (version.current === rev) {
+            queued.current = -1;
+            if (mounted.current) {
+              setInvalid(true);
+              setNotice("Could not save. Check the addresses and retry.");
+            }
+          }
+        }
+      });
+  }, [mutateAsync]);
+  const flush = useRef(save);
+  flush.current = save;
+  useEffect(() => {
+    mounted.current = true;
     return () => {
-      mountedRef.current = false;
-      flushSaveRef.current();
+      mounted.current = false;
+      flush.current();
     };
   }, []);
-
   useEffect(() => {
-    if (!dirty || !config || running) return;
-    const timer = window.setTimeout(() => void saveAddress(), 400);
-    return () => window.clearTimeout(timer);
-  }, [address, config, dirty, port, running, saveAddress]);
-
-  const markAddressDirty = () => {
-    editVersionRef.current += 1;
-    setDirty(true);
-    setSaveStatus("idle");
+    if (!dirty.current) return;
+    const timer = setTimeout(save, 400);
+    return () => clearTimeout(timer);
+  }, [draft, save]);
+  const edit = (patch: Partial<Draft>) => {
+    version.current++;
+    dirty.current = true;
+    const next = { ...latest.current, ...patch };
+    latest.current = next;
+    setDraft(next);
+    setNotice("");
+    setInvalid(false);
   };
-
+  const provider =
+    providers?.providers[providers.currentProviderId] ??
+    Object.values(providers?.providers ?? {})[0];
+  const models: string[] = (
+    provider?.settingsConfig?.modelCatalog?.models ?? []
+  )
+    .filter(
+      (m: any) =>
+        m.enabled !== false &&
+        m.available !== false &&
+        typeof m.model === "string",
+    )
+    .map((m: any) => m.model);
   return (
-    <section className="space-y-5 rounded-xl border bg-card p-6">
-      <div className="flex items-center justify-between">
-        <h3 className="font-semibold">Local OpenAI-compatible server</h3>
-        <span className="text-sm text-muted-foreground">
-          {running ? "Running" : "Stopped"}
-        </span>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="space-y-2">
-          <Label htmlFor="proxy-address">Listen address</Label>
-          <Input
-            id="proxy-address"
-            value={address}
-            disabled={running || !config}
-            onChange={(e) => {
-              setAddress(e.target.value);
-              markAddressDirty();
-            }}
-            onBlur={() => void saveAddress()}
-            aria-invalid={saveStatus === "invalid"}
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="proxy-port">Port</Label>
-          <Input
-            id="proxy-port"
-            value={port}
-            disabled={running || !config}
-            onChange={(e) => {
-              setPort(e.target.value);
-              markAddressDirty();
-            }}
-            onBlur={() => void saveAddress()}
-            aria-invalid={saveStatus === "invalid"}
-          />
-        </div>
-      </div>
-      {saveStatus === "invalid" && (
-        <p role="alert" className="text-xs text-destructive">
-          Enter an address and a port between 1 and 65535.
-        </p>
-      )}
-      {(isPending ||
-        saveStatus === "saving" ||
-        saveStatus === "saved" ||
-        saveStatus === "error") && (
+    <div className="space-y-5">
+      {(
+        [
+          {
+            title: "Responses API",
+            address: "address",
+            port: "port",
+            suffix: "/v1",
+            id: "proxy",
+          },
+          {
+            title: "Messages API",
+            address: "claudeAddress",
+            port: "claudePort",
+            suffix: "",
+            id: "claude",
+          },
+        ] as const
+      ).map(({ title, address, port, suffix, id }) => (
+        <section
+          key={id}
+          aria-label={title}
+          className="space-y-5 rounded-xl border bg-card p-6"
+        >
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold">{title}</h3>
+            <span className="text-sm text-muted-foreground">
+              {running ? "Running" : "Stopped"}
+            </span>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor={`${id}-address`}>Listen address</Label>
+              <Input
+                id={`${id}-address`}
+                aria-label={`${title} listen address`}
+                value={draft[address]}
+                disabled={running || !config}
+                onChange={(e) => edit({ [address]: e.target.value })}
+                onBlur={save}
+                aria-invalid={invalid}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor={`${id}-port`}>Port</Label>
+              <Input
+                id={`${id}-port`}
+                aria-label={`${title} port`}
+                value={draft[port]}
+                disabled={running || !config}
+                onChange={(e) => edit({ [port]: e.target.value })}
+                onBlur={save}
+                aria-invalid={invalid}
+              />
+            </div>
+          </div>
+          {running && (
+            <p className="text-xs text-muted-foreground">
+              Stop the server to edit.
+            </p>
+          )}
+          <div className="flex items-center justify-between gap-3 rounded-lg bg-muted p-3">
+            <code className="break-all text-sm">
+              {endpoint(draft[address], draft[port], suffix)}
+            </code>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={`Copy ${title} URL`}
+              onClick={() =>
+                void copyText(endpoint(draft[address], draft[port], suffix))
+              }
+            >
+              Copy
+            </Button>
+          </div>
+        </section>
+      ))}
+      <section
+        aria-label="Claude model mapping"
+        className="space-y-4 rounded-xl border bg-card p-6"
+      >
+        <h3 className="font-semibold">Claude model mapping</h3>
+        {roles.map((role) => (
+          <div
+            key={role}
+            className="grid grid-cols-[80px_1fr] items-center gap-4"
+          >
+            <Label htmlFor={`claude-${role}`} className="capitalize">
+              {role}
+            </Label>
+            <select
+              id={`claude-${role}`}
+              disabled={!config}
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={draft.mappings[role]}
+              onChange={(e) =>
+                edit({
+                  mappings: { ...draft.mappings, [role]: e.target.value },
+                })
+              }
+              onBlur={save}
+            >
+              <option value="">
+                {role === "sonnet"
+                  ? `Automatic${models[0] ? ` (${models[0]})` : " — select models in Settings"}`
+                  : "Use Sonnet mapping"}
+              </option>
+              {draft.mappings[role] &&
+                !models.includes(draft.mappings[role]) && (
+                  <option value={draft.mappings[role]}>
+                    {draft.mappings[role]} (unavailable)
+                  </option>
+                )}
+              {models.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+          </div>
+        ))}
+      </section>
+      {(notice || isPending) && (
         <p
-          role={saveStatus === "error" ? "alert" : "status"}
+          role={invalid ? "alert" : "status"}
           aria-live="polite"
-          className="text-xs text-muted-foreground"
+          className={`text-xs ${invalid ? "text-destructive" : "text-muted-foreground"}`}
         >
-          {isPending || saveStatus === "saving"
-            ? t("settings.saving")
-            : saveStatus === "saved"
-              ? t("settings.saved")
-              : t("settings.saveFailedGeneric")}
+          {isPending ? "Saving…" : notice}
         </p>
       )}
-      <p className="text-sm text-muted-foreground">
-        Stop the proxy before changing its address. Review the Codex connection
-        suggestion after any change.
-      </p>
-      <div className="flex items-center justify-between gap-3 rounded-lg bg-muted p-3">
-        <code className="break-all text-sm">{endpoint}</code>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => void copyText(endpoint)}
-        >
-          Copy
-        </Button>
-      </div>
-    </section>
+    </div>
   );
 }

@@ -75,10 +75,14 @@ impl ProxyServer {
             return Err(ProxyError::AlreadyRunning);
         }
 
-        let addr: SocketAddr =
-            format!("{}:{}", self.config.listen_address, self.config.listen_port)
+        let addr = SocketAddr::new(
+            self.config
+                .listen_address
+                .trim_matches(['[', ']'])
                 .parse()
-                .map_err(|e| ProxyError::BindFailed(format!("Invalid address: {e}")))?;
+                .map_err(|e| ProxyError::BindFailed(format!("Invalid address: {e}")))?,
+            self.config.listen_port,
+        );
 
         // Create a closed channel
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -95,6 +99,30 @@ impl ProxyServer {
             .map_err(|e| ProxyError::BindFailed(e.to_string()))?;
         let actual_port = local_addr.port();
 
+        // Bind both sockets before exposing a running state. A collision closes both.
+        let claude_port = if self.config.listen_port == 0 && self.config.claude.port == 15723 {
+            0
+        } else {
+            self.config.claude.port
+        };
+        let claude_addr = std::net::SocketAddr::new(
+            self.config
+                .claude
+                .address
+                .trim_matches(['[', ']'])
+                .parse()
+                .map_err(|e| ProxyError::BindFailed(format!("Invalid Claude address: {e}")))?,
+            claude_port,
+        );
+        let claude_listener = tokio::net::TcpListener::bind(claude_addr)
+            .await
+            .map_err(|e| ProxyError::BindFailed(format!("Claude listener: {e}")))?;
+        let claude_actual_port = claude_listener
+            .local_addr()
+            .map_err(|e| ProxyError::BindFailed(e.to_string()))?
+            .port();
+        let claude_app = super::claude::router(self.state.clone());
+
         log::info!(
             "[{}] Proxy server started at {local_addr}",
             log_srv::STARTED
@@ -102,6 +130,7 @@ impl ProxyServer {
 
         // Update global proxy port for system proxy detection
         crate::proxy::http_client::set_proxy_port(actual_port);
+        crate::proxy::http_client::set_claude_proxy_port(claude_actual_port);
 
         // Save close handle
         *self.shutdown_tx.write().await = Some(shutdown_tx);
@@ -111,6 +140,8 @@ impl ProxyServer {
         status.running = true;
         status.address = self.config.listen_address.clone();
         status.port = actual_port;
+        status.claude_address = self.config.claude.address.clone();
+        status.claude_port = claude_actual_port;
         drop(status);
 
         // Record startup time
@@ -119,6 +150,7 @@ impl ProxyServer {
         // Starting the server - using manual hyper HTTP/1.1 accept loop
         // Turn on preserve_header_case to capture the original case of client request headers
         let state = self.state.clone();
+        let (connections_stop, connections_shutdown) = tokio::sync::watch::channel(false);
         let handle = tokio::spawn(async move {
             let mut shutdown_rx = shutdown_rx;
             loop {
@@ -133,37 +165,27 @@ impl ProxyServer {
                             }
                         };
 
-                        let app = app.clone();
-                        tokio::spawn(async move {
-                            // service_fn bridges axum Router (tower::Service) to hyper
-                            let service = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
-                                let mut router = app.clone();
-                                async move {
-                                    // Convert hyper::body::Incoming to axum::body::Body and keep extensions
-                                    let (parts, body) = req.into_parts();
-
-
-                                    let body = axum::body::Body::new(body);
-                                    let axum_req = http::Request::from_parts(parts, body);
-                                    <Router as tower::Service<http::Request<axum::body::Body>>>::call(&mut router, axum_req).await
-                                }
-                            });
-
-                            if let Err(e) = hyper::server::conn::http1::Builder::new()
-                                .preserve_header_case(true)
-                                .serve_connection(TokioIo::new(stream), service)
-                                .await
-                            {
-                                // Connection reset / broken pipe, etc. are very common in proxy scenarios, debug level
-                                log::debug!("[{SRV}] connection error: {e}", SRV = log_srv::CONN_ERR);
+                        tokio::spawn(serve_connection(stream, app.clone(), connections_shutdown.clone(), state.clone()));
+                    }
+                    result = claude_listener.accept() => {
+                        let (stream, _remote_addr) = match result {
+                            Ok(v) => v,
+                            Err(e) => {
+                                log::error!("[{SRV}] accept failed: {e}", SRV = log_srv::ACCEPT_ERR);
+                                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                                continue;
                             }
-                        });
+                        };
+
+                        tokio::spawn(serve_connection(stream, claude_app.clone(), connections_shutdown.clone(), state.clone()));
                     }
                     _ = &mut shutdown_rx => {
                         break;
                     }
                 }
             }
+
+            let _ = connections_stop.send(true);
 
             // Update status after server is stopped
             state.status.write().await.running = false;
@@ -311,6 +333,42 @@ impl ProxyServer {
     /// Update runtime configuration without restarting the service
     pub async fn apply_runtime_config(&self, config: &ProxyConfig) {
         *self.state.config.write().await = config.clone();
+    }
+}
+
+/// Close keep-alive connections on a global stop while allowing active responses to drain.
+async fn serve_connection(
+    stream: tokio::net::TcpStream,
+    app: Router,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    state: ProxyState,
+) {
+    let service = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+        let mut router = app.clone();
+        let state = state.clone();
+        async move {
+            if !state.status.read().await.running {
+                return Ok::<_, std::convert::Infallible>(
+                    axum::response::IntoResponse::into_response((
+                        http::StatusCode::SERVICE_UNAVAILABLE,
+                        axum::Json(
+                            serde_json::json!({"type":"error","error":{"type":"api_error","message":"Proxy stopped"}}),
+                        ),
+                    )),
+                );
+            }
+            let (parts, body) = req.into_parts();
+            let req = http::Request::from_parts(parts, axum::body::Body::new(body));
+            <Router as tower::Service<_>>::call(&mut router, req).await
+        }
+    });
+    let mut builder = hyper::server::conn::http1::Builder::new();
+    builder.preserve_header_case(true);
+    let connection = builder.serve_connection(TokioIo::new(stream), service);
+    tokio::pin!(connection);
+    tokio::select! {
+        result=&mut connection=>{if let Err(e)=result{log::debug!("[{}] Proxy connection ended: {e}", log_srv::CONN_ERR);}},
+        _=shutdown.changed()=>{connection.as_mut().graceful_shutdown();let _=connection.await;}
     }
 }
 

@@ -131,7 +131,7 @@ export function buildUsageTrendChartData(
   });
   for (const { id } of presentClientCostSeries(points)) {
     for (const point of points) {
-      if (!Object.hasOwn(point.clientCosts, id))
+      if (!Object.prototype.hasOwnProperty.call(point.clientCosts, id))
         point.clientCosts[id] = point.cost == null ? null : 0;
     }
   }
@@ -227,7 +227,7 @@ function buildClientCosts(
 
 export function presentClientCostSeries(points: UsageTrendChartPoint[]) {
   return CLIENT_COST_SERIES.filter(({ id }) =>
-    points.some((p) => Object.hasOwn(p.clientCosts, id)),
+    points.some((p) => Object.prototype.hasOwnProperty.call(p.clientCosts, id)),
   );
 }
 

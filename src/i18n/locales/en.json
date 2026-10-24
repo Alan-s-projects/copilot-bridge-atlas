@@ -33,7 +33,6 @@
       }
     },
     "theme": "Theme",
-    "themeHint": "Choose the appearance theme for the app, takes effect immediately.",
     "themeLight": "Light",
     "themeDark": "Dark",
     "themeSystem": "System",
@@ -127,7 +126,6 @@
   },
   "usage": {
     "title": "Usage Statistics",
-    "subtitle": "View AI model usage and cost statistics",
     "presetToday": "Today",
     "preset1d": "1d",
     "preset7d": "7d",

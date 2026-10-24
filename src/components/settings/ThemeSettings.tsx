@@ -12,9 +12,6 @@ export function ThemeSettings() {
     <section className="space-y-2">
       <header className="space-y-1">
         <h3 className="text-sm font-medium">{t("settings.theme")}</h3>
-        <p className="text-xs text-muted-foreground">
-          {t("settings.themeHint")}
-        </p>
       </header>
       <div className="inline-flex gap-1 rounded-md border border-border-default bg-background p-1">
         <ThemeButton

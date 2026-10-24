@@ -120,9 +120,6 @@ export default function App() {
                   </h1>
                   <OverviewRefreshButton />
                 </div>
-                <p className="text-sm text-muted-foreground">
-                  Monitor your Copilot connection, proxy activity, and usage
-                </p>
               </div>
             </div>
             <BridgeWarnings status={status} />

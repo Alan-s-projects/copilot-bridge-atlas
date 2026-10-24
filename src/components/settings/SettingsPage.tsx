@@ -64,9 +64,6 @@ export function SettingsPage({
       <div className="mb-4 flex shrink-0 items-center justify-between gap-4">
         <div className="flex min-w-0 flex-col gap-1">
           <h1 className="text-2xl font-bold">Settings</h1>
-          <p className="text-sm text-muted-foreground">
-            Manage appearance, GitHub Copilot, and proxy settings
-          </p>
         </div>
         {isSaving && (
           <p

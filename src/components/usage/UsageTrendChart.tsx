@@ -522,7 +522,6 @@ export function UsageTrendChart({
             <section aria-label="Rates chart" className="min-w-0 border-b p-4">
               <div className="mb-2 flex items-center justify-between">
                 <h4 className="text-sm font-semibold">Rates</h4>
-                <span className="text-xs text-muted-foreground">0–100%</span>
               </div>
               <SeriesLegend
                 series={RATE_SERIES}

@@ -27,7 +27,7 @@ export function ConnectPage() {
   if (client === "codex")
     return <CodexSetupSuggestion clientSelector={selector} />;
   const raw = config?.claude?.address ?? "127.0.0.1";
-  const host = raw === "0.0.0.0" || raw === "::" ? "127.0.0.1" : raw;
+  const host = raw === "0.0.0.0" ? "127.0.0.1" : raw === "::" ? "::1" : raw;
   const base = `http://${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${config?.claude?.port ?? 15723}`;
   const shell = `ANTHROPIC_BASE_URL='${base}' ANTHROPIC_API_KEY='atlas-local' ANTHROPIC_MODEL='claude-sonnet-5' claude`;
   return (

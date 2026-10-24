@@ -305,3 +305,19 @@ fn client_columns_migrate_legacy_rows_and_preferences_once() -> Result<(), AppEr
     );
     Ok(())
 }
+
+#[test]
+fn archive_client_cost_migration_is_idempotent() -> Result<(), AppError> {
+    let db = Database::memory()?;
+    let conn = db.conn.lock().unwrap();
+    conn.execute_batch("ALTER TABLE usage_daily_rollups DROP COLUMN client_costs; INSERT INTO usage_daily_rollups (date,app_type,provider_id,model,total_cost_usd) VALUES ('2020-01-02','codex','p','m','3');")?;
+    Database::initialize_schema_on_conn(&conn)?;
+    Database::initialize_schema_on_conn(&conn)?;
+    let pair: (String, String) = conn.query_row(
+        "SELECT total_cost_usd,client_costs FROM usage_daily_rollups",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    assert_eq!(pair, ("3".into(), "{}".into()));
+    Ok(())
+}

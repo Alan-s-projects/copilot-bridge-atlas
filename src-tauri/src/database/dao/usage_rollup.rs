@@ -120,6 +120,48 @@ impl Database {
         }
     }
 
+    fn collect_rollup_client_costs(
+        conn: &rusqlite::Connection,
+        cutoff: i64,
+    ) -> Result<
+        std::collections::BTreeMap<[String; 6], crate::services::client_costs::ClientCosts>,
+        AppError,
+    > {
+        use crate::services::client_costs::{merge, with_legacy_fallback, ClientCosts};
+        use rusqlite::OptionalExtension;
+        let mut costs = std::collections::BTreeMap::<[String; 6], ClientCosts>::new();
+        let sql = format!("SELECT date(l.created_at,'unixepoch','localtime'),l.app_type,l.provider_id,l.model,COALESCE(l.request_model,''),COALESCE(l.pricing_model,''),COALESCE(NULLIF(trim(l.client_name),''),'Unknown'),SUM(CAST(l.total_cost_usd AS REAL)) FROM proxy_request_logs l WHERE l.created_at < ?1 AND {} GROUP BY 1,2,3,4,5,6,7", effective_usage_log_filter("l"));
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([cutoff], |r| {
+            Ok((
+                [
+                    r.get::<_, String>(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ],
+                r.get::<_, String>(6)?,
+                r.get::<_, f64>(7)?,
+            ))
+        })?;
+        for row in rows {
+            let (key, client, value) = row?;
+            *costs.entry(key).or_default().entry(client).or_default() += value;
+        }
+        for (key, values) in &mut costs {
+            let old = conn.query_row("SELECT client_costs,CAST(total_cost_usd AS REAL) FROM usage_daily_rollups WHERE date=?1 AND app_type=?2 AND provider_id=?3 AND model=?4 AND request_model=?5 AND pricing_model=?6", rusqlite::params_from_iter(key.iter()), |r| Ok((r.get::<_,String>(0)?,r.get::<_,f64>(1)?))).optional()?;
+            if let Some((json, total)) = old {
+                let old = serde_json::from_str(&json).map_err(|e| {
+                    AppError::Database(format!("Invalid archived client costs: {e}"))
+                })?;
+                merge(values, with_legacy_fallback(old, total));
+            }
+        }
+        Ok(costs)
+    }
+
     fn do_rollup_and_prune(conn: &rusqlite::Connection, cutoff: i64) -> Result<u64, AppError> {
         // Aggregate old logs, merging with any pre-existing rollup rows via LEFT JOIN.
         let effective_filter = effective_usage_log_filter("l");
@@ -128,6 +170,7 @@ impl Database {
         // The request_model dimension retains the "client alias → real model" mapping taken over by routing,
         // The pricing_model dimension retains the pricing basis when writing (forked from model in request pricing mode);
         // These two columns of the detail row may be NULL (historical/manual data), normalized to ''.
+        let client_costs = Self::collect_rollup_client_costs(conn, cutoff)?;
         let aggregation_sql = format!(
             "INSERT OR REPLACE INTO usage_daily_rollups
                 (date, app_type, provider_id, model, request_model, pricing_model,
@@ -176,6 +219,13 @@ impl Database {
 
         conn.execute(&aggregation_sql, [cutoff])
             .map_err(|e| AppError::Database(format!("Rollup aggregation failed: {e}")))?;
+
+        for (key, costs) in client_costs {
+            let json =
+                serde_json::to_string(&costs).map_err(|e| AppError::Database(e.to_string()))?;
+            conn.execute("UPDATE usage_daily_rollups SET client_costs=?1 WHERE date=?2 AND app_type=?3 AND provider_id=?4 AND model=?5 AND request_model=?6 AND pricing_model=?7",
+                rusqlite::params![json, key[0], key[1], key[2], key[3], key[4], key[5]])?;
+        }
 
         // Archive only proxy rows. Historical session imports stay untouched.
         let deleted = conn
@@ -633,6 +683,64 @@ mod tests {
         assert_eq!(cached, 560, "500 existing + 60 new");
         assert_eq!(output, 650, "500 existing + 150 new");
         assert_eq!(semantics, INPUT_TOKEN_SEMANTICS_FRESH);
+        Ok(())
+    }
+    #[test]
+    fn client_costs_survive_repeated_rollups_and_merge_legacy_unknown() -> Result<(), AppError> {
+        use crate::services::usage_stats::{LogFilters, TrendGrouping};
+        use chrono::TimeZone;
+        let db = Database::memory()?;
+        let start = chrono::Local
+            .with_ymd_and_hms(2020, 1, 2, 0, 0, 0)
+            .earliest()
+            .unwrap()
+            .timestamp();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("INSERT INTO usage_daily_rollups (date,app_type,provider_id,model,request_model,pricing_model,request_count,success_count,total_cost_usd) VALUES ('2020-01-02','codex','p','m','','',1,1,'3')", [])?;
+            for (id, client, cost) in [("a", "Claude Code", "1.25"), ("b", "Codex Desktop", "2.5")]
+            {
+                conn.execute("INSERT INTO proxy_request_logs (request_id,app_type,provider_id,model,latency_ms,status_code,created_at,total_cost_usd,client_name) VALUES (?1,'codex','p','m',1,200,?2,?3,?4)", rusqlite::params![id,start+60,cost,client])?;
+            }
+        }
+        assert_eq!(db.rollup_and_prune(30)?, 2);
+        assert_eq!(db.get_request_logs(&LogFilters::default(), 0, 20)?.total, 0);
+        let trends = db.get_grouped_usage_trends(
+            Some(start),
+            Some(start + 86399),
+            None,
+            None,
+            None,
+            TrendGrouping::default(),
+        )?;
+        assert_eq!(trends.total_cost.as_deref(), Some("6.750000"));
+        assert_eq!(trends.buckets[0].cost_by_client["Unknown"], 3.0);
+        assert_eq!(trends.buckets[0].cost_by_client["Claude Code"], 1.25);
+        assert_eq!(trends.buckets[0].cost_by_client["Codex Desktop"], 2.5);
+        db.conn.lock().unwrap().execute("INSERT INTO proxy_request_logs (request_id,app_type,provider_id,model,latency_ms,status_code,created_at,total_cost_usd,client_name) VALUES ('c','codex','p','m',1,200,?1,'0.75','Codex Desktop')", [start+120])?;
+        assert_eq!(db.rollup_and_prune(30)?, 1);
+        assert_eq!(db.rollup_and_prune(30)?, 0);
+        let trends = db.get_grouped_usage_trends(
+            Some(start),
+            Some(start + 86399),
+            None,
+            None,
+            None,
+            TrendGrouping::default(),
+        )?;
+        assert_eq!(trends.total_cost.as_deref(), Some("7.500000"));
+        assert_eq!(trends.buckets[0].cost_by_client["Codex Desktop"], 3.25);
+        assert_eq!(trends.buckets[0].cost_by_client.values().sum::<f64>(), 7.5);
+        let partial = db.get_grouped_usage_trends(
+            Some(start + 3600),
+            Some(start + 86399),
+            None,
+            None,
+            None,
+            TrendGrouping::default(),
+        )?;
+        assert!(partial.has_incomplete_rollup_data);
+        assert!(partial.buckets[0].cost_by_client.is_empty());
         Ok(())
     }
 }

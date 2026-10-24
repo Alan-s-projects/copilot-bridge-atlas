@@ -44,6 +44,7 @@ interface UsageTrendStatLike {
   totalCacheCreationTokens: number;
   totalCacheReadTokens: number;
   totalCost: string | number;
+  costByClient?: Record<string, number>;
   readCacheHitRate?: number | null;
   successRate?: number | null;
   incomplete?: boolean;
@@ -60,6 +61,7 @@ interface UsageTrendChartPoint {
   cacheCreationTokens: number | null;
   cacheReadTokens: number | null;
   cost: number | null;
+  clientCosts: Record<string, number | null>;
   cacheHitRate: number | null;
   successRate: number | null;
 }
@@ -101,7 +103,7 @@ export function buildUsageTrendChartData(
     value == null || !Number.isFinite(value)
       ? null
       : Math.max(0, Math.min(100, value * 100));
-  return (trends ?? []).map((stat) => {
+  const points = (trends ?? []).map((stat) => {
     const date = new Date(stat.date);
     const showYear = spansYears || date.getFullYear() !== endYear;
     const label = (showYear ? yearTick : shortTick).format(date);
@@ -122,10 +124,18 @@ export function buildUsageTrendChartData(
         : stat.totalCacheCreationTokens,
       cacheReadTokens: stat.incomplete ? null : stat.totalCacheReadTokens,
       cost: stat.incomplete ? null : parseFiniteNumber(stat.totalCost),
+      clientCosts: buildClientCosts(stat),
       cacheHitRate: stat.incomplete ? null : rate(stat.readCacheHitRate),
       successRate: stat.incomplete ? null : rate(stat.successRate),
     };
   });
+  for (const { id } of presentClientCostSeries(points)) {
+    for (const point of points) {
+      if (!Object.hasOwn(point.clientCosts, id))
+        point.clientCosts[id] = point.cost == null ? null : 0;
+    }
+  }
+  return points;
 }
 
 export function formatUsageTrendTickLabel(
@@ -185,8 +195,41 @@ const RATE_SERIES = [
 type SeriesKey =
   | (typeof TOKEN_SERIES)[number]["key"]
   | (typeof RATE_SERIES)[number]["key"]
-  | "cost";
-const COST_SERIES = [{ key: "cost", label: "Cost", color: "#d94670" }] as const;
+  | `clientCosts.${string}`;
+export const CLIENT_COST_SERIES = [
+  { id: "codexDesktop", label: "Codex Desktop", color: "#d94670" },
+  { id: "codexCli", label: "Codex CLI", color: "#3b82f6" },
+  { id: "codexVsCode", label: "Codex VS Code", color: "#8b62cf" },
+  { id: "codexOther", label: "Codex — unspecified", color: "#c48a20" },
+  { id: "claudeCode", label: "Claude Code", color: "#059669" },
+  { id: "claudeDesktop", label: "Claude Desktop", color: "#ea580c" },
+  { id: "unknown", label: "Unknown", color: "#64748b" },
+].map((series) => ({ ...series, key: `clientCosts.${series.id}` as const }));
+
+function buildClientCosts(
+  stat: UsageTrendStatLike,
+): Record<string, number | null> {
+  const costs: Record<string, number | null> = {};
+  const entries =
+    stat.costByClient ??
+    (parseFiniteNumber(stat.totalCost)
+      ? { Unknown: parseFiniteNumber(stat.totalCost)! }
+      : {});
+  for (const [label, value] of Object.entries(entries)) {
+    const id =
+      CLIENT_COST_SERIES.find((s) => s.label === label)?.id ?? "unknown";
+    costs[id] = stat.incomplete
+      ? null
+      : (costs[id] ?? 0) + (parseFiniteNumber(value) ?? 0);
+  }
+  return costs;
+}
+
+export function presentClientCostSeries(points: UsageTrendChartPoint[]) {
+  return CLIENT_COST_SERIES.filter(({ id }) =>
+    points.some((p) => Object.hasOwn(p.clientCosts, id)),
+  );
+}
 
 function SeriesLegend({
   series,
@@ -223,10 +266,11 @@ function SeriesLegend({
   );
 }
 
-function TrendTooltip({
+export function TrendTooltip({
   active,
   payload,
   rates = false,
+  costs = false,
 }: {
   active?: boolean;
   payload?: readonly {
@@ -237,6 +281,7 @@ function TrendTooltip({
     payload?: UsageTrendChartPoint;
   }[];
   rates?: boolean;
+  costs?: boolean;
 }) {
   if (!active || !payload?.length) return null;
   return (
@@ -250,12 +295,18 @@ function TrendTooltip({
             <span className="font-medium tabular-nums">
               {rates
                 ? `${item.value!.toFixed(1)}%`
-                : item.dataKey === "cost"
+                : costs
                   ? fmtUsd(item.value, 6)
                   : fmtInt(item.value, "en-US")}
             </span>
           </p>
         ))}
+      {costs && (
+        <p className="mt-2 flex justify-between gap-4 border-t pt-2 font-semibold">
+          <span>Total</span>
+          <span>{fmtUsd(payload[0].payload?.cost, 6)}</span>
+        </p>
+      )}
     </div>
   );
 }
@@ -299,6 +350,10 @@ export function UsageTrendChart({
         endDate,
       }),
     [trends.data, hourly, startDate, endDate],
+  );
+  const costSeries = useMemo(
+    () => presentClientCostSeries(chartData),
+    [chartData],
   );
   const tokenFormatter = useMemo(
     () => createUsageTrendTokenTickFormatter("en-US"),
@@ -427,7 +482,7 @@ export function UsageTrendChart({
                 </span>
               </div>
               <SeriesLegend
-                series={COST_SERIES}
+                series={costSeries}
                 hidden={hidden}
                 onToggle={toggle}
               />
@@ -447,16 +502,19 @@ export function UsageTrendChart({
                       tickLine={false}
                       tickFormatter={formatUsageTrendCostTickLabel}
                     />
-                    <Tooltip content={<TrendTooltip />} />
-                    <Bar
-                      dataKey="cost"
-                      name="Cost"
-                      fill="#d94670"
-                      hide={hidden.has("cost")}
-                      maxBarSize={40}
-                      radius={[3, 3, 0, 0]}
-                      isAnimationActive={false}
-                    />
+                    <Tooltip content={<TrendTooltip costs />} />
+                    {costSeries.map(({ key, label, color }) => (
+                      <Bar
+                        key={key}
+                        dataKey={key}
+                        name={label}
+                        fill={color}
+                        stackId="client-cost"
+                        hide={hidden.has(key)}
+                        maxBarSize={40}
+                        isAnimationActive={false}
+                      />
+                    ))}
                   </BarChart>
                 </ResponsiveContainer>
               </div>

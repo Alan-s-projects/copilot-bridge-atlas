@@ -277,6 +277,7 @@ mod tests {
             "100",
             "other-model",
         );
+        db.conn.lock().unwrap().execute("UPDATE proxy_request_logs SET client_name=CASE request_id WHEN 'one' THEN 'Claude Code' ELSE 'Codex Desktop' END", []).unwrap();
         let summary = db
             .get_usage_summary(
                 Some(start),
@@ -316,6 +317,21 @@ mod tests {
                     .map(|b| b.totals.total_cost.parse::<f64>().unwrap())
                     .sum();
                 assert_eq!(count, summary.total_requests);
+                let mut clients = crate::services::client_costs::ClientCosts::new();
+                for bucket in &response.buckets {
+                    let sum: f64 = bucket.cost_by_client.values().sum();
+                    assert!(
+                        (sum - bucket.totals.total_cost.parse::<f64>().unwrap()).abs() < 0.000001
+                    );
+                    crate::services::client_costs::merge(
+                        &mut clients,
+                        bucket.cost_by_client.clone(),
+                    );
+                }
+                assert!((clients["Claude Code"] - 0.123456).abs() < 0.000001);
+                assert!((clients["Codex Desktop"] - 0.2).abs() < 0.000001);
+                assert_eq!(clients.len(), 2);
+
                 assert_eq!(
                     response.total_cost.as_deref(),
                     Some(summary.total_cost.as_str())
@@ -606,6 +622,7 @@ mod tests {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrendBucket {
+    pub cost_by_client: crate::services::client_costs::ClientCosts,
     #[serde(flatten)]
     pub totals: DailyStats,
     pub start_date: i64,
@@ -704,14 +721,19 @@ impl Database {
                   json_extract(value,'$.firstDay') AS first_day, json_extract(value,'$.lastDay') AS last_day,
                   json_extract(value,'$.rollupStart') AS rollup_start, json_extract(value,'$.rollupEnd') AS rollup_end
                 FROM json_each(?)
-             ), details AS (
-                SELECT b.idx, COUNT(*) AS requests,
+             ), detail_clients AS (
+                SELECT b.idx, COALESCE(NULLIF(trim(l.client_name),''),'Unknown') AS client, COUNT(*) AS requests,
                   SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END) AS successes,
                   SUM(CAST(l.total_cost_usd AS REAL)) AS cost,
                   SUM({fresh}) AS fresh, SUM(l.output_tokens) AS output,
                   SUM(l.cache_read_tokens) AS cached, SUM(l.cache_creation_tokens) AS written
                 FROM buckets b JOIN proxy_request_logs l ON l.created_at >= b.start_ts AND l.created_at <= b.end_ts
-                {detail_join} WHERE {detail_filter} GROUP BY b.idx
+                {detail_join} WHERE {detail_filter} GROUP BY b.idx, client
+             ), details AS (
+                SELECT idx, SUM(requests) AS requests, SUM(successes) AS successes, SUM(cost) AS cost,
+                  SUM(fresh) AS fresh, SUM(output) AS output, SUM(cached) AS cached, SUM(written) AS written,
+                  json_group_object(client,cost) AS client_costs
+                FROM detail_clients GROUP BY idx
              ), archives AS (
                 SELECT b.idx,
                   SUM(CASE WHEN {eligible} THEN r.request_count ELSE 0 END) AS requests,
@@ -721,6 +743,7 @@ impl Database {
                   SUM(CASE WHEN {eligible} THEN r.output_tokens ELSE 0 END) AS output,
                   SUM(CASE WHEN {eligible} THEN r.cache_read_tokens ELSE 0 END) AS cached,
                   SUM(CASE WHEN {eligible} THEN r.cache_creation_tokens ELSE 0 END) AS written,
+                  json_group_array(CASE WHEN {eligible} THEN json_object('total',CAST(r.total_cost_usd AS REAL),'clients',json(r.client_costs)) ELSE NULL END) AS client_costs,
                   MAX(CASE WHEN COALESCE(({eligible}),0) = 0 AND r.request_count > 0 THEN 1 ELSE 0 END) AS incomplete
                 FROM buckets b JOIN usage_daily_rollups r ON r.date >= b.first_day AND r.date <= b.last_day
                 {rollup_join} WHERE {rollup_filter} GROUP BY b.idx
@@ -730,7 +753,7 @@ impl Database {
                COALESCE(d.cost,0)+COALESCE(a.cost,0),
                COALESCE(d.fresh,0)+COALESCE(a.fresh,0), COALESCE(d.output,0)+COALESCE(a.output,0),
                COALESCE(d.cached,0)+COALESCE(a.cached,0), COALESCE(d.written,0)+COALESCE(a.written,0),
-               COALESCE(a.incomplete,0)
+               COALESCE(a.incomplete,0), d.client_costs, a.client_costs
              FROM buckets b LEFT JOIN details d ON d.idx=b.idx LEFT JOIN archives a ON a.idx=b.idx ORDER BY b.idx",
             detail_filter=detail_conditions.join(" AND "), rollup_filter=rollup_conditions.join(" AND "),
         );
@@ -750,8 +773,38 @@ impl Database {
                 let incomplete: bool = row.get(8)?;
                 let cost: f64 = row.get(3)?;
                 total_cost += cost;
+                use crate::services::client_costs::{merge, with_legacy_fallback, ClientCosts};
+                #[derive(Deserialize)]
+                struct Archive {
+                    total: f64,
+                    clients: ClientCosts,
+                }
+                let parse_error = |e: serde_json::Error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        9,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                };
+                let mut cost_by_client: ClientCosts = serde_json::from_str(
+                    &row.get::<_, Option<String>>(9)?
+                        .unwrap_or_else(|| "{}".into()),
+                )
+                .map_err(parse_error)?;
+                let archives: Vec<Option<Archive>> = serde_json::from_str(
+                    &row.get::<_, Option<String>>(10)?
+                        .unwrap_or_else(|| "[]".into()),
+                )
+                .map_err(parse_error)?;
+                for archive in archives.into_iter().flatten() {
+                    merge(
+                        &mut cost_by_client,
+                        with_legacy_fallback(archive.clients, archive.total),
+                    );
+                }
                 let denominator = input + cached + written;
                 Ok(TrendBucket {
+                    cost_by_client,
                     totals: DailyStats {
                         date: Local
                             .timestamp_opt(from, 0)

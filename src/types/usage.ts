@@ -120,6 +120,7 @@ export interface TrendGrouping {
   unit: TrendUnit;
 }
 interface TrendBucket extends DailyStats {
+  costByClient?: Record<string, number>;
   startDate: number;
   endDate: number;
   readCacheHitRate: number | null;

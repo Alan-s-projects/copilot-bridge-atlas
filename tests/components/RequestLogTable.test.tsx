@@ -370,21 +370,28 @@ describe("RequestLogTable", () => {
 
 describe("request client column", () => {
   it("appears immediately after Time and labels known and legacy requests", () => {
-    const rows = ["Codex Desktop", "Codex CLI", "Codex VS Code", undefined].map(
-      (clientName, i) => ({
-        requestId: String(i),
-        createdAt: 1792800000,
-        model: "gpt-6-astra",
-        clientName,
-        pending: true as const,
-      }),
-    );
+    const rows = [
+      "Codex Desktop",
+      "Codex CLI",
+      "Codex VS Code",
+      "Claude Code",
+      "Claude Desktop",
+      undefined,
+    ].map((clientName, i) => ({
+      requestId: String(i),
+      createdAt: 1792800000,
+      model: "gpt-6-astra",
+      clientName,
+      pending: true as const,
+    }));
     render(<RequestLogsGrid showClient logs={rows} />);
     expect(screen.getAllByRole("columnheader")[1]).toHaveTextContent("Client");
     for (const label of [
       "Codex Desktop",
       "Codex CLI",
       "Codex VS Code",
+      "Claude Code",
+      "Claude Desktop",
       "Unknown",
     ])
       expect(screen.getByText(label)).toBeVisible();

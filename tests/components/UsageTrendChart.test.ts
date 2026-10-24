@@ -196,3 +196,65 @@ describe("formatUsageTrendTokenTickLabel", () => {
     ).toBe("1.5K");
   });
 });
+
+describe("cost by client", () => {
+  it("preserves costs, fills empty buckets, groups unknown labels, and leaves gaps incomplete", () => {
+    const data = buildUsageTrendChartData(
+      [
+        {
+          ...day("2026-04-27"),
+          totalCost: "3.5",
+          costByClient: {
+            "Codex Desktop": 1,
+            "Claude Code": 2,
+            "future-client": 0.5,
+          },
+        },
+        { ...day("2026-04-28"), totalCost: "0", costByClient: {} },
+        {
+          ...day("2026-04-29"),
+          totalCost: "4",
+          incomplete: true,
+          costByClient: {},
+        },
+      ],
+      {
+        isHourly: false,
+        dateLocale: "en-US",
+        startDate: 1777248000,
+        endDate: 1777507199,
+      },
+    );
+    expect(data[0].clientCosts).toEqual({
+      codexDesktop: 1,
+      claudeCode: 2,
+      unknown: 0.5,
+    });
+    expect(
+      Object.values(data[0].clientCosts).reduce<number>(
+        (sum, v) => sum + (v ?? 0),
+        0,
+      ),
+    ).toBe(data[0].cost);
+    expect(data[1].clientCosts).toEqual({
+      codexDesktop: 0,
+      claudeCode: 0,
+      unknown: 0,
+    });
+    expect(data[2].clientCosts).toEqual({
+      codexDesktop: null,
+      claudeCode: null,
+      unknown: null,
+    });
+    expect(data[2].cost).toBeNull();
+  });
+  it("shows legacy cost without attribution as Unknown", () => {
+    const data = buildUsageTrendChartData([day("2026-04-27")], {
+      isHourly: false,
+      dateLocale: "en-US",
+      startDate: 1777248000,
+      endDate: 1777334399,
+    });
+    expect(data[0].clientCosts).toEqual({ unknown: 0.01 });
+  });
+});

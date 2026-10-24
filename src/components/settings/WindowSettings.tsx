@@ -17,7 +17,6 @@ export function WindowSettings({
       <ToggleRow
         icon={<Power className="h-4 w-4" />}
         title={t("settings.launchOnStartup")}
-        description={t("settings.launchOnStartupDescription")}
         checked={!!settings.launchOnStartup}
         onCheckedChange={(value) => onChange({ launchOnStartup: value })}
       />

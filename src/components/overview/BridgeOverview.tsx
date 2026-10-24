@@ -9,9 +9,6 @@ import type { RequestLog } from "@/types/usage";
 import { RequestLogsGrid } from "@/components/usage/RequestLogsGrid";
 import { UsageSummaryCard } from "@/components/usage/UsageHero";
 
-const clock = (timestamp: number) =>
-  new Date(timestamp * 1000).toLocaleTimeString("en-US", { hour12: false });
-
 const RecentRequests = memo(function RecentRequests({
   logs,
   active,
@@ -66,22 +63,9 @@ export function BridgeOverview({ status }: { status?: ProxyStatus }) {
         className="space-y-5 rounded-xl border border-border bg-card p-6 shadow-sm"
         aria-labelledby="bridge-requests-title"
       >
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <div>
-            <h2 id="bridge-requests-title" className="text-base font-semibold">
-              Requests
-            </h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Latest {OVERVIEW_REQUEST_LIMIT} requests
-            </p>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {overview.dataUpdatedAt > 0 && (
-              <>Updated {clock(overview.dataUpdatedAt / 1000)} · </>
-            )}
-            Updates while this window is active
-          </p>
-        </div>
+        <h2 id="bridge-requests-title" className="text-base font-semibold">
+          Requests
+        </h2>
         <section
           className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-border pb-3"
           aria-label="Proxy"

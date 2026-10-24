@@ -178,7 +178,6 @@ export function UsageDashboard({
       <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <h1 className="text-2xl font-bold">{t("usage.title")}</h1>
-          <p className="text-sm text-muted-foreground">{t("usage.subtitle")}</p>
         </div>
 
         <div className="flex max-w-full flex-wrap items-center gap-2">

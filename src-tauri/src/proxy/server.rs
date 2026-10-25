@@ -357,6 +357,12 @@ async fn serve_connection(
                     )),
                 );
             }
+            if log::log_enabled!(target: "atlas_http", log::Level::Info) {
+                if let Some(headers) = super::client_identity::unknown_client_headers(req.headers())
+                {
+                    log::info!(target: "atlas_http", "unknown_client method={} path={} headers={headers}", req.method(), req.uri().path());
+                }
+            }
             let (parts, body) = req.into_parts();
             let req = http::Request::from_parts(parts, axum::body::Body::new(body));
             <Router as tower::Service<_>>::call(&mut router, req).await

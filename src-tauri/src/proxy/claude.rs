@@ -301,8 +301,13 @@ async fn dispatch(
             .pointer("/error/message")
             .and_then(Value::as_str)
             .unwrap_or("Upstream request failed");
+        let overflow = (status == StatusCode::BAD_REQUEST)
+            .then(|| super::claude_protocol::context_overflow::context_overflow_message(&value))
+            .flatten();
         let guidance;
-        let msg = if status == StatusCode::BAD_REQUEST && image_history::is_image_limit_error(msg) {
+        let msg = if let Some(ref normalized) = overflow {
+            normalized.as_str()
+        } else if status == StatusCode::BAD_REQUEST && image_history::is_image_limit_error(msg) {
             guidance = format!(
                 "{msg}\nThe upstream rejected the image count. Historical user attachments and tool screenshots also count, even on text-only follow-ups. Atlas's Messages safeguard preserves user attachments and the latest tool-result batch; reduce those images or start a new conversation with a text handoff. An upstream limit may be lower than the configured Messages image budget."
             );
@@ -344,7 +349,12 @@ async fn dispatch(
                         found = Some(v["response"].clone())
                     }
                     Some("response.failed" | "error") => {
-                        return Err(ProxyError::ForwardFailed("Upstream stream failed".into()))
+                        if let Some(message) =
+                            super::claude_protocol::context_overflow::context_overflow_message(&v)
+                        {
+                            return Ok(error(StatusCode::BAD_REQUEST, &message));
+                        }
+                        return Err(ProxyError::ForwardFailed("Upstream stream failed".into()));
                     }
                     _ => {}
                 }
@@ -356,6 +366,15 @@ async fn dispatch(
     } else {
         serde_json::from_slice(&bytes).map_err(|e| ProxyError::TransformError(e.to_string()))?
     };
+    if value.get("status").and_then(Value::as_str) == Some("failed")
+        || value.get("error").is_some_and(|error| !error.is_null())
+    {
+        if let Some(message) =
+            super::claude_protocol::context_overflow::context_overflow_message(&value)
+        {
+            return Ok(error(StatusCode::BAD_REQUEST, &message));
+        }
+    }
     if stream {
         let event = bytes::Bytes::from(format!(
             "event: response.completed\ndata: {}\n\n",
@@ -457,6 +476,12 @@ mod tests {
 
     mod image_history_tests {
         include!("claude_image_history_tests.rs");
+    }
+    mod context_overflow_tests {
+        include!("claude_context_overflow_tests.rs");
+    }
+    mod compaction_cli_tests {
+        include!("claude_compaction_cli_tests.rs");
     }
 
     use crate::proxy::{

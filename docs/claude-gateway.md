@@ -121,6 +121,47 @@ snapshot logging remains subject to its documented sensitive-data limitations.
 instructions, input, and tools. Each retained image contributes 2,048 estimated
 tokens, regardless of dimensions; the result is not an exact tokenizer or bill.
 
+## Context-overflow recovery
+
+The Messages gateway translates genuine upstream input-context errors into HTTP
+400 `invalid_request_error` responses with `prompt is too long` wording. Streamed
+failure events use the same Anthropic error type and message. Valid upstream
+counts are preserved as `prompt is too long: N tokens > M maximum`; missing or
+unusable counts are omitted, not estimated. Original failures remain available
+through the existing bounded diagnostics.
+
+This lets Claude Code recognize an oversized prompt and attempt its own
+compact-and-retry recovery. Atlas does not summarize or trim the conversation,
+inflate usage, change model mappings, or write Claude compaction settings. A
+successful output stopped at its context/output limit is not reclassified as an
+input error. Other validation, image, authentication, rate-limit, payload-size,
+and server failures retain their existing behavior.
+
+Recovery is reactive: it does not lower Claude Code's proactive compaction
+threshold or guarantee that an already-oversized summarization request will fit.
+
+### Real Claude Code verification
+
+The ignored `context_overflow_real_claude` tests run an installed Claude Code
+binary against actual Atlas routes with a loopback Copilot fixture. They check
+for `compact_boundary` with automatic recovery and a successful continuation,
+and include a control using the previous error wording. Claude home, settings,
+and transcripts are isolated; no compaction settings are overridden. Set
+`ATLAS_TEST_CLAUDE_BIN` to the executable and `ATLAS_TEST_CLAUDE_ARTIFACTS` to an
+absolute scratch directory, then run:
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --locked context_overflow_real_claude -- --ignored --nocapture --test-threads=1
+```
+
+The separate `context_overflow_live_claude_compacts_and_retries` test additionally
+requires `ATLAS_LIVE_AUTH_DIR`, containing local `copilot_auth.json`. It uses a
+disposable copy of authentication and sends a small synthetic conversation to
+Copilot. Only the context-overflow rejection is injected; the initial reply,
+summary, and continuation are real GPT-6 Astra responses. This spends Copilot
+usage and must be run explicitly. Both variants passed with Claude Code 2.1.308;
+neither constitutes a measurement of the upstream's maximum accepted context.
+
 ## Reused implementation and validation
 
 The isolated `proxy/claude_protocol` converters, reasoning transport, media

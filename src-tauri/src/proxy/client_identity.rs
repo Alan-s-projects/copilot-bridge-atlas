@@ -132,9 +132,95 @@ pub fn detect_client(headers: &HeaderMap) -> ClientIdentity {
     }
 }
 
+pub(crate) fn unknown_client_headers(headers: &HeaderMap) -> Option<String> {
+    if detect_client(headers).client_source != "unknown" {
+        return None;
+    }
+    let headers: Vec<_> = headers
+        .iter()
+        .map(|(name, value)| {
+            let normalized = name.as_str().replace('_', "-");
+            let credential = matches!(normalized.as_str(), "cookie" | "set-cookie" | "x-auth")
+                || [
+                    "authorization",
+                    "token",
+                    "secret",
+                    "password",
+                    "api-key",
+                    "apikey",
+                ]
+                .iter()
+                .any(|suffix| {
+                    normalized
+                        .strip_suffix(*suffix)
+                        .is_some_and(|prefix| prefix.is_empty() || prefix.ends_with('-'))
+                });
+            let value = if credential {
+                std::borrow::Cow::Borrowed("[redacted]")
+            } else {
+                String::from_utf8_lossy(value.as_bytes())
+            };
+            (name.as_str(), value)
+        })
+        .collect();
+    Some(serde_json::to_string(&headers).expect("header names and values are serializable"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_headers_preserve_client_metadata_and_only_redact_credentials() {
+        let mut headers = HeaderMap::from_iter([
+            (
+                "user-agent".parse().unwrap(),
+                "new-client/1.2".parse().unwrap(),
+            ),
+            (
+                "originator".parse().unwrap(),
+                "new-desktop".parse().unwrap(),
+            ),
+            ("x-stainless-lang".parse().unwrap(), "js".parse().unwrap()),
+            (
+                "x-client-info".parse().unwrap(),
+                "secret-review token-counter".parse().unwrap(),
+            ),
+            (
+                "x-client-token-count".parse().unwrap(),
+                "123".parse().unwrap(),
+            ),
+            (
+                "authorization".parse().unwrap(),
+                "Bearer private".parse().unwrap(),
+            ),
+            (
+                "cookie".parse().unwrap(),
+                "session=private".parse().unwrap(),
+            ),
+            ("x-api-key".parse().unwrap(), "private".parse().unwrap()),
+            ("x-auth-token".parse().unwrap(), "private".parse().unwrap()),
+        ]);
+        headers.append("x-client-info", "second value".parse().unwrap());
+        let snapshot: Vec<(String, String)> =
+            serde_json::from_str(&unknown_client_headers(&headers).unwrap()).unwrap();
+        for (name, value) in [
+            ("user-agent", "new-client/1.2"),
+            ("originator", "new-desktop"),
+            ("x-stainless-lang", "js"),
+            ("x-client-info", "secret-review token-counter"),
+            ("x-client-info", "second value"),
+            ("x-client-token-count", "123"),
+        ] {
+            assert!(snapshot.contains(&(name.into(), value.into())));
+        }
+        for name in ["authorization", "cookie", "x-api-key", "x-auth-token"] {
+            assert!(snapshot.contains(&(name.into(), "[redacted]".into())));
+        }
+        assert_eq!(snapshot.len(), headers.len());
+        headers.insert("originator", "codex_desktop".parse().unwrap());
+        assert!(unknown_client_headers(&headers).is_none());
+    }
     #[test]
     fn observed_desktop_gateway_probe_user_agent() {
         // Captured from Claude Desktop's Test connection action. Its native

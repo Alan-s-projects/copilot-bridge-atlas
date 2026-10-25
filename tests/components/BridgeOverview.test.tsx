@@ -120,23 +120,20 @@ beforeEach(() => {
 });
 
 describe("read-only bridge overview", () => {
-  it("shows the local address, token-based cache reuse, cost, activity and recent statuses", async () => {
+  it("shows usage and request activity without duplicate proxy status or address", async () => {
     renderOverview();
-    const proxy = within(screen.getByRole("region", { name: "Proxy" }));
     const usage = within(screen.getByRole("region", { name: "Today's usage" }));
     const requests = within(screen.getByRole("region", { name: "Requests" }));
     expect(
       screen.queryByRole("heading", { name: "Overview" }),
     ).not.toBeInTheDocument();
-    expect(proxy.getByText("http://127.0.0.1:15722/v1")).toBeVisible();
-    expect(proxy.getByText("Proxy running")).toBeVisible();
-    expect(proxy.getByText("Proxy running")).toHaveClass(
-      "font-mono",
-      "text-muted-foreground",
-    );
-    expect(screen.getByRole("region", { name: "Requests" })).toContainElement(
-      screen.getByRole("region", { name: "Proxy" }),
-    );
+    expect(
+      screen.queryByText("http://127.0.0.1:15722/v1"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Proxy running")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "Proxy" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Refresh overview" }),
     ).toHaveAttribute("title", "Refresh overview");
@@ -146,7 +143,7 @@ describe("read-only bridge overview", () => {
     expect(await usage.findByText("$1")).toBeVisible();
     expect(usage.getByText("80.0%")).toBeVisible();
     expect(usage.getByText("91.7%")).toBeVisible();
-    expect(proxy.getByText("Active requests:").textContent).toContain("2");
+    expect(requests.getByText("Active requests:").textContent).toContain("2");
     const table = requests.getByRole("table", {
       name: "Latest 5 requests",
     });
@@ -201,7 +198,7 @@ describe("read-only bridge overview", () => {
     expect(mocks.logs).toHaveBeenCalledWith({ appType: "codex" }, 0, 5);
     expect(screen.getAllByRole("button")).toHaveLength(1);
     expect(
-      proxy.queryByRole("button", { name: "Refresh overview" }),
+      requests.queryByRole("button", { name: "Refresh overview" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     await waitFor(() =>
@@ -297,7 +294,6 @@ describe("read-only bridge overview", () => {
         configPath: "C:/Users/test/.codex/config.toml",
       });
       renderOverview({ ...status, running: false, active_connections: 0 });
-      const proxy = within(screen.getByRole("region", { name: "Proxy" }));
       const warnings = within(
         screen.getByRole("region", { name: "Connection warnings" }),
       );
@@ -317,7 +313,7 @@ describe("read-only bridge overview", () => {
         ),
       ).toBeVisible();
       expect(screen.getAllByRole("alert")).toHaveLength(2);
-      expect(proxy.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByText("Proxy stopped")).not.toBeInTheDocument();
     },
   );
 

@@ -1,3 +1,4 @@
+import { SettingsSection } from "@/components/ui/settings-section";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -181,18 +182,17 @@ export function CodexFormFields({
     });
   return (
     <div className="space-y-6">
-      <CopilotAuthSection
-        mode="select"
-        selectedAccountId={selectedGitHubAccountId}
-        onAccountSelect={onGitHubAccountSelect}
-      />
+      <SettingsSection title={t("copilot.githubAccount", "GitHub account")}>
+        <CopilotAuthSection
+          mode="select"
+          accountLabelClassName="sr-only"
+          selectedAccountId={selectedGitHubAccountId}
+          onAccountSelect={onGitHubAccountSelect}
+        />
+      </SettingsSection>
       {modelMapping}
-      <section className="space-y-3">
+      <SettingsSection title="Enabled models" actions={catalogStatus}>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <h3 className="text-sm font-medium">Enabled models</h3>
-            {catalogStatus}
-          </div>
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
@@ -303,7 +303,7 @@ export function CodexFormFields({
             </div>
           );
         })}
-      </section>
+      </SettingsSection>
     </div>
   );
 }

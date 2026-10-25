@@ -1,3 +1,4 @@
+import { SettingsSection } from "@/components/ui/settings-section";
 import { useRef, useState } from "react";
 import {
   useClaudeMappings,
@@ -103,11 +104,7 @@ function MappingField({
 export function ClaudeModelMapping() {
   const { mappings, models, ready, error, retry } = useClaudeMappings();
   return (
-    <section
-      aria-label="Claude model mapping"
-      className="space-y-4 rounded-xl border bg-card p-6"
-    >
-      <h3 className="font-semibold">Claude model mapping</h3>
+    <SettingsSection title="Claude model mapping">
       <p className="text-sm text-muted-foreground">
         Choose an enabled Copilot model for each Claude role. Unconfigured roles
         cannot send requests.
@@ -139,6 +136,6 @@ export function ClaudeModelMapping() {
           ))}
         </>
       )}
-    </section>
+    </SettingsSection>
   );
 }

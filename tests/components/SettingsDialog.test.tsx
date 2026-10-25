@@ -204,17 +204,17 @@ describe("SettingsPage", () => {
     const about = within(
       screen.getByRole("region", { name: "Settings content" }),
     ).getByText("About");
-    const backupTrigger = screen.getByRole("button", {
-      name: /Backup & Restore/,
+    const backupHeading = screen.getByRole("heading", {
+      name: "Backup & Restore",
     });
     expect(
-      about.compareDocumentPosition(backupTrigger) &
+      about.compareDocumentPosition(backupHeading) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    await user.click(backupTrigger);
+    expect(backupHeading).toBeVisible();
     expect(
-      await screen.findByRole("heading", { name: "Backup & Restore" }),
-    ).toBeVisible();
+      screen.queryByRole("button", { name: /Backup & Restore/ }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /Application Diagnostic Logs/ }),
     ).not.toBeInTheDocument();

@@ -36,6 +36,7 @@ const navigation = [
 export default function App() {
   const { count: mappingCount } = useClaudeMappings();
   const [settingsEntry, setSettingsEntry] = useState(0);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<string>();
   const [view, setView] = useState<View>("provider");
   const { status } = useProxyStatus();
   const { data: availableReleaseVersion } = useAvailableRelease();
@@ -65,6 +66,7 @@ export default function App() {
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "," && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
+        setSettingsInitialTab(undefined);
         setView("settings");
       } else if (
         event.key === "Escape" &&
@@ -95,8 +97,10 @@ export default function App() {
               aria-current={view === target ? "page" : undefined}
               onClick={() => {
                 setView(target);
-                if (target === "settings")
+                if (target === "settings") {
+                  setSettingsInitialTab(undefined);
                   setSettingsEntry((value) => value + 1);
+                }
               }}
             >
               <Icon aria-hidden className="h-4 w-4" />
@@ -121,12 +125,21 @@ export default function App() {
         {view === "settings" ? (
           <SettingsPage
             key={settingsEntry}
-            initialTab={mappingCount ? "copilot" : "general"}
+            initialTab={
+              settingsInitialTab ?? (mappingCount ? "copilot" : "general")
+            }
             mappingCount={mappingCount}
             availableReleaseVersion={availableReleaseVersion}
           />
         ) : view === "setup" ? (
-          <ConnectPage />
+          <ConnectPage
+            mappingCount={mappingCount}
+            onOpenModels={() => {
+              setSettingsInitialTab("copilot");
+              setSettingsEntry((value) => value + 1);
+              setView("settings");
+            }}
+          />
         ) : view === "usage" ? (
           <UsagePage />
         ) : (

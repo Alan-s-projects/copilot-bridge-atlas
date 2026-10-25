@@ -1,3 +1,4 @@
+import { SettingsSection } from "@/components/ui/settings-section";
 import { Monitor, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -9,10 +10,7 @@ export function ThemeSettings() {
   const { theme, setTheme } = useTheme();
 
   return (
-    <section className="space-y-2">
-      <header className="space-y-1">
-        <h3 className="text-sm font-medium">{t("settings.theme")}</h3>
-      </header>
+    <SettingsSection title={t("settings.theme")}>
       <div className="inline-flex gap-1 rounded-md border border-border-default bg-background p-1">
         <ThemeButton
           active={theme === "light"}
@@ -36,7 +34,7 @@ export function ThemeSettings() {
           {t("settings.themeSystem")}
         </ThemeButton>
       </div>
-    </section>
+    </SettingsSection>
   );
 }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SettingsSection } from "@/components/ui/settings-section";
 import { Label } from "@/components/ui/label";
 import {
   useGlobalProxyConfig,
@@ -172,17 +173,15 @@ export function ProxyPanel() {
           },
         ] as const
       ).map(({ title, address, port, suffix, id }) => (
-        <section
+        <SettingsSection
           key={id}
-          aria-label={title}
-          className="space-y-5 rounded-xl border bg-card p-6"
-        >
-          <div className="flex items-center justify-between">
-            <h3 className="font-semibold">{title}</h3>
+          title={title}
+          actions={
             <span className="text-sm text-muted-foreground">
               {running ? "Running" : "Stopped"}
             </span>
-          </div>
+          }
+        >
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor={`${id}-address`}>Listen address</Label>
@@ -229,7 +228,7 @@ export function ProxyPanel() {
               Copy
             </Button>
           </div>
-        </section>
+        </SettingsSection>
       ))}
       {(notice || isPending) && (
         <p

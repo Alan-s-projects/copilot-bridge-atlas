@@ -30,6 +30,7 @@ import type { GitHubAccount } from "@/lib/api";
 
 interface CopilotAuthSectionProps {
   className?: string;
+  accountLabelClassName?: string;
   /** select mode only selects an account; manage mode provides account management. */
   mode?: "manage" | "select";
   /** The currently selected GitHub account ID */
@@ -45,6 +46,7 @@ interface CopilotAuthSectionProps {
  */
 export const CopilotAuthSection: React.FC<CopilotAuthSectionProps> = ({
   className,
+  accountLabelClassName,
   mode = "manage",
   selectedAccountId,
   onAccountSelect,
@@ -138,7 +140,9 @@ export const CopilotAuthSection: React.FC<CopilotAuthSectionProps> = ({
     onAccountSelect &&
     (mode === "select" || hasAnyAccount) && (
       <div className="space-y-2">
-        <Label className="text-sm text-muted-foreground">
+        <Label
+          className={`text-sm text-muted-foreground ${accountLabelClassName ?? ""}`}
+        >
           {mode === "select"
             ? t("copilot.githubAccount", "GitHub account")
             : t("copilot.selectAccount", "Select Account")}

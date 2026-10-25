@@ -1,6 +1,6 @@
 //! Claude-compatible gateway. Both listeners share accounting and Copilot forwarding.
 use super::{
-    claude_protocol::{streaming_responses, transform_responses},
+    claude_protocol::{image_history, streaming_responses, transform_responses},
     handlers,
     server::ProxyState,
     ProxyError,
@@ -26,6 +26,7 @@ pub struct ClaudeConfig {
     pub opus: String,
     pub haiku: String,
     pub fable: String,
+    pub image_history: image_history::ImageHistoryConfig,
 }
 impl Default for ClaudeConfig {
     fn default() -> Self {
@@ -36,11 +37,13 @@ impl Default for ClaudeConfig {
             opus: String::new(),
             haiku: String::new(),
             fable: String::new(),
+            image_history: Default::default(),
         }
     }
 }
 impl ClaudeConfig {
     pub fn validate(&self, codex_port: u16) -> Result<(), crate::AppError> {
+        self.image_history.validate()?;
         self.address
             .trim_matches(['[', ']'])
             .parse::<std::net::IpAddr>()
@@ -242,7 +245,19 @@ async fn dispatch(
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let web_name = transform_responses::anthropic_web_search_tool_name(&body).map(str::to_owned);
     let web_limit = transform_responses::anthropic_web_search_max_uses(&body);
-    let mut converted = transform_responses::anthropic_to_responses(body, None, false, false)?;
+    let (mut converted, image_stats) = image_history::prepare_request(body, &config.image_history)?;
+    if image_stats.before > 0 {
+        log::info!(
+            "[Claude image history] model={} enabled={} input_images={} protected_images={} omitted_images={} forwarded_images={} limit={}",
+            converted["model"].as_str().unwrap_or(""),
+            config.image_history.enabled,
+            image_stats.before,
+            image_stats.protected,
+            image_stats.omitted,
+            image_stats.retained(),
+            image_stats.limit
+        );
+    }
     converted["stream"] = json!(true);
     // Route internally, never call our own listening socket or alter the Codex router.
     for name in [
@@ -286,6 +301,15 @@ async fn dispatch(
             .pointer("/error/message")
             .and_then(Value::as_str)
             .unwrap_or("Upstream request failed");
+        let guidance;
+        let msg = if status == StatusCode::BAD_REQUEST && image_history::is_image_limit_error(msg) {
+            guidance = format!(
+                "{msg}\nThe upstream rejected the image count. Historical user attachments and tool screenshots also count, even on text-only follow-ups. Atlas's Messages safeguard preserves user attachments and the latest tool-result batch; reduce those images or start a new conversation with a text handoff. An upstream limit may be lower than the configured Messages image budget."
+            );
+            guidance.as_str()
+        } else {
+            msg
+        };
         let mut result = error(status, msg);
         if let Some(v) = retry {
             result.headers_mut().insert("retry-after", v);
@@ -383,10 +407,25 @@ async fn count_tokens(
     State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Response {
-    let result=async{let (_,body)=read(request).await?;validate(&body)?;let (c,m)=available(&state).await?;resolve_model(body["model"].as_str().unwrap(),&c,&m)?;
+    let result = async {
+        let (_, mut body) = read(request).await?;
+        validate(&body)?;
+        let (config, models) = available(&state).await?;
+        body["model"] = json!(resolve_model(
+            body["model"].as_str().unwrap(),
+            &config,
+            &models
+        )?);
+        let (converted, _) = image_history::prepare_request(body, &config.image_history)?;
         // Copilot exposes no exact tokenizer. Mark this local estimate explicitly.
-        let text=json!({"system":body.get("system"),"messages":body.get("messages"),"tools":body.get("tools")});
-        Ok::<_,ProxyError>(Json(json!({"input_tokens":estimate_tokens(&text)})).into_response())}.await;
+        let input = json!({
+            "instructions": converted.get("instructions"),
+            "input": converted.get("input"),
+            "tools": converted.get("tools")
+        });
+        Ok::<_, ProxyError>(Json(json!({"input_tokens": estimate_tokens(&input)})).into_response())
+    }
+    .await;
     match result {
         Ok(mut r) => {
             r.headers_mut()
@@ -398,7 +437,10 @@ async fn count_tokens(
 }
 
 fn estimate_tokens(value: &Value) -> u64 {
-    if value.get("type").and_then(Value::as_str) == Some("image") {
+    if matches!(
+        value.get("type").and_then(Value::as_str),
+        Some("image" | "input_image")
+    ) {
         return 2048;
     }
     match value {
@@ -412,6 +454,11 @@ fn estimate_tokens(value: &Value) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod image_history_tests {
+        include!("claude_image_history_tests.rs");
+    }
+
     use crate::proxy::{
         forwarder::{CopilotFixture, TEST_COPILOT},
         provider_router::ProviderRouter,

@@ -67,6 +67,60 @@ actual usage returned by Copilot. No 1M context capability is advertised merely
 because a Claude alias normally supports it. Client-specific context limits,
 prompt instructions, and platform features may differ from native Anthropic.
 
+## Image-history budget
+
+Starting with Atlas 7.1.2, Messages requests have a default-on 50-image safety
+budget. This is a conservative gateway setting, not a claim that every Copilot
+model has the same upstream limit. Direct Codex Responses requests are unchanged.
+
+The budget runs after Messages-to-Responses conversion and before the shared
+forwarder, so ordinary image blocks and supported tool-media wrappers count in
+their normalized form. Each image occurrence counts, including repeated images.
+Requests within budget retain all their images. Over-budget requests replace
+only enough of the oldest eligible tool-result images with explicit text
+markers to fit. All message/user images and the latest contiguous batch of user
+tool results are protected. Text and tool-call/result identities are preserved.
+No client transcript or original image file is edited. The marker is not a
+visual summary; the model can no longer inspect an omitted screenshot unless
+it is supplied again. Removing earlier content can reduce prompt-cache reuse.
+
+If protected images alone exceed the budget, Atlas returns an actionable local
+HTTP 400 before contacting Copilot. Reduce the attachments/latest tool batch, or
+start a fresh conversation with a text handoff and essential images. Upstream
+image-count HTTP 400s retain their cause and gain recovery guidance; Atlas does
+not strip more images and retry. A lower upstream cap, document-derived images,
+or the separate 32 MiB Messages request-body limit can still reject a request.
+This safeguard is not a general guarantee against all image or size errors.
+
+The existing backend `claude_gateway` setting stores the following optional
+`imageHistory` object (camelCase). There is no new UI control:
+
+```json
+{
+  "imageHistory": {
+    "enabled": true,
+    "maxImages": 50,
+    "modelLimits": {}
+  }
+}
+```
+
+Omitted settings use these defaults, including upgrades from older versions.
+`modelLimits` maps actual Copilot model IDs, not Claude role aliases, to positive
+image budgets; for example `{"gpt-6-astra": 50}`. An unlisted model uses
+`maxImages`. Set `enabled` to `false` to retain existing forwarding behavior.
+These fields are part of the existing backend global-proxy configuration API
+and are not Anthropic request parameters. Existing configuration persistence
+and runtime updates apply without a schema migration or socket restart.
+
+For requests containing images, the application log records the model, whether
+the policy is enabled, the input/protected/omitted/forwarded image counts, and
+the budget; these additional log fields contain no image data. Existing request
+snapshot logging remains subject to its documented sensitive-data limitations.
+`/v1/messages/count_tokens` uses the same selection and estimates the converted
+instructions, input, and tools. Each retained image contributes 2,048 estimated
+tokens, regardless of dimensions; the result is not an exact tokenizer or bill.
+
 ## Reused implementation and validation
 
 The isolated `proxy/claude_protocol` converters, reasoning transport, media

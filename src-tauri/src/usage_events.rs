@@ -58,8 +58,8 @@ pub fn notify_log_recorded() {
     }
 
     let handle = handle.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(DEBOUNCE_WINDOW);
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(DEBOUNCE_WINDOW).await;
         // The flag must be cleared first before emitting: in case a new notification comes in during emit,
         // The next round of anti-shake windows will be rescheduled and will not be lost.
         EMIT_SCHEDULED.store(false, Ordering::Release);

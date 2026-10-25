@@ -4,15 +4,6 @@ import { focusManager, useQueryClient } from "@tanstack/react-query";
 import { usageKeys } from "@/lib/query/usage";
 import { useWindowActive } from "@/lib/windowActivity";
 
-/**
- * Listen to the backend `usage-log-recorded` event and immediately invalidate everything after receiving it.
- * UsageDashboard related queries so that users do not need to wait for the 30s polling cycle.
- *
- * The backend will emit this event when `proxy_request_logs` writes a new line (200ms anti-shake merge),
- * Proxy usage changes invalidate the active dashboard queries.
- *
- * This hook is only hung on UsageDashboard to avoid meaningless triggering elsewhere in the main interface.
- */
 export function useUsageEventBridge() {
   const queryClient = useQueryClient();
   const active = useWindowActive();
@@ -21,21 +12,40 @@ export function useUsageEventBridge() {
     if (!active) return;
     let unlisten: UnlistenFn | undefined;
     let disposed = false;
+    let refreshing = false;
+    let dirty = false;
+    const filters = { queryKey: usageKeys.all };
 
-    (async () => {
-      const off = await listen("usage-log-recorded", () => {
-        if (disposed || !focusManager.isFocused()) return;
-        // invalidate the entire usage namespace: summary / trends /
-        // modelStats / logs all follow the re-pull
-        queryClient.invalidateQueries({ queryKey: usageKeys.all });
-      });
-
-      if (disposed) {
-        off();
-      } else {
-        unlisten = off;
+    const refresh = async () => {
+      dirty = true;
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        while (dirty && !disposed && focusManager.isFocused()) {
+          dirty = false;
+          // An existing fetch may have read before this event's write.
+          const alreadyFetching = queryClient.isFetching(filters) > 0;
+          await queryClient.invalidateQueries(filters, {
+            cancelRefetch: false,
+          });
+          dirty ||= alreadyFetching;
+        }
+      } finally {
+        refreshing = false;
       }
-    })();
+    };
+
+    void listen("usage-log-recorded", () => {
+      if (disposed || !focusManager.isFocused()) return;
+      void refresh().catch((error) =>
+        console.error("Cannot refresh usage:", error),
+      );
+    })
+      .then((off) => {
+        if (disposed) off();
+        else unlisten = off;
+      })
+      .catch((error) => console.error("Cannot observe usage:", error));
 
     return () => {
       disposed = true;

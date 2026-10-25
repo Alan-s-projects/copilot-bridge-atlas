@@ -9,7 +9,7 @@ use super::{
     handler_config::{StreamUsageEventFilter, UsageParserConfig},
     handler_context::RequestContext,
     server::ProxyState,
-    sse::{strip_sse_field, take_sse_block},
+    sse::{strip_sse_field, SseBuffer},
     types::ReasoningEffort,
     upstream_response::{ProxyResponse, MAX_RESPONSE_BODY_BYTES},
     usage::parser::TokenUsage,
@@ -206,73 +206,33 @@ pub async fn handle_non_streaming(
         body_bytes.len()
     );
 
-    // Usage recording is always on for the dashboard.
-    if let Ok(json_value) = serde_json::from_slice::<Value>(&body_bytes) {
-        // Analyze usage
-        if let Some(usage) = (parser_config.response_parser)(&json_value) {
-            // Attribution priority: usage parsed model → response model field → mapped outbound
-            // Model(Route Takes True) → Client Requests Model. Empty strings are considered missing.
-            let model = usage
-                .model
-                .clone()
-                .filter(|m| !m.is_empty())
-                .or_else(|| {
-                    json_value
-                        .get("model")
-                        .and_then(|m| m.as_str())
-                        .filter(|m| !m.is_empty())
-                        .map(str::to_string)
-                })
-                .or_else(|| ctx.outbound_model.clone())
-                .unwrap_or_else(|| ctx.request_model.clone());
-
-            spawn_log_usage(
-                state,
-                ctx,
-                usage,
-                &model,
-                &ctx.request_model,
-                status.as_u16(),
-                false,
-            );
-        } else {
-            let model = json_value
-                .get("model")
-                .and_then(|m| m.as_str())
-                .filter(|m| !m.is_empty())
-                .map(str::to_string)
-                .or_else(|| ctx.outbound_model.clone())
-                .unwrap_or_else(|| ctx.request_model.clone());
-            spawn_log_usage(
-                state,
-                ctx,
-                TokenUsage::default(),
-                &model,
-                &ctx.request_model,
-                status.as_u16(),
-                false,
-            );
-            log::debug!(
-                "[{}] Failed to parse usage information, skipping record",
-                parser_config.app_type_str
-            );
-        }
-    } else {
-        log::debug!(
-            "[{}] <<< Response (not JSON): {} bytes",
-            ctx.tag,
-            body_bytes.len()
-        );
-        spawn_log_usage(
-            state,
-            ctx,
-            TokenUsage::default(),
-            ctx.outbound_model.as_deref().unwrap_or(&ctx.request_model),
-            &ctx.request_model,
-            status.as_u16(),
-            false,
-        );
-    }
+    let json = serde_json::from_slice::<Value>(&body_bytes).ok();
+    let usage = json
+        .as_ref()
+        .and_then(parser_config.response_parser)
+        .unwrap_or_default();
+    let model = usage
+        .model
+        .clone()
+        .filter(|model| !model.is_empty())
+        .or_else(|| {
+            json.as_ref()?
+                .get("model")?
+                .as_str()
+                .filter(|model| !model.is_empty())
+                .map(str::to_owned)
+        })
+        .or_else(|| ctx.outbound_model.clone())
+        .unwrap_or_else(|| ctx.request_model.clone());
+    spawn_log_usage(
+        state,
+        ctx,
+        usage,
+        &model,
+        &ctx.request_model,
+        status.as_u16(),
+        false,
+    );
 
     // Build response
     let mut builder = axum::response::Response::builder().status(status);
@@ -445,7 +405,6 @@ pub(crate) fn create_usage_collector(
         .unwrap_or_else(|| ctx.request_model.clone());
     // Keep usage attribution with the request context.
     let app_type_str = ctx.app_type_str;
-    let tag = ctx.tag;
     let start_time = ctx.start_time;
     let stream_parser = parser_config.stream_parser;
     let model_extractor = parser_config.model_extractor;
@@ -457,65 +416,34 @@ pub(crate) fn create_usage_collector(
         start_time,
         parser_config.stream_event_filter,
         move |events, first_token_ms| {
-            if let Some(usage) = stream_parser(&events) {
-                let model = model_extractor(&events, &fallback_model);
-                let latency_ms = start_time.elapsed().as_millis() as u64;
+            let usage = stream_parser(&events).unwrap_or_default();
+            let model = model_extractor(&events, &fallback_model);
+            let latency_ms = start_time.elapsed().as_millis() as u64;
+            let state = state.clone();
+            let provider_id = provider_id.clone();
+            let session_id = session_id.clone();
+            let request_model = request_model.clone();
+            let client = client.clone();
+            let reasoning_effort = reasoning_effort.clone();
 
-                let state = state.clone();
-                let provider_id = provider_id.clone();
-                let session_id = session_id.clone();
-                let request_model = request_model.clone();
-                let client = client.clone();
-                let reasoning_effort = reasoning_effort.clone();
-
-                tokio::spawn(async move {
-                    log_usage(
-                        &state,
-                        &provider_id,
-                        app_type_str,
-                        &model,
-                        &request_model,
-                        usage,
-                        latency_ms,
-                        first_token_ms,
-                        true, // is_streaming
-                        status_code,
-                        Some(session_id),
-                        reasoning_effort,
-                        client,
-                    )
-                    .await;
-                });
-            } else {
-                let model = model_extractor(&events, &fallback_model);
-                let latency_ms = start_time.elapsed().as_millis() as u64;
-                let state = state.clone();
-                let provider_id = provider_id.clone();
-                let session_id = session_id.clone();
-                let request_model = request_model.clone();
-                let client = client.clone();
-                let reasoning_effort = reasoning_effort.clone();
-
-                tokio::spawn(async move {
-                    log_usage(
-                        &state,
-                        &provider_id,
-                        app_type_str,
-                        &model,
-                        &request_model,
-                        TokenUsage::default(),
-                        latency_ms,
-                        first_token_ms,
-                        true, // is_streaming
-                        status_code,
-                        Some(session_id),
-                        reasoning_effort,
-                        client,
-                    )
-                    .await;
-                });
-                log::debug!("[{tag}] Streaming response lacks usage statistics and skips consumption records");
-            }
+            tokio::spawn(async move {
+                log_usage(
+                    &state,
+                    &provider_id,
+                    app_type_str,
+                    &model,
+                    &request_model,
+                    usage,
+                    latency_ms,
+                    first_token_ms,
+                    true,
+                    status_code,
+                    Some(session_id),
+                    reasoning_effort,
+                    client,
+                )
+                .await;
+            });
         },
     ))
 }
@@ -579,10 +507,16 @@ pub(super) async fn log_usage(
 ) {
     use super::usage::logger::UsageLogger;
 
-    let logger = UsageLogger::new(&state.db).with_client(client);
-    let pricing_model = model;
+    let db = state.db.clone();
+    let provider_id = provider_id.to_owned();
+    let app_type = app_type.to_owned();
+    let model = model.to_owned();
+    let request_model = request_model.to_owned();
+    if let Err(error) = tokio::task::spawn_blocking(move || {
+    let logger = UsageLogger::new(&db).with_client(client);
+    let pricing_model = &model;
 
-    let request_id = usage.dedup_request_id(app_type, provider_id);
+    let request_id = usage.dedup_request_id(&app_type, &provider_id);
 
     log::debug!(
         "[{app_type}] Record request log: id={request_id}, provider={provider_id}, model={model}, streaming={is_streaming}, status={status_code}, latency_ms={latency_ms}, first_token_ms={first_token_ms:?}, session={}, input={}, output={}, cache_read={}, cache_creation={}",
@@ -612,6 +546,11 @@ pub(super) async fn log_usage(
     ) {
         log::warn!("[USG-001] Failed to record usage: {e}");
     }
+    })
+    .await
+    {
+        log::warn!("[USG-001] Usage logging task failed: {error}");
+    }
 }
 
 /// Forward a stream with usage logging and no local idle deadline.
@@ -640,8 +579,7 @@ pub(crate) fn create_logged_passthrough_stream_with_diagnostics(
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
     async_stream::stream! {
         let _conn_guard = connection_guard;
-        let mut buffer = String::new();
-        let mut utf8_remainder: Vec<u8> = Vec::new();
+        let mut buffer = SseBuffer::default();
         let mut collector = usage_collector;
         let mut finish_guard = collector.clone().map(SseUsageFinishGuard::new);
         let inspect_sse_events =
@@ -661,10 +599,10 @@ pub(crate) fn create_logged_passthrough_stream_with_diagnostics(
                     }
                     is_first_chunk = false;
                     if inspect_sse_events {
-                        crate::proxy::sse::append_utf8_safe(&mut buffer, &mut utf8_remainder, &bytes);
+                        buffer.push_bytes(&bytes);
 
                         // Attempt to parse and log complete SSE events
-                        while let Some(event_text) = take_sse_block(&mut buffer) {
+                        while let Some((event_text, _)) = buffer.next_block() {
                             if !event_text.trim().is_empty() {
                                 // An SSE event joins all data fields with LF before JSON parsing.
                                 // Parsing each line separately loses multiline terminal usage.
@@ -694,19 +632,19 @@ pub(crate) fn create_logged_passthrough_stream_with_diagnostics(
                                                         || event.get("type").and_then(Value::as_str)
                                                             == Some("response.failed") =>
                                                 {
-                                                    diagnostics.failed_event(&event, Some(data.as_ref()));
+                                                    diagnostics.failed_event(&event, Some(data.as_ref())).await;
                                                 }
                                                 _ if named_failure => diagnostics.failed_event(
                                                     &serde_json::json!({"type":"response.failed"}),
                                                     Some(data.as_ref()),
-                                                ),
+                                                ).await,
                                                 _ => {}
                                             }
                                         } else if named_failure {
                                             diagnostics.failed_event(
                                                 &serde_json::json!({"type":"response.failed"}),
                                                 Some(data.as_ref()),
-                                            );
+                                            ).await;
                                         }
                                     }
                                     let collected = match &collector {
@@ -736,7 +674,7 @@ pub(crate) fn create_logged_passthrough_stream_with_diagnostics(
                 }
                 Some(Err(e)) => {
                     if let Some(diagnostics) = &diagnostics {
-                        diagnostics.stream_failure();
+                        diagnostics.stream_failure().await;
                     } else {
                         log::error!("[{tag}] stream read failed (detail omitted)");
                     }

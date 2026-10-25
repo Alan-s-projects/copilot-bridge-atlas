@@ -8,7 +8,7 @@
 use crate::proxy::{
     content_encoding::get_content_encoding,
     response_processor::strip_entity_headers_for_rebuilt_body,
-    sse::{append_utf8_safe, strip_sse_field, take_sse_block},
+    sse::{strip_sse_field, SseBuffer},
     upstream_response::ProxyResponse,
 };
 use bytes::Bytes;
@@ -121,8 +121,7 @@ fn normalize_stream(
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
     async_stream::stream! {
         let mut ids = ItemIds::default();
-        let mut buffer = String::new();
-        let mut utf8_remainder = Vec::new();
+        let mut buffer = SseBuffer::default();
         tokio::pin!(stream);
 
         while let Some(chunk) = stream.next().await {
@@ -133,26 +132,15 @@ fn normalize_stream(
                     return;
                 }
             };
-            append_utf8_safe(&mut buffer, &mut utf8_remainder, &bytes);
-            loop {
-                let previous_len = buffer.len();
-                let Some(block) = take_sse_block(&mut buffer) else {
-                    break;
-                };
-                let delimiter = if previous_len - block.len() - buffer.len() == 4 {
-                    "\r\n\r\n"
-                } else {
-                    "\n\n"
-                };
-                yield Ok(Bytes::from(format!("{}{delimiter}", ids.rewrite_block(&block))));
+            buffer.push_bytes(&bytes);
+            while let Some((block, delimiter)) = buffer.next_block() {
+                yield Ok(Bytes::from(format!("{}{delimiter}", ids.rewrite_block(block))));
             }
         }
 
-        if !utf8_remainder.is_empty() {
-            buffer.push_str(&String::from_utf8_lossy(&utf8_remainder));
-        }
-        if !buffer.is_empty() {
-            yield Ok(Bytes::from(ids.rewrite_block(&buffer)));
+        buffer.flush_utf8();
+        if !buffer.as_str().is_empty() {
+            yield Ok(Bytes::from(ids.rewrite_block(buffer.as_str())));
         }
     }
 }
@@ -181,12 +169,12 @@ mod tests {
     }
 
     fn events(input: &str) -> Vec<Value> {
-        let mut buffer = input.to_string();
+        let mut buffer = SseBuffer::from(input.to_string());
         let mut blocks = Vec::new();
-        while let Some(block) = take_sse_block(&mut buffer) {
-            blocks.push(block);
+        while let Some((block, _)) = buffer.next_block() {
+            blocks.push(block.to_owned());
         }
-        blocks.push(buffer);
+        blocks.push(buffer.as_str().to_owned());
         blocks
             .iter()
             .filter_map(|block| {

@@ -4,22 +4,81 @@ pub(crate) fn strip_sse_field<'a>(line: &'a str, field: &str) -> Option<&'a str>
     Some(value.strip_prefix(' ').unwrap_or(value))
 }
 
-#[inline]
-pub(crate) fn take_sse_block(buffer: &mut String) -> Option<String> {
-    let mut best: Option<(usize, usize)> = None;
+#[derive(Default)]
+pub(crate) struct SseBuffer {
+    text: String,
+    start: usize,
+    scan: usize,
+    utf8_remainder: Vec<u8>,
+}
 
-    for (delimiter, len) in [("\r\n\r\n", 4usize), ("\n\n", 2usize)] {
-        if let Some(pos) = buffer.find(delimiter) {
-            if best.is_none_or(|(best_pos, _)| pos < best_pos) {
-                best = Some((pos, len));
-            }
+impl From<String> for SseBuffer {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            ..Self::default()
+        }
+    }
+}
+
+impl SseBuffer {
+    pub fn as_str(&self) -> &str {
+        &self.text[self.start..]
+    }
+
+    fn compact(&mut self) {
+        if self.start > 0 && self.start >= self.text.len() / 2 {
+            self.text.drain(..self.start);
+            self.scan -= self.start;
+            self.start = 0;
         }
     }
 
-    let (pos, len) = best?;
-    let block = buffer[..pos].to_string();
-    buffer.drain(..pos + len);
-    Some(block)
+    pub fn push_bytes(&mut self, bytes: &[u8]) {
+        self.compact();
+        append_utf8_safe(&mut self.text, &mut self.utf8_remainder, bytes);
+    }
+
+    pub fn push_str(&mut self, text: &str) {
+        self.compact();
+        self.text.push_str(text);
+    }
+
+    pub fn flush_utf8(&mut self) {
+        let remainder = std::mem::take(&mut self.utf8_remainder);
+        self.push_str(&String::from_utf8_lossy(&remainder));
+    }
+
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.start = 0;
+        self.scan = 0;
+    }
+
+    pub fn next_block(&mut self) -> Option<(&str, &'static str)> {
+        let bytes = self.text.as_bytes();
+        while self.scan < bytes.len() {
+            let remaining = &bytes[self.scan..];
+            let delimiter = if remaining.starts_with(b"\r\n\r\n") {
+                Some("\r\n\r\n")
+            } else if remaining.starts_with(b"\n\n") {
+                Some("\n\n")
+            } else {
+                None
+            };
+            if let Some(delimiter) = delimiter {
+                let start = self.start;
+                let end = self.scan;
+                self.scan += delimiter.len();
+                self.start = self.scan;
+                return Some((&self.text[start..end], delimiter));
+            }
+            self.scan += 1;
+        }
+        // Only the last three bytes can begin a delimiter split across chunks.
+        self.scan = self.text.len().saturating_sub(3).max(self.start);
+        None
+    }
 }
 
 /// Append raw bytes to a UTF-8 `String` buffer, correctly handling multi-byte
@@ -87,7 +146,7 @@ pub(crate) fn append_utf8_safe(buffer: &mut String, remainder: &mut Vec<u8>, new
 
 #[cfg(test)]
 mod tests {
-    use super::{append_utf8_safe, strip_sse_field, take_sse_block};
+    use super::{append_utf8_safe, strip_sse_field, SseBuffer};
 
     #[test]
     fn strip_sse_field_accepts_optional_space() {
@@ -112,24 +171,38 @@ mod tests {
 
     #[test]
     fn take_sse_block_supports_lf_delimiters() {
-        let mut buffer = "data: {\"ok\":true}\n\nrest".to_string();
+        let mut buffer = SseBuffer::from("data: {\"ok\":true}\n\nrest".to_string());
 
-        assert_eq!(
-            take_sse_block(&mut buffer),
-            Some("data: {\"ok\":true}".to_string())
-        );
-        assert_eq!(buffer, "rest");
+        assert_eq!(buffer.next_block(), Some(("data: {\"ok\":true}", "\n\n")));
+        assert_eq!(buffer.as_str(), "rest");
     }
 
     #[test]
     fn take_sse_block_supports_crlf_delimiters() {
-        let mut buffer = "data: {\"ok\":true}\r\n\r\nrest".to_string();
+        let mut buffer = SseBuffer::from("data: {\"ok\":true}\r\n\r\nrest".to_string());
 
         assert_eq!(
-            take_sse_block(&mut buffer),
-            Some("data: {\"ok\":true}".to_string())
+            buffer.next_block(),
+            Some(("data: {\"ok\":true}", "\r\n\r\n"))
         );
-        assert_eq!(buffer, "rest");
+        assert_eq!(buffer.as_str(), "rest");
+    }
+
+    #[test]
+    fn buffer_preserves_split_delimiters_and_utf8_after_compaction() {
+        let mut buffer = SseBuffer::default();
+        buffer.push_bytes(b"data: first\n\ndata: second\r");
+        assert_eq!(buffer.next_block(), Some(("data: first", "\n\n")));
+        assert_eq!(buffer.next_block(), None);
+        buffer.push_bytes(b"\n\r");
+        assert_eq!(buffer.next_block(), None);
+        buffer.push_bytes(b"\ndata: \xe2\x82");
+        assert_eq!(buffer.next_block(), Some(("data: second", "\r\n\r\n")));
+        assert_eq!(buffer.next_block(), None);
+        buffer.push_bytes(b"\xac\n\ntail");
+        assert_eq!(buffer.next_block(), Some(("data: €", "\n\n")));
+        assert_eq!(buffer.next_block(), None);
+        assert_eq!(buffer.as_str(), "tail");
     }
 
     // ------------------------------------------------------------------

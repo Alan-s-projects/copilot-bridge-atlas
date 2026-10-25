@@ -435,7 +435,7 @@ impl RequestForwarder {
                 Ok(raw) => raw,
                 Err(error) => {
                     if let Some(diagnostics) = &self.diagnostics {
-                        diagnostics.proxy_failure("upstream_body", &error);
+                        diagnostics.proxy_failure("upstream_body", &error).await;
                     }
                     return Err(error);
                 }
@@ -455,7 +455,7 @@ impl RequestForwarder {
                 body: String::from_utf8(decoded).ok(),
             };
             if let Some(diagnostics) = &self.diagnostics {
-                diagnostics.proxy_failure("upstream", &error);
+                diagnostics.proxy_failure("upstream", &error).await;
             }
             Err(error)
         }

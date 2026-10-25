@@ -10,7 +10,6 @@ pub struct UsageParserConfig {
     pub response_parser: ResponseUsageParser,
     pub model_extractor: StreamModelExtractor,
     pub stream_event_filter: Option<StreamUsageEventFilter>,
-    pub app_type_str: &'static str,
 }
 pub fn codex_stream_usage_event_filter(data: &str) -> bool {
     data.contains("\"response.completed\"") || data.contains("\"usage\"")
@@ -50,5 +49,4 @@ pub const CODEX_PARSER_CONFIG: UsageParserConfig = UsageParserConfig {
     response_parser: TokenUsage::from_codex_response_auto,
     model_extractor: codex_auto_model_extractor,
     stream_event_filter: Some(codex_stream_usage_event_filter),
-    app_type_str: "codex",
 };

@@ -9,7 +9,7 @@ use super::transform_codex_chat::{
 use crate::proxy::{
     content_encoding::{decompress_body_with_limit, get_content_encoding},
     response_processor::strip_entity_headers_for_rebuilt_body,
-    sse::{append_utf8_safe, strip_sse_field, take_sse_block},
+    sse::{strip_sse_field, SseBuffer},
     upstream_response::{ProxyResponse, MAX_RESPONSE_BODY_BYTES},
     ProxyError,
 };
@@ -323,24 +323,23 @@ pub(crate) async fn adapt_response(
     }
     let mut upstream = response.bytes_stream();
     let stream = async_stream::stream! {
-        let mut buffer = String::new();
-        let mut utf8 = Vec::new();
+        let mut buffer = SseBuffer::default();
         let mut emitted = HashSet::new();
         while let Some(chunk) = upstream.next().await {
             let chunk = match chunk { Ok(chunk) => chunk, Err(e) => { yield Err(e); return; } };
-            append_utf8_safe(&mut buffer, &mut utf8, &chunk);
-            if buffer.len() > MAX_RESPONSE_BODY_BYTES {
+            buffer.push_bytes(&chunk);
+            if buffer.as_str().len() > MAX_RESPONSE_BODY_BYTES {
                 yield Err(std::io::Error::other("Responses SSE event exceeds size limit"));
                 return;
             }
-            while let Some(block) = take_sse_block(&mut buffer) {
-                if let Some(block) = restore_block(&block, &context, &mut emitted) {
+            while let Some((block, _)) = buffer.next_block() {
+                if let Some(block) = restore_block(block, &context, &mut emitted) {
                     yield Ok(Bytes::from(format!("{block}\n\n")));
                 }
             }
         }
-        if !buffer.is_empty() {
-            if let Some(block) = restore_block(&buffer, &context, &mut emitted) { yield Ok(Bytes::from(format!("{block}\n\n"))); }
+        if !buffer.as_str().is_empty() {
+            if let Some(block) = restore_block(buffer.as_str(), &context, &mut emitted) { yield Ok(Bytes::from(format!("{block}\n\n"))); }
         }
     };
     Ok(ProxyResponse::streamed(status, headers, stream))

@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{database::RequestDiagnosticDetail, Database};
 use bytes::Bytes;
-use futures::{stream::Stream, task::Poll};
+use futures::{stream::Stream, task::Poll, StreamExt};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 use std::{
@@ -204,10 +204,19 @@ impl RequestDiagnostics {
         let status = response.status();
         let headers = response.headers().clone();
         self.response_headers(status.as_u16(), &headers);
-        let stream = ObservedBody {
+        let mut observed = ObservedBody {
             inner: response.bytes_stream(),
             diagnostics: self.clone(),
             done: false,
+        };
+        let diagnostics = self.clone();
+        let stream = async_stream::stream! {
+            while let Some(result) = observed.next().await {
+                if result.is_err() {
+                    diagnostics.stream_failure().await;
+                }
+                yield result;
+            }
         };
         ProxyResponse::streamed(status, headers, stream)
     }
@@ -233,9 +242,9 @@ impl RequestDiagnostics {
             return;
         }
         self.response_truncated.store(truncated, Ordering::Relaxed);
-        let details = self.details().clone();
-        log::info!(
-            target: "atlas_http",
+        let summary = {
+            let details = self.details();
+            format!(
             "atlas_id={} status={} elapsed_ms={} endpoint={} requested_model={} upstream_model={} transport={} streaming={} applied_effort={} outgoing_bytes={} input_items={} tools={} tools_state={} requested_tool_choice={} upstream_tool_choice={} parallel_tool_calls={} response_bytes={} declared_bytes={} truncated={} outcome={} upstream_ids={}",
             self.id,
             details.status.map_or_else(|| "none".into(), |value| value.to_string()),
@@ -262,7 +271,9 @@ impl RequestDiagnostics {
             } else {
                 details.upstream_ids.join("|")
             }
-        );
+        )
+        };
+        log::info!(target: "atlas_http", "{summary}");
     }
 
     pub fn error_body(&self, bytes: &[u8], decoded: bool) {
@@ -284,7 +295,7 @@ impl RequestDiagnostics {
         details.snapshot.response_body = Some(body);
     }
 
-    pub fn failed_event(&self, event: &Value, raw_data: Option<&str>) {
+    pub async fn failed_event(&self, event: &Value, raw_data: Option<&str>) {
         let error = event
             .pointer("/response/error")
             .or_else(|| event.get("error"));
@@ -294,29 +305,42 @@ impl RequestDiagnostics {
         let serialized = raw_data
             .map(str::to_owned)
             .unwrap_or_else(|| event.to_string());
-        let mut details = self.details();
-        details.body_summary = Some(summary);
-        details.snapshot.response_body = Some(format!(
-            "event: response.failed\ndata: {}",
-            snapshot_body(serialized.as_bytes(), serialized.len())
-        ));
-        drop(details);
-        self.record_failure("stream", 502);
+        {
+            let mut details = self.details();
+            details.body_summary = Some(summary);
+            details.snapshot.response_body = Some(format!(
+                "event: response.failed\ndata: {}",
+                snapshot_body(serialized.as_bytes(), serialized.len())
+            ));
+        }
+        self.record_failure("stream", 502).await;
     }
 
-    pub fn proxy_failure(&self, stage: &'static str, error: &ProxyError) {
+    pub async fn record_result<T>(
+        &self,
+        stage: &'static str,
+        result: Result<T, ProxyError>,
+    ) -> Result<T, ProxyError> {
+        if let Err(error) = &result {
+            self.proxy_failure(stage, error).await;
+        }
+        result
+    }
+
+    pub async fn proxy_failure(&self, stage: &'static str, error: &ProxyError) {
         // The client receives the original error. Only the private diagnostic
         // and history row use these bounded, sanitized categories.
         let has_response = self.details().status.is_some();
         self.completed(has_response, stage);
-        self.record_failure(stage, map_proxy_error_to_status(error));
+        self.record_failure(stage, map_proxy_error_to_status(error))
+            .await;
     }
 
-    pub fn stream_failure(&self) {
-        self.record_failure("stream_read", 502);
+    pub async fn stream_failure(&self) {
+        self.record_failure("stream_read", 502).await;
     }
 
-    fn record_failure(&self, stage: &'static str, history_status: u16) {
+    async fn record_failure(&self, stage: &'static str, history_status: u16) {
         if self.failure_logged.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -364,26 +388,34 @@ impl RequestDiagnostics {
             summary
         );
 
-        let logger = UsageLogger::new(&self.db).with_client(details.client.clone());
+        let db = self.db.clone();
+        let id = self.id.clone();
+        let provider_id = self.provider_id.clone();
+        let requested_model = self.requested_model.clone();
+        let session_id = self.session_id.clone();
+        let latency_ms = self.started.elapsed().as_millis() as u64;
+        let response_bytes = self.response_bytes.load(Ordering::Relaxed) as usize;
+        if let Err(error) = tokio::task::spawn_blocking(move || {
+        let logger = UsageLogger::new(&db).with_client(details.client.clone());
         let history_recorded = logger
             .log_error_with_context(
-                self.id.clone(),
-                self.provider_id.clone(),
+                id.clone(),
+                provider_id.clone(),
                 "codex".into(),
-                self.requested_model.clone(),
+                requested_model.clone(),
                 history_status,
                 format!(
                     "Atlas diagnostic {}: tools={} tools_state={} requested_tool_choice={} upstream_tool_choice={} parallel_tool_calls={} {summary}",
-                    self.id,
+                    id,
                     details.tools,
                     details.tools_state,
                     details.requested_tool_choice,
                     details.upstream_tool_choice,
                     details.parallel_tool_calls,
                 ),
-                self.started.elapsed().as_millis() as u64,
+                latency_ms,
                 details.streaming,
-                Some(self.session_id.clone()),
+                Some(session_id.clone()),
                 None,
                 ReasoningEffort {
                     requested: None,
@@ -392,7 +424,7 @@ impl RequestDiagnostics {
             )
             .is_ok();
         if !history_recorded {
-            log::warn!(target: "atlas_http", "atlas_id={} failed to record diagnostic history row", self.id);
+            log::warn!(target: "atlas_http", "atlas_id={} failed to record diagnostic history row", id);
         }
         let mut snapshot = details.snapshot;
         snapshot.upstream_status = details.status;
@@ -400,7 +432,7 @@ impl RequestDiagnostics {
         if snapshot.response_body.is_none() && !details.response_preview.is_empty() {
             snapshot.response_body = Some(snapshot_body(
                 &details.response_preview,
-                self.response_bytes.load(Ordering::Relaxed) as usize,
+                response_bytes,
             ));
         }
         for (label, value) in [
@@ -411,13 +443,18 @@ impl RequestDiagnostics {
         ] {
             let escaped = serde_json::to_string(value.unwrap_or("[not available]"))
                 .unwrap_or_else(|_| "\"[serialization failed]\"".into());
-            log::warn!(target: "atlas_http", "atlas_id={} capture.{label}={escaped}", self.id);
+            log::warn!(target: "atlas_http", "atlas_id={} capture.{label}={escaped}", id);
         }
         if !history_recorded {
             return;
         }
-        if let Err(error) = self.db.save_request_diagnostics(&self.id, &snapshot) {
-            log::warn!(target: "atlas_http", "atlas_id={} failed to record request/response snapshot: {error}", self.id);
+        if let Err(error) = db.save_request_diagnostics(&id, &snapshot) {
+            log::warn!(target: "atlas_http", "atlas_id={} failed to record request/response snapshot: {error}", id);
+        }
+        })
+        .await
+        {
+            log::warn!(target: "atlas_http", "atlas_id={} diagnostic task failed: {error}", self.id);
         }
     }
 }
@@ -518,7 +555,6 @@ impl Stream for ObservedBody {
             Poll::Ready(Some(Err(error))) => {
                 self.done = true;
                 self.diagnostics.completed(true, "read_error");
-                self.diagnostics.stream_failure();
                 Poll::Ready(Some(Err(error)))
             }
             Poll::Ready(None) => {
@@ -994,13 +1030,15 @@ mod tests {
         ));
         let body = response.bytes_with_limit(1024).await.unwrap();
         diagnostics.error_body(&body, true);
-        diagnostics.proxy_failure(
-            "upstream",
-            &ProxyError::UpstreamError {
-                status: 400,
-                body: Some("Bad Request\n".into()),
-            },
-        );
+        diagnostics
+            .proxy_failure(
+                "upstream",
+                &ProxyError::UpstreamError {
+                    status: 400,
+                    body: Some("Bad Request\n".into()),
+                },
+            )
+            .await;
         let entries = logger.0.lock().unwrap().clone();
         assert!(entries[1].1.contains("tools=0 tools_state=empty requested_tool_choice=auto upstream_tool_choice=absent parallel_tool_calls=other"));
         assert!(!entries[1].1.contains("private prompt"));
@@ -1051,13 +1089,15 @@ mod tests {
             .unwrap();
         assert_eq!(returned.concat(), body);
         diagnostics.error_body(&body, true);
-        diagnostics.proxy_failure(
-            "upstream",
-            &ProxyError::UpstreamError {
-                status: 400,
-                body: Some(String::from_utf8(body.to_vec()).unwrap()),
-            },
-        );
+        diagnostics
+            .proxy_failure(
+                "upstream",
+                &ProxyError::UpstreamError {
+                    status: 400,
+                    body: Some(String::from_utf8(body.to_vec()).unwrap()),
+                },
+            )
+            .await;
 
         let entries = logger.0.lock().unwrap().clone();
         assert_eq!(entries.len(), 6);
@@ -1114,13 +1154,15 @@ mod tests {
             .unwrap();
         assert_eq!(returned, body);
         diagnostics.error_body(&body, true);
-        diagnostics.proxy_failure(
-            "upstream",
-            &ProxyError::UpstreamError {
-                status: 400,
-                body: Some("Bad Request\n".into()),
-            },
-        );
+        diagnostics
+            .proxy_failure(
+                "upstream",
+                &ProxyError::UpstreamError {
+                    status: 400,
+                    body: Some("Bad Request\n".into()),
+                },
+            )
+            .await;
 
         let entries = logger.0.lock().unwrap().clone();
         let warning = &entries[1].1;
@@ -1167,13 +1209,15 @@ mod tests {
             .unwrap();
         assert_eq!(returned, encoded);
         diagnostics.error_body(&returned, false);
-        diagnostics.proxy_failure(
-            "upstream",
-            &ProxyError::UpstreamError {
-                status: 400,
-                body: None,
-            },
-        );
+        diagnostics
+            .proxy_failure(
+                "upstream",
+                &ProxyError::UpstreamError {
+                    status: 400,
+                    body: None,
+                },
+            )
+            .await;
         let entries = logger.0.lock().unwrap().clone();
         assert!(entries[0]
             .1
@@ -1194,13 +1238,15 @@ mod tests {
             .await
             .unwrap();
         diagnostics.error_body(&large, true);
-        diagnostics.proxy_failure(
-            "upstream",
-            &ProxyError::UpstreamError {
-                status: 400,
-                body: None,
-            },
-        );
+        diagnostics
+            .proxy_failure(
+                "upstream",
+                &ProxyError::UpstreamError {
+                    status: 400,
+                    body: None,
+                },
+            )
+            .await;
         let entries = logger.0.lock().unwrap().clone();
         assert!(entries[1].1.contains("body_truncated=true"));
         assert!(entries[1].1.contains("kind=truncated"));
@@ -1260,10 +1306,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(returned, body);
-        diagnostics.proxy_failure(
-            "chat_conversion",
-            &ProxyError::TransformError("secret prompt".into()),
-        );
+        diagnostics
+            .proxy_failure(
+                "chat_conversion",
+                &ProxyError::TransformError("secret prompt".into()),
+            )
+            .await;
         let history = db.get_request_logs(&Default::default(), 0, 10).unwrap();
         assert_eq!(history.data[0].request_id, diagnostics.id);
         assert_eq!(history.data[0].status_code, 422);
@@ -1306,7 +1354,9 @@ mod tests {
             "response": {"error": {"message": "secret tool output", "code": "model_max_prompt_tokens_exceeded", "param": "input", "prompt_tokens": 390003}}
         });
         let raw_event = failure_event.to_string();
-        diagnostics.failed_event(&failure_event, Some(&raw_event));
+        diagnostics
+            .failed_event(&failure_event, Some(&raw_event))
+            .await;
         let history = db.get_request_logs(&Default::default(), 0, 10).unwrap();
         assert_eq!(history.data[0].request_id, diagnostics.id);
         let entries = logger.0.lock().unwrap().clone();
@@ -1338,8 +1388,8 @@ mod tests {
             .unwrap()
             .contains("authorization: [redacted]"));
     }
-    #[test]
-    fn failed_request_keeps_incoming_client_identity() {
+    #[tokio::test]
+    async fn failed_request_keeps_incoming_client_identity() {
         let db = Arc::new(Database::memory().unwrap());
         let diagnostics = make_diagnostics(db.clone());
         let client = crate::proxy::client_identity::detect_client(&HeaderMap::from_iter([(
@@ -1347,13 +1397,15 @@ mod tests {
             "Codex Desktop".parse().unwrap(),
         )]));
         diagnostics.set_client(client.clone());
-        diagnostics.proxy_failure(
-            "upstream",
-            &ProxyError::UpstreamError {
-                status: 400,
-                body: None,
-            },
-        );
+        diagnostics
+            .proxy_failure(
+                "upstream",
+                &ProxyError::UpstreamError {
+                    status: 400,
+                    body: None,
+                },
+            )
+            .await;
         let logs = db
             .get_request_logs(&crate::services::usage_stats::LogFilters::default(), 0, 20)
             .unwrap();

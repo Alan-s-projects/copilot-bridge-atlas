@@ -27,7 +27,7 @@ use super::{
         strip_hop_by_hop_response_headers, SseUsageCollector,
     },
     server::ProxyState,
-    sse::{strip_sse_field, take_sse_block},
+    sse::{strip_sse_field, SseBuffer},
     types::*,
     usage::parser::TokenUsage,
     ProxyError,
@@ -201,7 +201,7 @@ pub async fn handle_responses(
     {
         Ok(result) => result,
         Err(err) => {
-            log_forward_error(&ctx, &err);
+            ctx.diagnostics.proxy_failure("forward", &err).await;
             return build_codex_proxy_error_response(&ctx, &endpoint, &err);
         }
     };
@@ -214,20 +214,20 @@ pub async fn handle_responses(
     let response = if codex_upstream_format
         == Some(super::forwarder::CodexUpstreamFormat::CompatibleResponses)
     {
-        super::providers::transform_copilot_responses::adapt_response(
+        let result = super::providers::transform_copilot_responses::adapt_response(
             response,
             codex_tool_context.clone(),
         )
-        .await
-        .inspect_err(|error| {
-            ctx.diagnostics.proxy_failure("adapt_response", error);
-        })?
+        .await;
+        ctx.diagnostics
+            .record_result("adapt_response", result)
+            .await?
     } else {
         response
     };
 
     if codex_response_transform(codex_upstream_format) == CodexResponseTransform::ChatCompletions {
-        return handle_codex_chat_to_responses_transform(
+        let result = handle_codex_chat_to_responses_transform(
             response,
             &ctx,
             &state,
@@ -235,10 +235,11 @@ pub async fn handle_responses(
             connection_guard,
             codex_tool_context,
         )
-        .await
-        .inspect_err(|error| {
-            ctx.diagnostics.proxy_failure("chat_conversion", error);
-        });
+        .await;
+        return ctx
+            .diagnostics
+            .record_result("chat_conversion", result)
+            .await;
     }
 
     let response = if ctx.provider.is_github_copilot()
@@ -257,17 +258,17 @@ pub async fn handle_responses(
     // Keep item identity stable across all Copilot Responses stream events.
     // The integer rewrite also applies to requests without namespace tools.
 
-    process_response(
+    let result = process_response(
         response,
         &ctx,
         &state,
         &CODEX_PARSER_CONFIG,
         connection_guard,
     )
-    .await
-    .inspect_err(|error| {
-        ctx.diagnostics.proxy_failure("response_processing", error);
-    })
+    .await;
+    ctx.diagnostics
+        .record_result("response_processing", result)
+        .await
 }
 
 /// Handle Codex's standalone Alpha Search protocol as a semantic passthrough.
@@ -333,7 +334,7 @@ async fn handle_codex_standalone_passthrough(
     {
         Ok(result) => result,
         Err(err) => {
-            log_forward_error(&ctx, &err);
+            ctx.diagnostics.proxy_failure("forward", &err).await;
             return build_codex_proxy_error_response(&ctx, &endpoint, &err);
         }
     };
@@ -341,17 +342,17 @@ async fn handle_codex_standalone_passthrough(
     let connection_guard = result.connection_guard.take();
     ctx.outbound_model = result.outbound_model.take();
 
-    process_response(
+    let result = process_response(
         result.response,
         &ctx,
         &state,
         &CODEX_PARSER_CONFIG,
         connection_guard,
     )
-    .await
-    .inspect_err(|error| {
-        ctx.diagnostics.proxy_failure("response_processing", error);
-    })
+    .await;
+    ctx.diagnostics
+        .record_result("response_processing", result)
+        .await
 }
 
 pub async fn handle_responses_compact(
@@ -388,7 +389,7 @@ pub async fn handle_responses_compact(
     {
         Ok(result) => result,
         Err(err) => {
-            log_forward_error(&ctx, &err);
+            ctx.diagnostics.proxy_failure("forward", &err).await;
             return build_codex_proxy_error_response(&ctx, &endpoint, &err);
         }
     };
@@ -400,7 +401,7 @@ pub async fn handle_responses_compact(
     let response = result.response;
 
     if codex_response_transform(codex_upstream_format) == CodexResponseTransform::ChatCompletions {
-        return handle_codex_chat_to_responses_transform(
+        let result = handle_codex_chat_to_responses_transform(
             response,
             &ctx,
             &state,
@@ -408,23 +409,24 @@ pub async fn handle_responses_compact(
             connection_guard,
             codex_tool_context,
         )
-        .await
-        .inspect_err(|error| {
-            ctx.diagnostics.proxy_failure("chat_conversion", error);
-        });
+        .await;
+        return ctx
+            .diagnostics
+            .record_result("chat_conversion", result)
+            .await;
     }
 
-    process_response(
+    let result = process_response(
         response,
         &ctx,
         &state,
         &CODEX_PARSER_CONFIG,
         connection_guard,
     )
-    .await
-    .inspect_err(|error| {
-        ctx.diagnostics.proxy_failure("response_processing", error);
-    })
+    .await;
+    ctx.diagnostics
+        .record_result("response_processing", result)
+        .await
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -690,13 +692,15 @@ async fn handle_codex_chat_error_response(
 ) -> Result<axum::response::Response, ProxyError> {
     let (mut response_headers, _status, body_bytes) = read_decoded_body(response, ctx.tag).await?;
     ctx.diagnostics.error_body(&body_bytes, true);
-    ctx.diagnostics.proxy_failure(
-        "chat_error_response",
-        &ProxyError::UpstreamError {
-            status: status.as_u16(),
-            body: None,
-        },
-    );
+    ctx.diagnostics
+        .proxy_failure(
+            "chat_error_response",
+            &ProxyError::UpstreamError {
+                status: status.as_u16(),
+                body: None,
+            },
+        )
+        .await;
 
     // If non-JSON upstream error bodies (Cloudflare HTML, plain text "Unauthorized", etc.) are thrown as None,
     // The client cannot see the original diagnostic information; wrap it into Value::String and take the string branch of the conversion function.
@@ -1085,7 +1089,7 @@ fn sse_block_parts(block: &str) -> Option<(String, String)> {
 fn chat_sse_to_response_value(body: &str) -> Result<Value, ProxyError> {
     // Strip BOM: The sniffer accepts the beginning of the BOM, but strip_sse_field matches exactly by the beginning of the line,
     // Not stripping will cause the first data row to be lost silently
-    let mut buffer = body.trim_start_matches('\u{feff}').to_string();
+    let mut buffer = SseBuffer::from(body.trim_start_matches('\u{feff}').to_string());
 
     let mut id = Value::Null;
     let mut created = Value::Null;
@@ -1255,14 +1259,14 @@ fn chat_sse_to_response_value(body: &str) -> Result<Value, ProxyError> {
             Ok(())
         };
 
-    while let Some(block) = take_sse_block(&mut buffer) {
-        if let Some((event, data)) = sse_block_parts(&block) {
+    while let Some((block, _)) = buffer.next_block() {
+        if let Some((event, data)) = sse_block_parts(block) {
             process_event(&event, &data, true)?;
         }
     }
     // There may be no empty line delimiter after the last event (half-stream/non-canonical upstream): residual buffer when the last block
     // Handling, strict=false tolerates truncated tail blocks (C2).
-    if let Some((event, data)) = sse_block_parts(&buffer) {
+    if let Some((event, data)) = sse_block_parts(buffer.as_str()) {
         process_event(&event, &data, false)?;
     }
 
@@ -1403,10 +1407,6 @@ fn merge_tool_call_delta(
             _ => {}
         }
     }
-}
-
-fn log_forward_error(ctx: &RequestContext, error: &ProxyError) {
-    ctx.diagnostics.proxy_failure("forward", error);
 }
 
 #[cfg(test)]

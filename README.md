@@ -37,7 +37,7 @@ configure **Responses API** (default `127.0.0.1:15722`) and **Messages API**
 Codex continues using `http://127.0.0.1:15722/v1`. Claude clients use
 `http://127.0.0.1:15723` without an extra path prefix.
 
-Configure Sonnet, Opus, Haiku, and Fable mappings using the existing selected
-Copilot models. Other roles can inherit Sonnet; names shown by discovery are
-the actual target model names. Connect includes setup values for both Claude
-Desktop and Claude Code. See [Claude gateway details](docs/claude-gateway.md).
+In Settings → Models, explicitly map Sonnet, Opus, Haiku, and Fable above
+**Enabled models**. Numbered badges count roles that need a valid selection;
+there is no automatic fallback. Connect's client sidebar keeps the Codex TOML
+preview and provides setup values for Claude Desktop and Claude Code. See [Claude gateway details](docs/claude-gateway.md).

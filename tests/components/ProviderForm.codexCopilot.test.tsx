@@ -72,10 +72,10 @@ function formatControl() {
 }
 
 describe("Codex Copilot provider form", () => {
-  it("shows saving and saved next to Model catalog, including the debounce period", async () => {
+  it("shows saving and saved next to Enabled models, including the debounce period", async () => {
     const onSubmit = renderForm(undefined, true);
     const header = screen.getByRole("heading", {
-      name: "Model catalog",
+      name: "Enabled models",
     }).parentElement!;
     expect(within(header).getByRole("status")).toHaveTextContent(
       "settings.saved",
@@ -88,7 +88,9 @@ describe("Codex Copilot provider form", () => {
         }),
     );
     fireEvent.click(
-      screen.getByRole("switch", { name: "Ultra reasoning effort" }),
+      screen.getAllByRole("switch", {
+        name: /codexConfig.modelAvailableInCodex/,
+      })[0],
     );
     expect(within(header).getByRole("status")).toHaveTextContent(
       "settings.saving",
@@ -113,23 +115,28 @@ describe("Codex Copilot provider form", () => {
   });
 
   it.each([
-    [{ enableUltraReasoning: false }, false],
-    [{ enableUltraReasoning: true }, true],
-    [{}, false],
-  ])("loads and saves Ultra: %j", async (settings, enabled) => {
-    const onSubmit = renderForm(undefined, true, settings);
-    const toggle = screen.getByRole("switch", {
-      name: "Ultra reasoning effort",
-    });
-    expect(toggle.getAttribute("data-state")).toBe(
-      enabled ? "checked" : "unchecked",
-    );
-    fireEvent.click(toggle);
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(
-      JSON.parse(onSubmit.mock.calls[0][0].settingsConfig).enableUltraReasoning,
-    ).toBe(!enabled);
-  });
+    { enableUltraReasoning: false },
+    { enableUltraReasoning: true },
+    {},
+  ])(
+    "always enables Ultra when saving legacy settings: %j",
+    async (settings) => {
+      const onSubmit = renderForm(undefined, true, settings);
+      expect(
+        screen.queryByRole("switch", { name: "Ultra reasoning effort" }),
+      ).not.toBeInTheDocument();
+      fireEvent.click(
+        screen.getAllByRole("switch", {
+          name: /codexConfig.modelAvailableInCodex/,
+        })[0],
+      );
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      expect(
+        JSON.parse(onSubmit.mock.calls[0][0].settingsConfig)
+          .enableUltraReasoning,
+      ).toBe(true);
+    },
+  );
 
   it("keeps total context metadata when an unrelated model toggle is saved", async () => {
     const onSubmit = renderForm(undefined, true, {
@@ -199,7 +206,7 @@ describe("Codex Copilot provider form", () => {
       expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
     }
     expect(formatControl()).not.toBeInTheDocument();
-    expect(screen.getByText("Model catalog")).toBeVisible();
+    expect(screen.getByText("Enabled models")).toBeVisible();
     expect(
       screen.queryByText("Advanced request settings"),
     ).not.toBeInTheDocument();
@@ -239,7 +246,9 @@ describe("Codex Copilot provider form", () => {
   it("auto-saves Copilot edits without showing Save or Cancel buttons", async () => {
     const onSubmit = renderForm(undefined, true);
     fireEvent.click(
-      screen.getByRole("switch", { name: "Ultra reasoning effort" }),
+      screen.getAllByRole("switch", {
+        name: /codexConfig.modelAvailableInCodex/,
+      })[0],
     );
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -251,9 +260,11 @@ describe("Codex Copilot provider form", () => {
     ).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getAllByRole("switch", {
-        name: /codexConfig.modelAvailableInCodex/,
-      })[1],
+      within(
+        screen
+          .getByRole("heading", { name: "gpt-6-luna" })
+          .closest(".rounded-lg") as HTMLElement,
+      ).getByRole("switch"),
     );
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
     const saved = onSubmit.mock.calls[1][0];
@@ -265,7 +276,7 @@ describe("Codex Copilot provider form", () => {
   it("shows the model mapping with an empty catalog", () => {
     renderForm({ providerType: "github_copilot" });
     expect(formatControl()).not.toBeInTheDocument();
-    expect(screen.getByText("Model catalog")).toBeVisible();
+    expect(screen.getByText("Enabled models")).toBeVisible();
   });
 
   it("does not offer preset switching while editing an existing Copilot card", () => {
@@ -289,6 +300,6 @@ describe("Codex Copilot provider form", () => {
       screen.queryByRole("button", { name: /DeepSeek/ }),
     ).not.toBeInTheDocument();
     expect(formatControl()).not.toBeInTheDocument();
-    expect(screen.getByText("Model catalog")).toBeVisible();
+    expect(screen.getByText("Enabled models")).toBeVisible();
   });
 });

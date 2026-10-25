@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -86,6 +92,7 @@ export const normalizeCodexCatalogModelsForSave = (
 
 export interface ProviderFormProps {
   autoSave?: boolean;
+  modelMapping?: ReactNode;
   submitLabel?: string;
   onSubmit: (values: ProviderFormValues) => Promise<void> | void;
   onCancel?: () => void;
@@ -99,6 +106,7 @@ export interface ProviderFormValues {
 }
 
 export function ProviderForm({
+  modelMapping,
   initialData,
   onSubmit,
   onCancel,
@@ -130,13 +138,6 @@ export function ProviderForm({
   const [accountId, setAccountId] = useState<string | null>(
     initialMeta?.authBinding?.accountId ?? null,
   );
-  const [enableUltraReasoning, setEnableUltraReasoning] = useState<boolean>(
-    () => {
-      return (
-        (settings as Record<string, unknown>).enableUltraReasoning === true
-      );
-    },
-  );
   const { hasAnyAccount } = useCopilotAuth();
   const [catalog, setCatalog] = useState<CodexCatalogModel[]>(() => {
     const value = settings.modelCatalog as { models?: unknown[] } | undefined;
@@ -166,18 +167,11 @@ export function ProviderForm({
       meta,
       settingsConfig: JSON.stringify({
         ...settings,
-        enableUltraReasoning,
+        enableUltraReasoning: true,
         modelCatalog: { models: normalizeCodexCatalogModelsForSave(catalog) },
       }),
     };
-  }, [
-    accountId,
-    catalog,
-    enableUltraReasoning,
-    initialData?.name,
-    initialMeta,
-    settings,
-  ]);
+  }, [accountId, catalog, initialData?.name, initialMeta, settings]);
 
   const enqueueAutoSave = useCallback(
     (version: number, values: ProviderFormValues) => {
@@ -349,11 +343,7 @@ export function ProviderForm({
           setAccountId(id);
           markChanged();
         }}
-        enableUltraReasoning={enableUltraReasoning}
-        onEnableUltraReasoningChange={(enabled) => {
-          setEnableUltraReasoning(enabled);
-          markChanged();
-        }}
+        modelMapping={modelMapping}
         catalogModels={catalog}
         onCatalogModelsChange={(models) => {
           setCatalog(models);

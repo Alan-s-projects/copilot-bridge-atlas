@@ -1,3 +1,5 @@
+import { useClaudeMappings } from "@/hooks/useClaudeMappings";
+import { MappingCountBadge } from "@/components/settings/MappingCountBadge";
 import { useEffect, useState } from "react";
 import {
   Settings,
@@ -32,6 +34,8 @@ const navigation = [
 ] as const;
 
 export default function App() {
+  const { count: mappingCount } = useClaudeMappings();
+  const [settingsEntry, setSettingsEntry] = useState(0);
   const [view, setView] = useState<View>("provider");
   const { status } = useProxyStatus();
   const { data: availableReleaseVersion } = useAvailableRelease();
@@ -89,10 +93,20 @@ export default function App() {
               size="sm"
               className="shrink-0"
               aria-current={view === target ? "page" : undefined}
-              onClick={() => setView(target)}
+              onClick={() => {
+                setView(target);
+                if (target === "settings")
+                  setSettingsEntry((value) => value + 1);
+              }}
             >
               <Icon aria-hidden className="h-4 w-4" />
               {label}
+              {target === "settings" && (
+                <MappingCountBadge
+                  count={mappingCount}
+                  selected={view === target}
+                />
+              )}
               {target === "settings" && availableReleaseVersion && (
                 <ReleaseUpdateBadge selected={view === target} />
               )}
@@ -105,7 +119,12 @@ export default function App() {
         className={`flex min-h-0 min-w-0 flex-1 flex-col ${view === "setup" || view === "settings" ? "overflow-hidden" : "overflow-y-auto"}`}
       >
         {view === "settings" ? (
-          <SettingsPage availableReleaseVersion={availableReleaseVersion} />
+          <SettingsPage
+            key={settingsEntry}
+            initialTab={mappingCount ? "copilot" : "general"}
+            mappingCount={mappingCount}
+            availableReleaseVersion={availableReleaseVersion}
+          />
         ) : view === "setup" ? (
           <ConnectPage />
         ) : view === "usage" ? (

@@ -38,7 +38,8 @@ vi.mock("@/lib/query/proxy", () => ({
     },
   }),
   useUpdateGlobalProxyConfig: () => ({
-    mutateAsync: mocks.save,
+    mutateAsync: (update: any) =>
+      mocks.save(typeof update === "function" ? update(mocks.config) : update),
     mutate: mocks.save,
     isPending: false,
   }),
@@ -106,12 +107,12 @@ describe("ProxyPanel auto-save", () => {
   });
 });
 
-it("shows two copyable URLs and mappings without per-server switches or display-name inputs", () => {
+it("shows two copyable URLs without mappings without per-server switches or display-name inputs", () => {
   render(<ProxyPanel />);
   expect(screen.getByRole("region", { name: "Responses API" })).toBeVisible();
   expect(screen.getByRole("region", { name: "Messages API" })).toBeVisible();
   expect(screen.getByText("http://127.0.0.1:15723")).toBeVisible();
-  expect(screen.getAllByRole("combobox")).toHaveLength(4);
+  expect(screen.queryAllByRole("combobox")).toHaveLength(0);
   expect(screen.queryByText("Display name")).not.toBeInTheDocument();
   expect(screen.queryByRole("switch")).not.toBeInTheDocument();
 });

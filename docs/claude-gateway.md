@@ -18,10 +18,16 @@ without restarting listeners. Existing active responses drain on stop.
 
 ## Setup and model selection
 
-Select available models in Settings → Models, then configure mappings in
-Settings → Routing. Sonnet defaults to the first selected model; empty Opus,
-Haiku, and Fable mappings inherit Sonnet. Removed/unavailable targets fail
-explicitly instead of silently routing to another model.
+In Settings → Models, select the GitHub account and refresh **Enabled models**.
+Choose an explicit target for each role in **Claude model mapping**, above the
+enabled-model list. Sonnet, Opus, Haiku and Fable are independent; there is no
+first-model fallback or inherited Sonnet mapping. A numbered badge on Settings
+and Models counts missing or unavailable mappings. Existing explicit mappings
+are preserved on upgrade; formerly automatic roles need a selection.
+
+Unconfigured roles are omitted from discovery and requests to them fail before
+upstream forwarding. Disabled/unavailable targets also fail instead of silently
+routing elsewhere. Other configured roles and native Codex requests remain usable.
 
 Desktop model IDs remain Claude-compatible aliases (`claude-sonnet-5`,
 `claude-opus-5`, `claude-haiku-4-5`, `claude-fable-5`). Discovery includes each
@@ -77,3 +83,9 @@ Copilot authentication and checks a real Claude-style tool-call/result exchange
 plus a native Codex Responses request. It is ignored in CI by default.
 Native Claude Desktop UI and model-label presentation require validation with
 the user's installed client; the automated tests validate the HTTP contracts.
+
+## Client identity
+
+Usage identifies both Claude Desktop's native Electron requests (connection
+checks and automatic titles) and its claude-cli agent requests as Claude Desktop.
+Generic SDK or browser signatures alone are not enough to attribute another app.

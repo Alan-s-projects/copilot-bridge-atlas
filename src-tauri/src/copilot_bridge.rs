@@ -1627,7 +1627,7 @@ notify = ["unchanged"]
                 .iter()
                 .map(|level| level["effort"].as_str().unwrap())
                 .collect::<Vec<_>>();
-            assert_eq!(levels, ["low", "medium", "high"]);
+            assert_eq!(levels, ["low", "medium", "high", "ultra"]);
             assert_eq!(entry["default_reasoning_level"], "medium");
         }
         let db = Database::init().unwrap();

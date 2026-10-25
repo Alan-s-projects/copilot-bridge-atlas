@@ -1,3 +1,4 @@
+import { ClaudeModelMapping } from "./ClaudeModelMapping";
 import { useCallback } from "react";
 import { Loader2 } from "lucide-react";
 import { useProvidersQuery, useUpdateProviderMutation } from "@/lib/query";
@@ -48,6 +49,7 @@ export function CopilotSettingsPanel() {
       key={provider.id}
       initialData={provider}
       autoSave
+      modelMapping={<ClaudeModelMapping />}
       onSubmit={handleSubmit}
     />
   );

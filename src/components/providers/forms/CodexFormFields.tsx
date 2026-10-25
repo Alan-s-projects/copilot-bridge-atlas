@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { FileJson, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { CopilotAuthSection } from "./CopilotAuthSection";
 import {
@@ -78,8 +77,7 @@ interface CodexFormFieldsProps {
   isCopilotAuthenticated?: boolean;
   selectedGitHubAccountId?: string | null;
   onGitHubAccountSelect?: (id: string | null) => void;
-  enableUltraReasoning?: boolean;
-  onEnableUltraReasoningChange?: (enabled: boolean) => void;
+  modelMapping?: ReactNode;
   catalogModels: CodexCatalogModel[];
   onCatalogModelsChange: (models: CodexCatalogModel[]) => void;
 }
@@ -90,8 +88,7 @@ export function CodexFormFields({
   isCopilotAuthenticated,
   selectedGitHubAccountId,
   onGitHubAccountSelect,
-  enableUltraReasoning = false,
-  onEnableUltraReasoningChange,
+  modelMapping,
   catalogModels,
   onCatalogModelsChange,
 }: CodexFormFieldsProps) {
@@ -189,34 +186,11 @@ export function CodexFormFields({
         selectedAccountId={selectedGitHubAccountId}
         onAccountSelect={onGitHubAccountSelect}
       />
-      <section className="rounded-lg border p-4 space-y-2">
-        <div className="flex items-center justify-between gap-4">
-          <div className="space-y-0.5">
-            <Label
-              htmlFor="ultra-reasoning-toggle"
-              className="text-sm font-medium"
-            >
-              Ultra reasoning effort
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              When enabled, exposes the &ldquo;Ultra&rdquo; reasoning level to
-              Codex for all enabled models that support reasoning. When Codex
-              uses &ldquo;ultra&rdquo; or any unrecognized reasoning effort,
-              Atlas automatically falls back to the highest supported effort
-              level reported by Copilot for that specific model.
-            </p>
-          </div>
-          <Switch
-            id="ultra-reasoning-toggle"
-            checked={enableUltraReasoning}
-            onCheckedChange={onEnableUltraReasoningChange}
-          />
-        </div>
-      </section>
+      {modelMapping}
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <h3 className="text-sm font-medium">Model catalog</h3>
+            <h3 className="text-sm font-medium">Enabled models</h3>
             {catalogStatus}
           </div>
           <div className="flex flex-wrap gap-2">

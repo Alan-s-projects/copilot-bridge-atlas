@@ -5,6 +5,11 @@ import type {
   GlobalProxyConfig,
 } from "@/types/proxy";
 
+export type GlobalConfigUpdate =
+  | GlobalProxyConfig
+  | ((current: GlobalProxyConfig) => GlobalProxyConfig);
+let configWrites: Promise<unknown> = Promise.resolve();
+
 export const proxyApi = {
   // ========== Proxy Server Control API ==========
 
@@ -29,7 +34,20 @@ export const proxyApi = {
   },
 
   // Update global proxy configuration
-  async updateGlobalProxyConfig(config: GlobalProxyConfig): Promise<void> {
-    return invoke("update_global_proxy_config", { config });
+  updateGlobalProxyConfig(
+    update: GlobalConfigUpdate,
+  ): Promise<GlobalProxyConfig> {
+    const write = configWrites
+      .catch(() => undefined)
+      .then(async () => {
+        const config =
+          typeof update === "function"
+            ? update(await proxyApi.getGlobalProxyConfig())
+            : update;
+        await invoke("update_global_proxy_config", { config });
+        return config;
+      });
+    configWrites = write;
+    return write;
   },
 };

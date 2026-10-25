@@ -53,8 +53,8 @@ interface SetupSuggestion {
 }
 
 export function CodexSetupSuggestion({
-  clientSelector,
-}: { clientSelector?: import("react").ReactNode } = {}) {
+  clientNavigation,
+}: { clientNavigation?: import("react").ReactNode } = {}) {
   const [target, setTarget] = useState<"copilot" | "openai">("copilot");
   const [modelList, setModelList] = useState<ModelList>(readSavedModelList);
   const [selectedPath, setSelectedPath] = useState<string | null>(
@@ -153,154 +153,167 @@ export function CodexSetupSuggestion({
             Preview only. Apply TOML file changes yourself manually.
           </p>
         </div>
-        {clientSelector}
       </div>
-      <div className="grid shrink-0 grid-cols-[6rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2.5">
-        <form
-          aria-label="Codex configuration file"
-          className="col-span-3 grid grid-cols-subgrid items-center gap-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            refresh();
-          }}
-        >
-          <Label htmlFor="codex-toml-path" className="shrink-0 text-xs">
-            Codex TOML file
-          </Label>
-          <Input
-            id="codex-toml-path"
-            className="min-w-0 font-mono text-sm"
-            value={pathText}
-            placeholder="Automatically detect config.toml"
-            onChange={(event) => setDraftPath(event.target.value)}
-          />
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className="shrink-0"
-              title="Browse for TOML file"
-              aria-label="Browse for TOML file"
-              onClick={() => void browse()}
-            >
-              <FolderSearch aria-hidden className="h-4 w-4" />
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="shrink-0"
-              onClick={() => choosePath(null)}
-            >
-              Auto-detect
-            </Button>
-            <Button
-              type="submit"
-              variant="outline"
-              className="shrink-0"
-              disabled={
-                (isFetching && !isPathEdited) ||
-                (isPathEdited && !normalizePath(pathText))
-              }
-            >
-              <RefreshCw
-                aria-hidden
-                className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`}
-              />
-              Refresh
-            </Button>
-          </div>
-        </form>
-        {isPathEdited && (
-          <p role="status" className="col-span-3 text-xs text-muted-foreground">
-            Refresh to preview the file at this location.
-          </p>
-        )}
-        {error && (
-          <p
-            role="alert"
-            className="col-span-3 break-words text-sm text-destructive"
-          >
-            {String(error)}
-          </p>
-        )}
-        {data && !error && !isPathEdited && !data.configExists && (
-          <p role="status" className="col-span-3 text-xs text-muted-foreground">
-            No config.toml was found at this location. Browse for your file or
-            review the proposed new file below. Atlas will not create it.
-          </p>
-        )}
-        <div className="col-span-3 grid grid-cols-subgrid items-center gap-3">
-          <Label htmlFor="codex-connection-target" className="text-xs">
-            Connection
-          </Label>
-          <Select
-            value={target}
-            onValueChange={(value) => {
-              if (value === "copilot" || value === "openai") setTarget(value);
-            }}
-          >
-            <SelectTrigger id="codex-connection-target">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="copilot">Copilot Bridge</SelectItem>
-              <SelectItem value="openai">Official OpenAI sign-in</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        {target === "copilot" && (
-          <div className="col-span-3 grid grid-cols-subgrid items-center gap-3">
-            <Label htmlFor="codex-model-list" className="text-xs">
-              Model list
-            </Label>
-            <Select
-              value={modelList}
-              onValueChange={(value) => {
-                if (value !== "atlas" && value !== "codex") return;
-                setModelList(value);
-                try {
-                  window.localStorage.setItem(MODEL_LIST_KEY, value);
-                } catch {
-                  // The current preview still works without persisted preferences.
-                }
+      <div className="flex min-h-0 min-w-0 flex-1 gap-3 sm:gap-5">
+        {clientNavigation}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+          <div className="grid shrink-0 grid-cols-[6rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2.5">
+            <form
+              aria-label="Codex configuration file"
+              className="col-span-3 grid grid-cols-subgrid items-center gap-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                refresh();
               }}
             >
-              <SelectTrigger id="codex-model-list">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="atlas">
-                  Atlas customized list (Settings → Models)
-                </SelectItem>
-                <SelectItem value="codex">Codex default list</SelectItem>
-              </SelectContent>
-            </Select>
+              <Label htmlFor="codex-toml-path" className="shrink-0 text-xs">
+                Codex TOML file
+              </Label>
+              <Input
+                id="codex-toml-path"
+                className="min-w-0 font-mono text-sm"
+                value={pathText}
+                placeholder="Automatically detect config.toml"
+                onChange={(event) => setDraftPath(event.target.value)}
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="shrink-0"
+                  title="Browse for TOML file"
+                  aria-label="Browse for TOML file"
+                  onClick={() => void browse()}
+                >
+                  <FolderSearch aria-hidden className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() => choosePath(null)}
+                >
+                  Auto-detect
+                </Button>
+                <Button
+                  type="submit"
+                  variant="outline"
+                  className="shrink-0"
+                  disabled={
+                    (isFetching && !isPathEdited) ||
+                    (isPathEdited && !normalizePath(pathText))
+                  }
+                >
+                  <RefreshCw
+                    aria-hidden
+                    className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`}
+                  />
+                  Refresh
+                </Button>
+              </div>
+            </form>
+            {isPathEdited && (
+              <p
+                role="status"
+                className="col-span-3 text-xs text-muted-foreground"
+              >
+                Refresh to preview the file at this location.
+              </p>
+            )}
+            {error && (
+              <p
+                role="alert"
+                className="col-span-3 break-words text-sm text-destructive"
+              >
+                {String(error)}
+              </p>
+            )}
+            {data && !error && !isPathEdited && !data.configExists && (
+              <p
+                role="status"
+                className="col-span-3 text-xs text-muted-foreground"
+              >
+                No config.toml was found at this location. Browse for your file
+                or review the proposed new file below. Atlas will not create it.
+              </p>
+            )}
+            <div className="col-span-3 grid grid-cols-subgrid items-center gap-3">
+              <Label htmlFor="codex-connection-target" className="text-xs">
+                Connection
+              </Label>
+              <Select
+                value={target}
+                onValueChange={(value) => {
+                  if (value === "copilot" || value === "openai")
+                    setTarget(value);
+                }}
+              >
+                <SelectTrigger id="codex-connection-target">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="copilot">Copilot Bridge</SelectItem>
+                  <SelectItem value="openai">
+                    Official OpenAI sign-in
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {target === "copilot" && (
+              <div className="col-span-3 grid grid-cols-subgrid items-center gap-3">
+                <Label htmlFor="codex-model-list" className="text-xs">
+                  Model list
+                </Label>
+                <Select
+                  value={modelList}
+                  onValueChange={(value) => {
+                    if (value !== "atlas" && value !== "codex") return;
+                    setModelList(value);
+                    try {
+                      window.localStorage.setItem(MODEL_LIST_KEY, value);
+                    } catch {
+                      // The current preview still works without persisted preferences.
+                    }
+                  }}
+                >
+                  <SelectTrigger id="codex-model-list">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="atlas">
+                      Atlas customized list (Settings → Models)
+                    </SelectItem>
+                    <SelectItem value="codex">Codex default list</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
-        )}
-      </div>
-      {!data && isFetching && !isPathEdited && (
-        <p role="status" className="text-xs text-muted-foreground">
-          Loading suggestion…
-        </p>
-      )}
-      {data && !error && !isPathEdited && (
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border">
-          <div className="flex shrink-0 items-center justify-between gap-4 border-b bg-muted/40 p-2">
-            <ConfigDiffStatus lines={lines ?? []} loading={isFetching} />
-            <Button
-              size="sm"
-              className="shrink-0"
-              disabled={isFetching}
-              onClick={() => void copy(proposed ?? "")}
-            >
-              <Copy aria-hidden className="mr-2 h-4 w-4" />
-              Copy proposed TOML
-            </Button>
-          </div>
-          <ConfigDiff lines={lines ?? []} />
+          {!data && isFetching && !isPathEdited && (
+            <p role="status" className="text-xs text-muted-foreground">
+              Loading suggestion…
+            </p>
+          )}
+          {data && !error && !isPathEdited && (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border">
+              <div className="flex shrink-0 items-center justify-between gap-4 border-b bg-muted/40 p-2">
+                <ConfigDiffStatus lines={lines ?? []} loading={isFetching} />
+                <Button
+                  size="sm"
+                  className="shrink-0"
+                  disabled={isFetching}
+                  onClick={() => void copy(proposed ?? "")}
+                >
+                  <Copy aria-hidden className="mr-2 h-4 w-4" />
+                  Copy proposed TOML
+                </Button>
+              </div>
+              <ConfigDiff lines={lines ?? []} />
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </section>
   );
 }

@@ -32,6 +32,7 @@ interface UsageTrendChartProps {
   appType?: string;
   providerName?: string;
   model?: string;
+  clientName?: string;
   refreshIntervalMs: number;
 }
 
@@ -316,6 +317,7 @@ export function UsageTrendChart({
   appType,
   providerName,
   model,
+  clientName,
   refreshIntervalMs,
 }: UsageTrendChartProps) {
   const preference = useUsageTrendGrouping();
@@ -323,7 +325,7 @@ export function UsageTrendChart({
   const fallbackRange = resolveUsageRange(range);
   const trends = useUsageTrends(
     range,
-    { appType, providerName, model },
+    { appType, providerName, model, clientName },
     {
       refetchInterval: refreshIntervalMs > 0 ? refreshIntervalMs : false,
       enabled: !preference.isLoading,

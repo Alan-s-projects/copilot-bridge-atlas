@@ -1,6 +1,7 @@
 use super::{
     compute_rollup_date_bounds, effective_usage_log_filter, effective_usage_rollup_filter,
-    providers_join, push_provider_model_filters, DailyStats,
+    providers_join, push_client_filter, push_provider_model_filters, usage_rollup_table_sql,
+    DailyStats,
 };
 use crate::{
     database::{lock_conn, Database},
@@ -653,6 +654,27 @@ impl Database {
         model: Option<&str>,
         grouping: TrendGrouping,
     ) -> Result<UsageTrends, AppError> {
+        self.get_grouped_usage_trends_filtered(
+            start_date,
+            end_date,
+            app_type,
+            provider_name,
+            model,
+            None,
+            grouping,
+        )
+    }
+
+    pub fn get_grouped_usage_trends_filtered(
+        &self,
+        start_date: Option<i64>,
+        end_date: Option<i64>,
+        app_type: Option<&str>,
+        provider_name: Option<&str>,
+        model: Option<&str>,
+        client_name: Option<&str>,
+        grouping: TrendGrouping,
+    ) -> Result<UsageTrends, AppError> {
         crate::copilot_bridge::require_codex(app_type.unwrap_or("codex"))?;
         let end = end_date.unwrap_or_else(|| Local::now().timestamp());
         let start = start_date.unwrap_or_else(|| end.saturating_sub(86400));
@@ -692,6 +714,7 @@ impl Database {
             provider_name,
             model,
         );
+        push_client_filter(&mut detail_conditions, &mut parameters, "l", client_name);
         let mut rollup_conditions = vec![effective_usage_rollup_filter("r")];
         push_provider_model_filters(
             &mut rollup_conditions,
@@ -701,6 +724,7 @@ impl Database {
             provider_name,
             model,
         );
+        push_client_filter(&mut rollup_conditions, &mut parameters, "r", client_name);
         let detail_join = if provider_name.is_some() {
             providers_join("l", "p")
         } else {
@@ -713,6 +737,7 @@ impl Database {
         };
         let fresh = fresh_input_sql("l");
         let rolled_fresh = fresh_input_sql("r");
+        let rollup_table = usage_rollup_table_sql(client_name);
         let eligible = "r.date >= b.rollup_start AND r.date <= b.rollup_end";
         let sql = format!(
             "WITH buckets AS (
@@ -745,7 +770,7 @@ impl Database {
                   SUM(CASE WHEN {eligible} THEN r.cache_creation_tokens ELSE 0 END) AS written,
                   json_group_array(CASE WHEN {eligible} THEN json_object('total',CAST(r.total_cost_usd AS REAL),'clients',json(r.client_costs)) ELSE NULL END) AS client_costs,
                   MAX(CASE WHEN COALESCE(({eligible}),0) = 0 AND r.request_count > 0 THEN 1 ELSE 0 END) AS incomplete
-                FROM buckets b JOIN usage_daily_rollups r ON r.date >= b.first_day AND r.date <= b.last_day
+                FROM buckets b JOIN {rollup_table} r ON r.date >= b.first_day AND r.date <= b.last_day
                 {rollup_join} WHERE {rollup_filter} GROUP BY b.idx
              )
              SELECT b.idx, COALESCE(d.requests,0)+COALESCE(a.requests,0),

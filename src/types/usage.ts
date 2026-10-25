@@ -88,6 +88,7 @@ export interface LongContextPricing {
 }
 
 export interface UsageSummary {
+  clientFilterIncomplete?: boolean;
   totalRequests: number;
   totalCost: string;
   totalInputTokens: number;
@@ -159,6 +160,7 @@ export interface UnpricedModelUsage {
 }
 
 export interface LogFilters {
+  clientName?: string;
   appType?: string;
   providerName?: string;
   model?: string;
@@ -175,12 +177,21 @@ export interface LogFilters {
  *   Consistent with the grouping caliber of model statistics).
  */
 export interface UsageScopeFilters {
+  clientName?: string;
   appType?: string;
   providerName?: string;
   model?: string;
 }
 
-export type UsageRangePreset = "today" | "1d" | "7d" | "14d" | "30d" | "custom";
+export type UsageRangePreset =
+  | "today"
+  | "1d"
+  | "7d"
+  | "14d"
+  | "30d"
+  | "this-week"
+  | "this-month"
+  | "custom";
 
 export interface UsageRangeSelection {
   preset: UsageRangePreset;

@@ -83,19 +83,8 @@ vi.mock("@/components/settings/SettingsPage", () => ({
   ),
 }));
 vi.mock("@/components/usage/UsageDashboard", () => ({
-  UsageDashboard: ({
-    refreshIntervalMs,
-    onRefreshIntervalChange,
-  }: {
-    refreshIntervalMs: number;
-    onRefreshIntervalChange: (next: number) => Promise<boolean>;
-  }) => (
-    <div data-testid="usage-dashboard">
-      Refresh every {refreshIntervalMs}
-      <button onClick={() => void onRefreshIntervalChange(5000)}>
-        Change refresh interval
-      </button>
-    </div>
+  UsageDashboard: () => (
+    <div data-testid="usage-dashboard">Usage dashboard</div>
   ),
 }));
 vi.mock("@/components/providers/CodexSetupSuggestion", () => ({
@@ -181,6 +170,9 @@ describe("Atlas application scope", () => {
   it("opens the Copilot overview", () => {
     renderApp();
     expect(screen.getByText("GitHub Copilot")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Overview" })).toHaveClass(
+      "sr-only",
+    );
     expect(screen.getByTestId("bridge-overview")).toBeVisible();
     const warnings = screen.getByTestId("bridge-warnings");
     const provider = screen.getByText("GitHub Copilot");
@@ -220,20 +212,15 @@ describe("Atlas application scope", () => {
     ).not.toBeInTheDocument();
     fireEvent.click(within(navigation).getByRole("button", { name: "Usage" }));
     expect(await screen.findByTestId("usage-dashboard")).toHaveTextContent(
-      "Refresh every 10000",
+      "Usage dashboard",
     );
     expect(selectedPage()).toHaveTextContent("Usage");
     expect(proxyControl).toBeVisible();
     expect(screen.queryByTestId("bridge-overview")).not.toBeInTheDocument();
     expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Change refresh interval" }),
-    );
-    await waitFor(() =>
-      expect(mocks.autoSaveSettings).toHaveBeenCalledWith({
-        usageDashboardRefreshIntervalMs: 5000,
-      }),
-    );
+    expect(
+      screen.queryByRole("button", { name: "Change refresh interval" }),
+    ).not.toBeInTheDocument();
     fireEvent.click(
       within(navigation).getByRole("button", { name: "Settings" }),
     );

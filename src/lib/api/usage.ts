@@ -12,6 +12,8 @@ import type {
 } from "@/types/usage";
 
 export const usageApi = {
+  getUsageClients: async (): Promise<string[]> => invoke("get_usage_clients"),
+
   // Proxy usage statistics methods
   getUsageSummary: async (
     startDate?: number,
@@ -19,6 +21,7 @@ export const usageApi = {
     appType?: string,
     providerName?: string,
     model?: string,
+    clientName?: string,
   ): Promise<UsageSummary> => {
     return invoke("get_usage_summary", {
       startDate,
@@ -26,6 +29,7 @@ export const usageApi = {
       appType,
       providerName,
       model,
+      ...(clientName === undefined ? {} : { clientName }),
     });
   },
 
@@ -36,6 +40,7 @@ export const usageApi = {
     providerName?: string,
     model?: string,
     grouping?: TrendGrouping,
+    clientName?: string,
   ): Promise<UsageTrends> => {
     return invoke("get_usage_trends", {
       startDate,
@@ -43,6 +48,7 @@ export const usageApi = {
       appType,
       providerName,
       model,
+      ...(clientName === undefined ? {} : { clientName }),
       grouping,
     });
   },
@@ -53,6 +59,7 @@ export const usageApi = {
     appType?: string,
     providerName?: string,
     model?: string,
+    clientName?: string,
   ): Promise<ModelStats[]> => {
     return invoke("get_model_stats", {
       startDate,
@@ -60,6 +67,7 @@ export const usageApi = {
       appType,
       providerName,
       model,
+      ...(clientName === undefined ? {} : { clientName }),
     });
   },
 
@@ -69,6 +77,7 @@ export const usageApi = {
     appType?: string,
     providerName?: string,
     model?: string,
+    clientName?: string,
   ): Promise<UnpricedModelUsage[]> => {
     return invoke("get_unpriced_model_usage", {
       startDate,
@@ -76,6 +85,7 @@ export const usageApi = {
       appType,
       providerName,
       model,
+      ...(clientName === undefined ? {} : { clientName }),
     });
   },
 

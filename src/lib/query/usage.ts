@@ -25,6 +25,7 @@ type RequestLogsQueryArgs = {
 };
 
 type RequestLogsKey = {
+  clientName?: string;
   preset: UsageRangeSelection["preset"];
   customStartDate?: number;
   customEndDate?: number;
@@ -55,6 +56,7 @@ export const usageKeys = {
       filters?.appType ?? null,
       filters?.providerName ?? null,
       filters?.model ?? null,
+      filters?.clientName ?? null,
     ] as const,
   trends: (
     preset: UsageRangeSelection["preset"],
@@ -74,6 +76,7 @@ export const usageKeys = {
       filters?.appType ?? null,
       filters?.providerName ?? null,
       filters?.model ?? null,
+      filters?.clientName ?? null,
       grouping.interval,
       grouping.unit,
     ] as const,
@@ -94,6 +97,7 @@ export const usageKeys = {
       filters?.appType ?? null,
       filters?.providerName ?? null,
       filters?.model ?? null,
+      filters?.clientName ?? null,
     ] as const,
   unpricedModelUsage: (
     preset: UsageRangeSelection["preset"],
@@ -112,6 +116,7 @@ export const usageKeys = {
       filters?.appType ?? null,
       filters?.providerName ?? null,
       filters?.model ?? null,
+      filters?.clientName ?? null,
     ] as const,
   logs: (key: RequestLogsKey, page: number, pageSize: number) =>
     [
@@ -124,10 +129,12 @@ export const usageKeys = {
       key.appType ?? "",
       key.providerName ?? "",
       key.model ?? "",
+      key.clientName ?? "",
       key.statusCode ?? -1,
       page,
       pageSize,
     ] as const,
+  clients: () => [...usageKeys.all, "clients"] as const,
   pricing: () => [...usageKeys.all, "pricing"] as const,
 };
 
@@ -137,10 +144,20 @@ function normalizeScopeFilters(filters?: UsageScopeFilters): UsageScopeFilters {
     appType: filters?.appType === "all" ? undefined : filters?.appType,
     providerName: filters?.providerName,
     model: filters?.model,
+    clientName: filters?.clientName,
   };
 }
 
 // Hooks
+export function useUsageClients() {
+  return useQuery({
+    queryKey: usageKeys.clients(),
+    queryFn: usageApi.getUsageClients,
+    refetchInterval: DEFAULT_REFETCH_INTERVAL_MS,
+    refetchIntervalInBackground: false,
+  });
+}
+
 export function useUsageSummary(
   range: UsageRangeSelection,
   filters?: UsageScopeFilters,
@@ -163,6 +180,7 @@ export function useUsageSummary(
         effective.appType,
         effective.providerName,
         effective.model,
+        effective.clientName,
       );
     },
     refetchInterval: options?.refetchInterval ?? DEFAULT_REFETCH_INTERVAL_MS,
@@ -195,6 +213,7 @@ export function useUsageTrends(
         effective.providerName,
         effective.model,
         grouping,
+        effective.clientName,
       );
     },
     enabled: options?.enabled ?? true,
@@ -225,6 +244,7 @@ export function useModelStats(
         effective.appType,
         effective.providerName,
         effective.model,
+        effective.clientName,
       );
     },
     refetchInterval: options?.refetchInterval ?? DEFAULT_REFETCH_INTERVAL_MS,
@@ -254,6 +274,7 @@ export function useUnpricedModelUsage(
         effective.appType,
         effective.providerName,
         effective.model,
+        effective.clientName,
       );
     },
     refetchInterval: options?.refetchInterval ?? DEFAULT_REFETCH_INTERVAL_MS,
@@ -276,6 +297,7 @@ export function useRequestLogs({
     appType: filters.appType,
     providerName: filters.providerName,
     model: filters.model,
+    clientName: filters.clientName,
     statusCode: filters.statusCode,
   };
 

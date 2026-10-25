@@ -13,7 +13,7 @@ function getStartOfLocalDayDate(nowMs: number): Date {
 }
 
 function getPresetLookbackStart(
-  preset: Exclude<UsageRangePreset, "today" | "1d" | "custom">,
+  preset: "7d" | "14d" | "30d",
   nowMs: number,
 ): number {
   const dayCount = preset === "7d" ? 7 : preset === "14d" ? 14 : 30;
@@ -34,6 +34,16 @@ export function resolveUsageRange(
         startDate: Math.floor(getStartOfLocalDayDate(nowMs).getTime() / 1000),
         endDate,
       };
+    case "this-week": {
+      const start = getStartOfLocalDayDate(nowMs);
+      start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+      return { startDate: Math.floor(start.getTime() / 1000), endDate };
+    }
+    case "this-month": {
+      const start = getStartOfLocalDayDate(nowMs);
+      start.setDate(1);
+      return { startDate: Math.floor(start.getTime() / 1000), endDate };
+    }
     case "1d":
       return {
         startDate: endDate - DAY_SECONDS,
@@ -74,6 +84,10 @@ export function getUsageRangePresetLabel(
       return t("usage.preset14d", { defaultValue: "14d" });
     case "30d":
       return t("usage.preset30d", { defaultValue: "30d" });
+    case "this-week":
+      return t("usage.presetThisWeek", { defaultValue: "This week" });
+    case "this-month":
+      return t("usage.presetThisMonth", { defaultValue: "This month" });
     case "custom":
       return t("usage.customRange", { defaultValue: "Calendar Filter" });
   }

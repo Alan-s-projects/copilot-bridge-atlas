@@ -1,10 +1,17 @@
+import type { ReactNode } from "react";
 import { Github } from "lucide-react";
 import type { Provider } from "@/types";
 import { useCopilotAuth } from "./forms/hooks/useCopilotAuth";
 import { Badge } from "@/components/ui/badge";
 import CopilotQuotaFooter from "@/components/CopilotQuotaFooter";
 
-export function CopilotCard({ provider }: { provider: Provider }) {
+export function CopilotCard({
+  provider,
+  actions,
+}: {
+  provider: Provider;
+  actions?: ReactNode;
+}) {
   const auth = useCopilotAuth();
   const accountId =
     provider.meta?.authBinding?.accountId ?? auth.defaultAccountId;
@@ -25,7 +32,10 @@ export function CopilotCard({ provider }: { provider: Provider }) {
   return (
     <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card px-6 py-4 shadow-sm">
       <div className="min-w-0 space-y-2">
-        <h2 className="text-sm font-semibold">Provider</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold">Provider</h2>
+          {actions}
+        </div>
         <div className="flex items-center gap-3">
           <div className="rounded-xl bg-muted p-3">
             <Github className="h-7 w-7" />

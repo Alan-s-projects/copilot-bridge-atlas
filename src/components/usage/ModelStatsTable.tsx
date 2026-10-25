@@ -24,6 +24,7 @@ interface ModelStatsTableProps {
   appType?: string;
   providerName?: string;
   model?: string;
+  clientName?: string;
   refreshIntervalMs: number;
 }
 
@@ -32,6 +33,7 @@ export function ModelStatsTable({
   appType,
   providerName,
   model,
+  clientName,
   refreshIntervalMs,
   columns,
 }: ModelStatsTableProps) {
@@ -39,7 +41,7 @@ export function ModelStatsTable({
   const visible = new Set(visibleColumns(columns, MODEL_STATS_COLUMNS));
   const { data: stats, isLoading } = useModelStats(
     range,
-    { appType, providerName, model },
+    { appType, providerName, model, clientName },
     {
       refetchInterval: refreshIntervalMs > 0 ? refreshIntervalMs : false,
     },

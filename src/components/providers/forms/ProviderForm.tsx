@@ -331,9 +331,6 @@ export function ProviderForm({
 
   return (
     <form id="provider-form" onSubmit={submit} className="space-y-6">
-      <p className="text-sm text-muted-foreground">
-        {t("bridge.providerSettings")}
-      </p>
       <CodexFormFields
         catalogStatus={catalogStatus}
         catalogSavePending={autoSave && savePending}

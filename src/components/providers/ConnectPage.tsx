@@ -4,20 +4,13 @@ import { CodexSetupSuggestion } from "./CodexSetupSuggestion";
 import { useGlobalProxyConfig } from "@/lib/query/proxy";
 import { copyText } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
-import { MappingCountBadge } from "@/components/settings/MappingCountBadge";
 import {
   SettingsSection,
   settingsSidebarClassName,
   settingsSidebarItemClassName,
 } from "@/components/ui/settings-section";
 
-export function ConnectPage({
-  onOpenModels,
-  mappingCount,
-}: {
-  onOpenModels?: () => void;
-  mappingCount?: number;
-}) {
+export function ConnectPage() {
   const [client, setClient] = useState("codex");
   const { data: config } = useGlobalProxyConfig();
   const sidebar = (
@@ -109,17 +102,6 @@ export function ConnectPage({
               </>
             )}
           </SettingsSection>
-          {onOpenModels && (
-            <SettingsSection title="Models & account">
-              <p className="text-sm text-muted-foreground">
-                Uses the GitHub account and explicit Claude model mappings
-                selected in Models.
-              </p>
-              <Button variant="outline" onClick={onOpenModels}>
-                Open Models <MappingCountBadge count={mappingCount} />
-              </Button>
-            </SettingsSection>
-          )}
         </div>
       </div>
     </section>

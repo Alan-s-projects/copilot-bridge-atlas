@@ -364,6 +364,7 @@ pub fn run() {
             commands::get_global_proxy_config,
             commands::update_global_proxy_config,
             commands::get_usage_summary,
+            commands::get_usage_clients,
             commands::get_usage_trends,
             commands::get_model_stats,
             commands::get_unpriced_model_usage,

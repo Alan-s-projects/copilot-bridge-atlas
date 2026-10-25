@@ -162,6 +162,60 @@ impl Database {
         Ok(costs)
     }
 
+    fn collect_rollup_client_usage(
+        conn: &rusqlite::Connection,
+        cutoff: i64,
+    ) -> Result<
+        std::collections::BTreeMap<[String; 6], crate::services::usage_stats::clients::ClientUsage>,
+        AppError,
+    > {
+        use crate::services::usage_stats::clients::{ClientUsage, ClientUsageRollup};
+        use rusqlite::OptionalExtension;
+        let mut usage = std::collections::BTreeMap::<[String; 6], ClientUsage>::new();
+        let fresh = fresh_input_sql("l");
+        let generation = crate::services::sql_helpers::output_generation_ms_sql("l");
+        let sql = format!("SELECT date(l.created_at,'unixepoch','localtime'), l.app_type, l.provider_id,
+            l.model, COALESCE(l.request_model,''), COALESCE(l.pricing_model,''),
+            COALESCE(NULLIF(trim(l.client_name),''),'Unknown'), COUNT(*),
+            SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END),
+            SUM({fresh}), SUM(l.output_tokens), SUM(l.cache_read_tokens), SUM(l.cache_creation_tokens),
+            SUM(CAST(l.total_cost_usd AS REAL)), SUM(CAST(l.latency_ms AS REAL)),
+            SUM(CASE WHEN l.output_tokens > 0 AND ({generation}) > 0 THEN l.output_tokens ELSE 0 END),
+            SUM(CASE WHEN l.output_tokens > 0 AND ({generation}) > 0 THEN CAST(({generation}) AS REAL) ELSE 0 END)
+            FROM proxy_request_logs l WHERE l.created_at < ?1 AND {}
+            GROUP BY 1,2,3,4,5,6,7", effective_usage_log_filter("l"));
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map([cutoff], |row| Ok((
+            [row.get::<_, String>(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?],
+            row.get::<_, String>(6)?,
+            ClientUsageRollup {
+                request_count: row.get(7)?, success_count: row.get(8)?, input_tokens: row.get(9)?,
+                output_tokens: row.get(10)?, cache_read_tokens: row.get(11)?, cache_creation_tokens: row.get(12)?,
+                total_cost_usd: row.get(13)?, total_latency_ms: row.get(14)?,
+                timed_output_tokens: row.get(15)?, generation_ms: row.get(16)?,
+            },
+        )))?;
+        for row in rows {
+            let (key, name, counters) = row?;
+            usage.entry(key).or_default().entry(name).or_default().merge(counters);
+        }
+        for (key, values) in &mut usage {
+            let previous = conn.query_row("SELECT client_usage FROM usage_daily_rollups
+                WHERE date=?1 AND app_type=?2 AND provider_id=?3 AND model=?4 AND request_model=?5 AND pricing_model=?6",
+                rusqlite::params_from_iter(key.iter()), |row| row.get::<_, String>(0)).optional()?;
+            if let Some(json) = previous {
+                let previous: ClientUsage = serde_json::from_str(&json)
+                    .map_err(|e| AppError::Database(format!("Invalid archived client usage: {e}")))?;
+                for (name, counters) in previous {
+                    values.entry(name).or_default().merge(counters);
+                }
+            }
+            // Deliberately do not fill legacy gaps from name→cost attribution:
+            // those rows may contain mixed callers and have no per-name counts.
+        }
+        Ok(usage)
+    }
+
     fn do_rollup_and_prune(conn: &rusqlite::Connection, cutoff: i64) -> Result<u64, AppError> {
         // Aggregate old logs, merging with any pre-existing rollup rows via LEFT JOIN.
         let effective_filter = effective_usage_log_filter("l");
@@ -171,6 +225,7 @@ impl Database {
         // The pricing_model dimension retains the pricing basis when writing (forked from model in request pricing mode);
         // These two columns of the detail row may be NULL (historical/manual data), normalized to ''.
         let client_costs = Self::collect_rollup_client_costs(conn, cutoff)?;
+        let client_usage = Self::collect_rollup_client_usage(conn, cutoff)?;
         let aggregation_sql = format!(
             "INSERT OR REPLACE INTO usage_daily_rollups
                 (date, app_type, provider_id, model, request_model, pricing_model,
@@ -227,6 +282,12 @@ impl Database {
                 rusqlite::params![json, key[0], key[1], key[2], key[3], key[4], key[5]])?;
         }
 
+        for (key, usage) in client_usage {
+            let json = serde_json::to_string(&usage).map_err(|e| AppError::Database(e.to_string()))?;
+            conn.execute("UPDATE usage_daily_rollups SET client_usage=?1 WHERE date=?2 AND app_type=?3 AND provider_id=?4 AND model=?5 AND request_model=?6 AND pricing_model=?7",
+                rusqlite::params![json, key[0], key[1], key[2], key[3], key[4], key[5]])?;
+        }
+
         // Archive only proxy rows. Historical session imports stay untouched.
         let deleted = conn
             .execute(
@@ -260,6 +321,174 @@ mod tests {
             chrono::LocalResult::Ambiguous(earliest, _) => earliest,
             chrono::LocalResult::None => panic!("invalid local datetime in test fixture"),
         }
+    }
+
+    #[test]
+    fn client_and_model_filters_reconcile_raw_mixed_and_repeated_rollups() -> Result<(), AppError> {
+        use crate::services::usage_stats::{LogFilters, TrendGrouping};
+        let db = Database::memory()?;
+        let start = local_dt(2020, 1, 2, 0, 0, 0).timestamp();
+        let middle = local_dt(2020, 1, 3, 0, 0, 0).timestamp();
+        let end = local_dt(2020, 1, 4, 0, 0, 0).timestamp() - 1;
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("INSERT INTO providers (id,app_type,name,settings_config) VALUES ('p','codex','Current provider','{}')", [])?;
+            for (id, name, provider, model, timestamp, input, cached, written, output, latency, duration, status, cost) in [
+                ("old-code", "Claude Code", "p", "billing-model", start + 60, 1000, 200, 100, 50, 400, Some(200), 200, "1.25"),
+                ("old-code-2", "Claude Code", "p", "billing-model", start + 120, 500, 100, 50, 25, 200, Some(100), 500, "0.50"),
+                ("new-code", "Claude Code", "p", "billing-model", middle + 60, 300, 20, 10, 30, 300, None, 200, "0.75"),
+                ("desktop", "Claude Desktop", "p", "billing-model", start + 180, 800, 200, 100, 40, 100, None, 200, "2.00"),
+                ("other-model", "Claude Code", "p", "another-model", start + 240, 900, 0, 0, 50, 200, None, 200, "3.00"),
+                ("other-provider", "Claude Code", "other", "billing-model", start + 300, 400, 0, 0, 20, 100, None, 200, "4.00"),
+                ("unknown-old", "", "p", "billing-model", start + 360, 200, 50, 0, 10, 100, None, 200, "0.25"),
+                ("unknown-new", "Unknown", "p", "billing-model", middle + 120, 200, 50, 0, 10, 100, None, 200, "0.25"),
+            ] {
+                conn.execute("INSERT INTO proxy_request_logs
+                    (request_id,provider_id,app_type,model,pricing_model,request_model,client_name,client_source,client_version,
+                     created_at,input_tokens,cache_read_tokens,cache_creation_tokens,output_tokens,latency_ms,duration_ms,status_code,total_cost_usd)
+                    VALUES (?1,?2,'codex','upstream-alias',?3,'client-alias',?4,'user-agent','1.2',?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                    rusqlite::params![id,provider,model,name,timestamp,input,cached,written,output,latency,duration,status,cost])?;
+            }
+            conn.execute("INSERT INTO proxy_request_logs (request_id,provider_id,app_type,model,client_name,latency_ms,status_code,created_at,data_source)
+                VALUES ('imported','_codex_session','codex','Claude Code','Imported client',1,200,?1,'session')", [start + 500])?;
+        }
+        let clients = db.get_usage_clients()?;
+        assert_eq!(clients, vec!["Claude Code", "Claude Desktop", "Unknown"]);
+        let all = db.get_usage_summary(Some(start), Some(end), None, None, None)?;
+        assert_eq!(all.total_requests, 8);
+        assert!(!all.client_filter_incomplete);
+        assert_eq!(serde_json::to_value(&all).unwrap(), serde_json::to_value(db.get_usage_summary_filtered(Some(start), Some(end), None, None, None, None)?).unwrap());
+        let snapshot = |client: &str| -> Result<serde_json::Value, AppError> {
+            let summary = db.get_usage_summary_filtered(Some(start), Some(end), None, Some("Current provider"), Some("billing-model"), Some(client))?;
+            let stats = db.get_model_stats_filtered(Some(start), Some(end), None, Some("Current provider"), Some("billing-model"), Some(client))?;
+            let unpriced = db.get_unpriced_model_usage_filtered(Some(start), Some(end), None, Some("Current provider"), Some("billing-model"), Some(client))?;
+            let trends = db.get_grouped_usage_trends_filtered(Some(start), Some(end), None, Some("Current provider"), Some("billing-model"), Some(client), TrendGrouping::default())?;
+            assert!(!summary.client_filter_incomplete);
+            assert_eq!(trends.total_cost.as_deref(), Some(summary.total_cost.as_str()));
+            assert_eq!(trends.buckets.iter().map(|b| b.totals.request_count).sum::<u64>(), summary.total_requests);
+            assert_eq!(trends.buckets.iter().map(|b| b.totals.total_tokens).sum::<u64>(), summary.real_total_tokens);
+            assert_eq!(stats.iter().map(|s| s.request_count).sum::<u64>(), summary.total_requests);
+            assert_eq!(unpriced.iter().map(|s| s.request_count).sum::<u64>(), summary.total_requests);
+            Ok(serde_json::json!({"summary": summary, "stats": stats, "unpriced": unpriced, "trends": trends}))
+        };
+        let snapshots = ["Claude Code", "Claude Desktop", "Unknown", "missing"].map(|client| snapshot(client).unwrap());
+        assert_eq!(snapshots[0]["summary"]["totalRequests"], 3);
+        assert_eq!(snapshots[0]["summary"]["totalInputTokens"], 1320);
+        assert_eq!(snapshots[0]["summary"]["totalCost"], "2.500000");
+        assert_eq!(snapshots[0]["summary"]["outputTokensPerSecond"], 175.0);
+        let filters: LogFilters = serde_json::from_value(serde_json::json!({
+            "clientName":"Claude Code", "providerName":"Current provider", "model":"billing-model",
+            "startDate":start, "endDate":end, "statusCode":200
+        })).unwrap();
+        let first = db.get_request_logs(&filters, 0, 1)?;
+        let second = db.get_request_logs(&filters, 1, 1)?;
+        assert_eq!(first.total, 2);
+        assert_eq!(first.data[0].request_id, "new-code");
+        assert_eq!(second.data[0].request_id, "old-code");
+        assert_eq!(first.data[0].client.client_source, "user-agent");
+        assert_eq!(first.data[0].client.client_version.as_deref(), Some("1.2"));
+        let deleted = {
+            let conn = db.conn.lock().unwrap();
+            Database::do_rollup_and_prune(&conn, middle)?
+        };
+        assert_eq!(deleted, 6);
+        for (client, expected) in ["Claude Code", "Claude Desktop", "Unknown", "missing"].into_iter().zip(&snapshots) {
+            assert_eq!(&snapshot(client)?, expected, "mixed raw/archive {client}");
+        }
+        assert_eq!(db.get_usage_clients()?, clients);
+        assert_eq!(db.get_request_logs(&filters, 0, 10)?.total, 1);
+        {
+            let conn = db.conn.lock().unwrap();
+            assert_eq!(Database::do_rollup_and_prune(&conn, end + 1)?, 2);
+            assert_eq!(Database::do_rollup_and_prune(&conn, end + 1)?, 0);
+        }
+        for (client, expected) in ["Claude Code", "Claude Desktop", "Unknown", "missing"].into_iter().zip(&snapshots) {
+            assert_eq!(&snapshot(client)?, expected, "fully archived {client}");
+        }
+        let archived_all = db.get_usage_summary(Some(start), Some(end), None, None, None)?;
+        assert_eq!(archived_all.total_requests, all.total_requests);
+        assert_eq!(archived_all.total_cost, all.total_cost);
+        assert_eq!(archived_all.real_total_tokens, all.real_total_tokens);
+        assert_eq!(db.get_request_logs(&filters, 0, 10)?.total, 0);
+        assert_eq!(db.get_usage_clients()?, clients);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_client_gaps_stay_unattributed_while_new_metrics_merge() -> Result<(), AppError> {
+        use crate::services::usage_stats::{LogFilters, TrendGrouping};
+        let db = Database::memory()?;
+        let start = local_dt(2020, 1, 2, 0, 0, 0).timestamp();
+        let end = local_dt(2020, 1, 3, 0, 0, 0).timestamp() - 1;
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("INSERT INTO usage_daily_rollups
+                (date,app_type,provider_id,model,pricing_model,request_count,input_tokens,total_cost_usd,client_costs)
+                VALUES ('2020-01-02','codex','p','upstream-alias','billing-model',10,1000,'10',?1)",
+                [r#"{"Claude Code":6,"Claude Desktop":4}"#])?;
+        }
+        assert_eq!(db.get_usage_clients()?, vec!["Claude Code", "Claude Desktop"]);
+        for name in ["Claude Code", "Claude Desktop", "Unknown"] {
+            let summary = db.get_usage_summary_filtered(Some(start), Some(end), None, None, Some("billing-model"), Some(name))?;
+            assert_eq!(summary.total_requests, 0);
+            assert!(summary.client_filter_incomplete);
+            let json = serde_json::to_value(summary).unwrap();
+            assert_eq!(json["clientFilterIncomplete"], true);
+            assert!(json.get("client_filter_incomplete").is_none());
+        }
+        assert!(!db.get_usage_summary_filtered(Some(start), Some(end), None, None, Some("isolated-model"), Some("Claude Code"))?.client_filter_incomplete);
+        assert!(!db.get_usage_summary_filtered(Some(start), Some(end), None, Some("unmatched provider"), None, Some("Claude Code"))?.client_filter_incomplete);
+        assert!(!db.get_usage_summary_filtered(Some(end + 1), None, None, None, None, Some("Claude Code"))?.client_filter_incomplete);
+        let insert = |id: &str, name: &str| -> Result<(), AppError> {
+            db.conn.lock().unwrap().execute("INSERT INTO proxy_request_logs
+                (request_id,provider_id,app_type,model,pricing_model,client_name,latency_ms,status_code,created_at,input_tokens,total_cost_usd)
+                VALUES (?1,'p','codex','upstream-alias','billing-model',?2,100,200,?3,100,'1')", rusqlite::params![id,name,start + 60])?;
+            Ok(())
+        };
+        insert("known", "Claude Code")?;
+        insert("actual-unknown", "Unknown")?;
+        let snapshot = || -> Result<serde_json::Value, AppError> {
+            let summary = db.get_usage_summary_filtered(Some(start), Some(end), None, None, Some("billing-model"), Some("Claude Code"))?;
+            let stats = db.get_model_stats_filtered(Some(start), Some(end), None, None, Some("billing-model"), Some("Claude Code"))?;
+            let unpriced = db.get_unpriced_model_usage_filtered(Some(start), Some(end), None, None, Some("billing-model"), Some("Claude Code"))?;
+            let trends = db.get_grouped_usage_trends_filtered(Some(start), Some(end), None, None, Some("billing-model"), Some("Claude Code"), TrendGrouping::default())?;
+            assert!(summary.client_filter_incomplete);
+            assert_eq!(summary.total_requests, 1);
+            assert_eq!(stats[0].request_count, 1);
+            assert_eq!(unpriced[0].request_count, 1);
+            assert_eq!(trends.buckets[0].totals.request_count, 1);
+            assert_eq!(trends.total_cost.as_deref(), Some("1.000000"));
+            Ok(serde_json::json!({"summary":summary,"stats":stats,"unpriced":unpriced,"trends":trends}))
+        };
+        let before = snapshot()?;
+        {
+            let conn = db.conn.lock().unwrap();
+            assert_eq!(Database::do_rollup_and_prune(&conn, end + 1)?, 2);
+        }
+        assert_eq!(snapshot()?, before);
+        let all = db.get_usage_summary(Some(start), Some(end), None, None, None)?;
+        assert_eq!(all.total_requests, 12);
+        assert_eq!(all.total_cost, "12.000000");
+        assert!(!all.client_filter_incomplete);
+        let unknown = db.get_usage_summary_filtered(Some(start), Some(end), None, None, None, Some("Unknown"))?;
+        assert_eq!(unknown.total_requests, 1); // only the genuinely Unknown caller
+        assert_eq!(unknown.total_cost, "1.000000");
+        insert("known-again", "Claude Code")?;
+        {
+            let conn = db.conn.lock().unwrap();
+            assert_eq!(Database::do_rollup_and_prune(&conn, end + 1)?, 1);
+        }
+        let code = db.get_usage_summary_filtered(Some(start), Some(end), None, None, None, Some("Claude Code"))?;
+        assert_eq!(code.total_requests, 2);
+        assert_eq!(code.total_input_tokens, 200);
+        assert_eq!(code.total_cost, "2.000000");
+        assert!(code.client_filter_incomplete);
+        let desktop = db.get_model_stats_filtered(Some(start), Some(end), None, None, None, Some("Claude Desktop"))?;
+        assert!(desktop.is_empty()); // legacy cost-only names never imply usable counters
+        assert_eq!(db.get_usage_summary(Some(start), Some(end), None, None, None)?.total_requests, 13);
+        assert_eq!(db.get_usage_clients()?, vec!["Claude Code", "Claude Desktop", "Unknown"]);
+        assert_eq!(db.get_request_logs(&LogFilters::default(), 0, 10)?.total, 0);
+        Ok(())
     }
 
     #[test]

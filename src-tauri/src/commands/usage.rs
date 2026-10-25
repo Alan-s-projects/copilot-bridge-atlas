@@ -16,14 +16,16 @@ pub fn get_usage_summary(
     app_type: Option<String>,
     provider_name: Option<String>,
     model: Option<String>,
+    client_name: Option<String>,
 ) -> Result<UsageSummary, AppError> {
     crate::copilot_bridge::require_codex(app_type.as_deref().unwrap_or("codex"))?;
-    state.db.get_usage_summary(
+    state.db.get_usage_summary_filtered(
         start_date,
         end_date,
         Some("codex"),
         provider_name.as_deref(),
         model.as_deref(),
+        client_name.as_deref(),
     )
 }
 
@@ -36,15 +38,17 @@ pub fn get_usage_trends(
     app_type: Option<String>,
     provider_name: Option<String>,
     model: Option<String>,
+    client_name: Option<String>,
     grouping: Option<TrendGrouping>,
 ) -> Result<UsageTrends, AppError> {
     crate::copilot_bridge::require_codex(app_type.as_deref().unwrap_or("codex"))?;
-    state.db.get_grouped_usage_trends(
+    state.db.get_grouped_usage_trends_filtered(
         start_date,
         end_date,
         Some("codex"),
         provider_name.as_deref(),
         model.as_deref(),
+        client_name.as_deref(),
         grouping.unwrap_or_default(),
     )
 }
@@ -58,14 +62,16 @@ pub fn get_model_stats(
     app_type: Option<String>,
     provider_name: Option<String>,
     model: Option<String>,
+    client_name: Option<String>,
 ) -> Result<Vec<ModelStats>, AppError> {
     crate::copilot_bridge::require_codex(app_type.as_deref().unwrap_or("codex"))?;
-    state.db.get_model_stats(
+    state.db.get_model_stats_filtered(
         start_date,
         end_date,
         Some("codex"),
         provider_name.as_deref(),
         model.as_deref(),
+        client_name.as_deref(),
     )
 }
 
@@ -78,15 +84,23 @@ pub fn get_unpriced_model_usage(
     app_type: Option<String>,
     provider_name: Option<String>,
     model: Option<String>,
+    client_name: Option<String>,
 ) -> Result<Vec<UnpricedModelUsage>, AppError> {
     crate::copilot_bridge::require_codex(app_type.as_deref().unwrap_or("codex"))?;
-    state.db.get_unpriced_model_usage(
+    state.db.get_unpriced_model_usage_filtered(
         start_date,
         end_date,
         Some("codex"),
         provider_name.as_deref(),
         model.as_deref(),
+        client_name.as_deref(),
     )
+}
+
+/// Distinct calling apps retained in request or rollup history.
+#[tauri::command]
+pub fn get_usage_clients(state: State<'_, AppState>) -> Result<Vec<String>, AppError> {
+    state.db.get_usage_clients()
 }
 
 /// Get request log list

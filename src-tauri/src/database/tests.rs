@@ -321,3 +321,31 @@ fn archive_client_cost_migration_is_idempotent() -> Result<(), AppError> {
     assert_eq!(pair, ("3".into(), "{}".into()));
     Ok(())
 }
+
+#[test]
+fn archive_client_usage_migration_preserves_unattributed_history() -> Result<(), AppError> {
+    let db = Database::memory()?;
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute_batch("ALTER TABLE usage_daily_rollups DROP COLUMN client_usage;
+            INSERT INTO usage_daily_rollups (date,app_type,provider_id,model,request_count,total_cost_usd,client_costs)
+            VALUES ('2020-01-02','codex','p','m',3,'7','{\"Claude Code\":4,\"Claude Desktop\":3}');")?;
+        Database::initialize_schema_on_conn(&conn)?;
+        Database::initialize_schema_on_conn(&conn)?;
+        let saved: (u64, String, String, String) = conn.query_row(
+            "SELECT request_count,total_cost_usd,client_costs,client_usage FROM usage_daily_rollups",
+            [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)))?;
+        assert_eq!(saved, (3, "7".into(), r#"{"Claude Code":4,"Claude Desktop":3}"#.into(), "{}".into()));
+    }
+    assert_eq!(db.get_usage_clients()?, vec!["Claude Code", "Claude Desktop"]);
+    let all = db.get_usage_summary(None, None, None, None, None)?;
+    assert_eq!(all.total_requests, 3);
+    assert_eq!(all.total_cost, "7.000000");
+    assert!(!all.client_filter_incomplete);
+    for client in ["Claude Code", "Unknown"] {
+        let filtered = db.get_usage_summary_filtered(None, None, None, None, None, Some(client))?;
+        assert_eq!(filtered.total_requests, 0);
+        assert!(filtered.client_filter_incomplete);
+    }
+    Ok(())
+}

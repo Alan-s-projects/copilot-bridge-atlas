@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
         let result = Self::create_tables_on_conn(conn)
             .and_then(|_| Self::ensure_client_columns(conn))
             .and_then(|_| Self::ensure_rollup_client_costs(conn))
+            .and_then(|_| Self::ensure_rollup_client_usage(conn))
             .and_then(|_| Self::set_user_version(conn, SCHEMA_VERSION))
             .and_then(|_| Self::set_application_id(conn, APPLICATION_ID));
         match result {
@@ -107,6 +108,16 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
         let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('usage_daily_rollups') WHERE name='client_costs')", [], |r| r.get(0))?;
         if !exists {
             conn.execute("ALTER TABLE usage_daily_rollups ADD COLUMN client_costs TEXT NOT NULL DEFAULT '{}'", [])?;
+        }
+        Ok(())
+    }
+
+    fn ensure_rollup_client_usage(conn: &Connection) -> Result<(), AppError> {
+        let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('usage_daily_rollups') WHERE name='client_usage')", [], |r| r.get(0))?;
+        if !exists {
+            // Cost-only history cannot recover per-client request/token totals.
+            // Leave it unattributed instead of silently calling it Unknown.
+            conn.execute("ALTER TABLE usage_daily_rollups ADD COLUMN client_usage TEXT NOT NULL DEFAULT '{}'", [])?;
         }
         Ok(())
     }

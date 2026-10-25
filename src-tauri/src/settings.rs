@@ -40,7 +40,7 @@ impl Default for UsageDateRange {
 impl UsageDateRange {
     pub fn validate(&self) -> Result<(), AppError> {
         let valid = match self.preset.as_str() {
-            "today" | "1d" | "7d" | "14d" | "30d" => true,
+            "today" | "1d" | "7d" | "14d" | "30d" | "this-week" | "this-month" => true,
             "custom" => self.custom_start_date.is_some_and(|start| {
                 chrono::DateTime::from_timestamp(start, 0).is_some()
                     && (self.live_end_time
@@ -158,4 +158,29 @@ pub fn effective_backup_interval_hours() -> u32 {
 
 pub fn effective_backup_retain_count() -> usize {
     get_settings().backup_retain_count.unwrap_or(10).max(1) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calendar_usage_presets_validate_and_round_trip_in_database() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        for preset in ["this-week", "this-month"] {
+            let range = UsageDateRange { preset: preset.into(), ..Default::default() };
+            range.validate()?;
+            // Frontend resolves calendar bounds; no custom timestamps are required.
+            db.set_usage_date_range(range.clone())?;
+            assert_eq!(db.get_usage_date_range()?, range);
+            let stored = db.get_setting("usage_date_range")?.unwrap();
+            assert_eq!(serde_json::from_str::<UsageDateRange>(&stored).unwrap(), range);
+        }
+        let invalid = UsageDateRange { preset: "this-year".into(), ..Default::default() };
+        assert!(invalid.validate().is_err());
+        assert!(db.set_usage_date_range(invalid).is_err());
+        db.set_setting("usage_date_range", r#"{"preset":"this-year"}"#)?;
+        assert_eq!(db.get_usage_date_range()?, UsageDateRange::default());
+        Ok(())
+    }
 }

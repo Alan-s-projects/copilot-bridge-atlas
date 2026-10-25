@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 
+pub(crate) mod clients;
+use clients::{push_client_filter, usage_rollup_table_sql};
 mod trends;
 pub use trends::{TrendGrouping, UsageTrends};
 
@@ -22,6 +24,9 @@ pub use trends::{TrendGrouping, UsageTrends};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageSummary {
+    /// Some matching legacy rollups lack reliable per-client counters and were excluded.
+    #[serde(default)]
+    pub client_filter_incomplete: bool,
     pub total_requests: u64,
     pub total_cost: String,
     pub total_input_tokens: u64,
@@ -106,6 +111,7 @@ pub struct UnpricedModelUsage {
 #[serde(rename_all = "camelCase")]
 pub struct LogFilters {
     pub app_type: Option<String>,
+    pub client_name: Option<String>,
     pub provider_name: Option<String>,
     pub model: Option<String>,
     pub status_code: Option<u16>,
@@ -220,7 +226,11 @@ fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
         fresh_input_tokens: row.get::<_, i64>(28)? as u64,
         pricing_tier: row.get(29)?,
         client: crate::proxy::client_identity::ClientIdentity {
-            client_name: row.get(30)?,
+            client_name: row
+                .get::<_, Option<String>>(30)?
+                .filter(|name| !name.trim().is_empty())
+                .map(|name| name.trim().to_owned())
+                .unwrap_or_else(|| "Unknown".into()),
             client_source: row.get(31)?,
             client_version: row.get(32)?,
         },
@@ -384,6 +394,26 @@ impl Database {
         provider_name: Option<&str>,
         model: Option<&str>,
     ) -> Result<UsageSummary, AppError> {
+        self.get_usage_summary_filtered(
+            start_date,
+            end_date,
+            app_type,
+            provider_name,
+            model,
+            None,
+        )
+    }
+
+    /// Client-filtered variant; the original method keeps all-client behavior.
+    pub fn get_usage_summary_filtered(
+        &self,
+        start_date: Option<i64>,
+        end_date: Option<i64>,
+        app_type: Option<&str>,
+        provider_name: Option<&str>,
+        model: Option<&str>,
+        client_name: Option<&str>,
+    ) -> Result<UsageSummary, AppError> {
         let conn = lock_conn!(self.conn);
 
         // Build detail WHERE clause
@@ -410,6 +440,7 @@ impl Database {
             provider_name,
             model,
         );
+        push_client_filter(&mut conditions, &mut params_vec, "l", client_name);
 
         let where_clause = if conditions.is_empty() {
             String::new()
@@ -445,6 +476,32 @@ impl Database {
             provider_name,
             model,
         );
+        let client_filter_incomplete = if client_name.is_some() {
+            // Compare retained attributed counters to the original totals before
+            // selecting a client. Legacy/mixed archives must not be guessed.
+            let join = if provider_name.is_some() {
+                providers_join("r", "p2")
+            } else {
+                String::new()
+            };
+            let legacy_fresh = fresh_input_sql("r");
+            let sql = format!("SELECT EXISTS(SELECT 1 FROM usage_daily_rollups r {join}
+                WHERE {} AND (SELECT
+                    r.request_count > COALESCE(SUM(json_extract(value, '$.request_count')), 0)
+                    OR ({legacy_fresh}) > COALESCE(SUM(json_extract(value, '$.input_tokens')), 0)
+                    OR r.output_tokens > COALESCE(SUM(json_extract(value, '$.output_tokens')), 0)
+                    OR r.cache_read_tokens > COALESCE(SUM(json_extract(value, '$.cache_read_tokens')), 0)
+                    OR r.cache_creation_tokens > COALESCE(SUM(json_extract(value, '$.cache_creation_tokens')), 0)
+                    OR ABS(CAST(r.total_cost_usd AS REAL) - COALESCE(SUM(json_extract(value, '$.total_cost_usd')), 0)) > 0.0000000001
+                    FROM json_each(r.client_usage)
+                ))", rollup_conditions.join(" AND "));
+            let refs: Vec<&dyn rusqlite::ToSql> =
+                rollup_params.iter().map(|p| p.as_ref()).collect();
+            conn.query_row(&sql, refs.as_slice(), |row| row.get::<_, bool>(0))?
+        } else {
+            false
+        };
+        push_client_filter(&mut rollup_conditions, &mut rollup_params, "r", client_name);
 
         let rollup_where = if rollup_conditions.is_empty() {
             String::new()
@@ -459,7 +516,18 @@ impl Database {
 
         let fresh_input_detail = fresh_input_sql("l");
         let fresh_input_rollup = fresh_input_sql("r");
+        let rollup_table = usage_rollup_table_sql(client_name);
         let generation_ms = output_generation_ms_sql("l");
+        let rollup_timed_output = if client_name.is_some() {
+            "r.timed_output_tokens"
+        } else {
+            "CASE WHEN r.output_tokens > 0 AND r.avg_latency_ms > 0 AND r.request_count > 0 THEN r.output_tokens ELSE 0 END"
+        };
+        let rollup_generation_ms = if client_name.is_some() {
+            "r.generation_ms"
+        } else {
+            "CASE WHEN r.output_tokens > 0 AND r.avg_latency_ms > 0 AND r.request_count > 0 THEN CAST(r.avg_latency_ms AS REAL) * r.request_count ELSE 0 END"
+        };
         let sql = format!(
             "SELECT
                 COALESCE(d.total_requests, 0) + COALESCE(r.total_requests, 0),
@@ -496,11 +564,9 @@ impl Database {
                     COALESCE(SUM(r.cache_read_tokens), 0) as total_cache_read_tokens,
                     COALESCE(SUM(r.success_count), 0) as success_count,
                     COALESCE(SUM(CAST(r.avg_latency_ms AS REAL) * r.request_count), 0) as total_latency_ms,
-                    COALESCE(SUM(CASE WHEN r.output_tokens > 0 AND r.avg_latency_ms > 0 AND r.request_count > 0
-                        THEN r.output_tokens ELSE 0 END), 0) as timed_output_tokens,
-                    COALESCE(SUM(CASE WHEN r.output_tokens > 0 AND r.avg_latency_ms > 0 AND r.request_count > 0
-                        THEN CAST(r.avg_latency_ms AS REAL) * r.request_count ELSE 0 END), 0) as generation_ms
-                 FROM usage_daily_rollups r {rollup_join} {rollup_where}) r"
+                    COALESCE(SUM({rollup_timed_output}), 0) as timed_output_tokens,
+                    COALESCE(SUM({rollup_generation_ms}), 0) as generation_ms
+                 FROM {rollup_table} r {rollup_join} {rollup_where}) r"
         );
 
         // Combine params: detail params first, then rollup params
@@ -541,6 +607,7 @@ impl Database {
             );
 
             Ok(UsageSummary {
+                client_filter_incomplete,
                 total_requests: total_requests as u64,
                 total_cost: format!("{total_cost:.6}"),
                 total_input_tokens: total_input_tokens as u64,
@@ -567,6 +634,19 @@ impl Database {
         provider_name: Option<&str>,
         model: Option<&str>,
     ) -> Result<Vec<ModelStats>, AppError> {
+        self.get_model_stats_filtered(start_date, end_date, app_type, provider_name, model, None)
+    }
+
+    /// Client-filtered variant; the original method keeps all-client behavior.
+    pub fn get_model_stats_filtered(
+        &self,
+        start_date: Option<i64>,
+        end_date: Option<i64>,
+        app_type: Option<&str>,
+        provider_name: Option<&str>,
+        model: Option<&str>,
+        client_name: Option<&str>,
+    ) -> Result<Vec<ModelStats>, AppError> {
         let conn = lock_conn!(self.conn);
 
         let mut detail_conditions = vec![effective_usage_log_filter("l")];
@@ -591,6 +671,7 @@ impl Database {
             provider_name,
             model,
         );
+        push_client_filter(&mut detail_conditions, &mut detail_params, "l", client_name);
         let detail_where = if detail_conditions.is_empty() {
             String::new()
         } else {
@@ -623,6 +704,7 @@ impl Database {
             provider_name,
             model,
         );
+        push_client_filter(&mut rollup_conditions, &mut rollup_params, "r", client_name);
         let rollup_where = if rollup_conditions.is_empty() {
             String::new()
         } else {
@@ -642,6 +724,7 @@ impl Database {
         // Under the base name, not the upstream echo/client alias name.
         let fresh_input_detail = fresh_input_sql("l");
         let fresh_input_rollup = fresh_input_sql("r");
+        let rollup_table = usage_rollup_table_sql(client_name);
         let detail_model = effective_model_sql("l");
         let rollup_model = effective_model_sql("r");
         let sql = format!(
@@ -676,7 +759,7 @@ impl Database {
                     COALESCE(SUM(r.output_tokens), 0),
                     COALESCE(SUM(r.cache_read_tokens), 0),
                     COALESCE(SUM(r.cache_creation_tokens), 0)
-                FROM usage_daily_rollups r
+                FROM {rollup_table} r
                 {rollup_join}
                 {rollup_where}
                 GROUP BY {rollup_model}
@@ -733,6 +816,26 @@ impl Database {
         provider_name: Option<&str>,
         model: Option<&str>,
     ) -> Result<Vec<UnpricedModelUsage>, AppError> {
+        self.get_unpriced_model_usage_filtered(
+            start_date,
+            end_date,
+            app_type,
+            provider_name,
+            model,
+            None,
+        )
+    }
+
+    /// Client-filtered variant; the original method keeps all-client behavior.
+    pub fn get_unpriced_model_usage_filtered(
+        &self,
+        start_date: Option<i64>,
+        end_date: Option<i64>,
+        app_type: Option<&str>,
+        provider_name: Option<&str>,
+        model: Option<&str>,
+        client_name: Option<&str>,
+    ) -> Result<Vec<UnpricedModelUsage>, AppError> {
         let conn = lock_conn!(self.conn);
 
         let mut detail_conditions = vec![effective_usage_log_filter("l")];
@@ -757,6 +860,7 @@ impl Database {
             provider_name,
             model,
         );
+        push_client_filter(&mut detail_conditions, &mut detail_params, "l", client_name);
         let detail_where = format!("WHERE {}", detail_conditions.join(" AND "));
         let detail_join = if provider_name.is_some() {
             providers_join("l", "p")
@@ -785,6 +889,7 @@ impl Database {
             provider_name,
             model,
         );
+        push_client_filter(&mut rollup_conditions, &mut rollup_params, "r", client_name);
         let rollup_where = format!("WHERE {}", rollup_conditions.join(" AND "));
         let rollup_join = if provider_name.is_some() {
             providers_join("r", "p2")
@@ -794,6 +899,7 @@ impl Database {
 
         let fresh_input_detail = fresh_input_sql("l");
         let fresh_input_rollup = fresh_input_sql("r");
+        let rollup_table = usage_rollup_table_sql(client_name);
         let detail_model = effective_model_sql("l");
         let rollup_model = effective_model_sql("r");
         let sql = format!(
@@ -821,7 +927,7 @@ impl Database {
                     COALESCE(SUM(r.output_tokens), 0),
                     COALESCE(SUM(r.cache_creation_tokens), 0),
                     COALESCE(SUM(r.cache_read_tokens), 0)
-                FROM usage_daily_rollups r
+                FROM {rollup_table} r
                 {rollup_join}
                 {rollup_where}
                 GROUP BY {rollup_model}
@@ -897,6 +1003,7 @@ impl Database {
             filters.provider_name.as_deref(),
             filters.model.as_deref(),
         );
+        push_client_filter(&mut conditions, &mut params, "l", filters.client_name.as_deref());
         if let Some(status) = filters.status_code {
             conditions.push("l.status_code = ?".to_string());
             params.push(Box::new(status as i64));

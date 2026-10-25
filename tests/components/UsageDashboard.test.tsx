@@ -1,11 +1,6 @@
+import { createContext, useContext } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +8,10 @@ import { UsageDashboard } from "@/components/usage/UsageDashboard";
 
 const useModelStatsMock = vi.hoisted(() => vi.fn());
 const useUnpricedModelUsageMock = vi.hoisted(() => vi.fn());
+const useUsageClientsMock = vi.hoisted(() => vi.fn());
+const usageTrendMock = vi.hoisted(() => vi.fn());
+const requestLogMock = vi.hoisted(() => vi.fn());
+const modelTableMock = vi.hoisted(() => vi.fn());
 const usageHeroMock = vi.hoisted(() => vi.fn());
 const retryPriceCheckMock = vi.hoisted(() => vi.fn());
 
@@ -44,6 +43,7 @@ vi.mock("@/lib/query/usage", async () => {
     );
   return {
     ...actual,
+    useUsageClients: () => useUsageClientsMock(),
     useModelStats: (...args: unknown[]) => useModelStatsMock(...args),
     useUnpricedModelUsage: (...args: unknown[]) =>
       useUnpricedModelUsageMock(...args),
@@ -58,15 +58,24 @@ vi.mock("@/components/usage/UsageHero", () => ({
 }));
 
 vi.mock("@/components/usage/UsageTrendChart", () => ({
-  UsageTrendChart: () => <div data-testid="usage-trend" />,
+  UsageTrendChart: (props: unknown) => {
+    usageTrendMock(props);
+    return <div data-testid="usage-trend" />;
+  },
 }));
 
 vi.mock("@/components/usage/RequestLogTable", () => ({
-  RequestLogTable: () => <div data-testid="request-log-table" />,
+  RequestLogTable: (props: unknown) => {
+    requestLogMock(props);
+    return <div data-testid="request-log-table" />;
+  },
 }));
 
 vi.mock("@/components/usage/ModelStatsTable", () => ({
-  ModelStatsTable: () => <div data-testid="model-stats-table" />,
+  ModelStatsTable: (props: unknown) => {
+    modelTableMock(props);
+    return <div data-testid="model-stats-table" />;
+  },
 }));
 
 vi.mock("@/components/usage/PricingConfigPanel", () => ({
@@ -77,23 +86,28 @@ vi.mock("@/components/usage/UsageDateRangePicker", () => ({
   UsageDateRangePicker: () => <button type="button">date-range</button>,
 }));
 
+const SelectContext = createContext<(value: string) => void>(() => {});
 vi.mock("@/components/ui/select", () => ({
   Select: ({ value, onValueChange, children }: any) => (
-    <div data-testid={`select-${value}`}>
-      {children}
-      <button type="button" onClick={() => onValueChange?.("5000")}>
-        choose-5000
-      </button>
-    </div>
+    <SelectContext.Provider value={onValueChange}>
+      <div data-testid={`select-${value}`}>{children}</div>
+    </SelectContext.Provider>
   ),
   SelectTrigger: ({ children, ...props }: any) => (
     <button type="button" {...props}>
       {children}
     </button>
   ),
-  SelectValue: () => null,
+  SelectValue: ({ children }: any) => children ?? null,
   SelectContent: ({ children }: any) => <div>{children}</div>,
-  SelectItem: ({ children, ...props }: any) => <div {...props}>{children}</div>,
+  SelectItem: ({ children, value }: any) => {
+    const change = useContext(SelectContext);
+    return (
+      <button type="button" role="option" onClick={() => change(value)}>
+        {children}
+      </button>
+    );
+  },
 }));
 
 const renderDashboard = (props: ComponentProps<typeof UsageDashboard> = {}) => {
@@ -115,6 +129,13 @@ describe("UsageDashboard", () => {
     useUnpricedModelUsageMock.mockReset();
     retryPriceCheckMock.mockReset();
     usageHeroMock.mockReset();
+    usageTrendMock.mockReset();
+    requestLogMock.mockReset();
+    modelTableMock.mockReset();
+    useUsageClientsMock.mockReturnValue({
+      data: ["Codex", "Claude Desktop", "all"],
+      isError: false,
+    });
     useModelStatsMock.mockReturnValue({ data: [] });
     useUnpricedModelUsageMock.mockReturnValue({
       data: [],
@@ -124,10 +145,22 @@ describe("UsageDashboard", () => {
     });
   });
 
-  it("uses the saved refresh interval when mounted", () => {
-    renderDashboard({ refreshIntervalMs: 5000 });
-
-    expect(screen.getByTestId("select-5000")).toBeInTheDocument();
+  it("uses a fixed 30-second interval without a refresh selector or visible page title", () => {
+    renderDashboard();
+    expect(usageHeroMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ refreshIntervalMs: 30000 }),
+    );
+    expect(useModelStatsMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.anything(),
+      { refetchInterval: 30000 },
+    );
+    expect(
+      screen.queryByLabelText("usage.refreshInterval"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "usage.title" })).toHaveClass(
+      "sr-only",
+    );
   });
 
   it("keeps the dashboard scoped to Codex without exposing retired clients", async () => {
@@ -239,37 +272,48 @@ describe("UsageDashboard", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("persists refresh interval changes", async () => {
-    const onRefreshIntervalChange = vi.fn().mockResolvedValue(true);
-    renderDashboard({ onRefreshIntervalChange });
-
-    fireEvent.click(
-      within(screen.getByTestId("select-30000")).getByRole("button", {
-        name: "choose-5000",
+  it("combines client and model filters for every Usage view and clears them independently", async () => {
+    useModelStatsMock.mockReturnValue({
+      data: [{ model: "gpt-6-astra" }, { model: "all" }],
+    });
+    renderDashboard();
+    fireEvent.click(screen.getByRole("option", { name: "Claude Desktop" }));
+    fireEvent.click(screen.getByRole("option", { name: "gpt-6-astra" }));
+    const filters = expect.objectContaining({
+      clientName: "Claude Desktop",
+      model: "gpt-6-astra",
+      refreshIntervalMs: 30000,
+    });
+    expect(usageHeroMock).toHaveBeenLastCalledWith(filters);
+    expect(usageTrendMock).toHaveBeenLastCalledWith(filters);
+    expect(requestLogMock).toHaveBeenLastCalledWith(filters);
+    expect(useUnpricedModelUsageMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        clientName: "Claude Desktop",
+        model: "gpt-6-astra",
       }),
+      expect.anything(),
     );
-
-    await waitFor(() =>
-      expect(onRefreshIntervalChange).toHaveBeenCalledWith(5000),
+    await userEvent.click(
+      screen.getByRole("tab", { name: "usage.modelStats" }),
     );
-    expect(screen.getByTestId("select-5000")).toBeInTheDocument();
+    expect(modelTableMock).toHaveBeenLastCalledWith(filters);
+    fireEvent.click(screen.getByRole("option", { name: "All clients" }));
+    expect(usageHeroMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ clientName: undefined, model: "gpt-6-astra" }),
+    );
+    fireEvent.click(screen.getByRole("option", { name: "usage.allModels" }));
+    expect(usageHeroMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ clientName: undefined, model: undefined }),
+    );
   });
 
-  it("rolls back optimistic interval changes when persistence fails", async () => {
-    const onRefreshIntervalChange = vi.fn().mockResolvedValue(false);
-    renderDashboard({ onRefreshIntervalChange });
-
-    fireEvent.click(
-      within(screen.getByTestId("select-30000")).getByRole("button", {
-        name: "choose-5000",
-      }),
-    );
-
-    await waitFor(() =>
-      expect(onRefreshIntervalChange).toHaveBeenCalledWith(5000),
-    );
-    await waitFor(() =>
-      expect(screen.getByTestId("select-30000")).toBeInTheDocument(),
+  it("keeps a client named all distinct from the all-clients option", () => {
+    renderDashboard();
+    fireEvent.click(screen.getByRole("option", { name: "all" }));
+    expect(usageHeroMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ clientName: "all" }),
     );
   });
 });

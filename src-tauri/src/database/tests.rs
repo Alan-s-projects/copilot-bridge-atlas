@@ -335,9 +335,20 @@ fn archive_client_usage_migration_preserves_unattributed_history() -> Result<(),
         let saved: (u64, String, String, String) = conn.query_row(
             "SELECT request_count,total_cost_usd,client_costs,client_usage FROM usage_daily_rollups",
             [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)))?;
-        assert_eq!(saved, (3, "7".into(), r#"{"Claude Code":4,"Claude Desktop":3}"#.into(), "{}".into()));
+        assert_eq!(
+            saved,
+            (
+                3,
+                "7".into(),
+                r#"{"Claude Code":4,"Claude Desktop":3}"#.into(),
+                "{}".into()
+            )
+        );
     }
-    assert_eq!(db.get_usage_clients()?, vec!["Claude Code", "Claude Desktop"]);
+    assert_eq!(
+        db.get_usage_clients()?,
+        vec!["Claude Code", "Claude Desktop"]
+    );
     let all = db.get_usage_summary(None, None, None, None, None)?;
     assert_eq!(all.total_requests, 3);
     assert_eq!(all.total_cost, "7.000000");

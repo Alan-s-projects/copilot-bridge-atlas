@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { ClaudeModelMapping } from "@/components/settings/ClaudeModelMapping";
 import { useClaudeMappings, defaultClaude } from "@/hooks/useClaudeMappings";
@@ -53,6 +59,43 @@ beforeEach(() => {
     mocks.config = update(mocks.config);
   });
 });
+it("shows a single Saved status in the section header", () => {
+  Object.assign(mocks.config!.claude!, {
+    sonnet: "gpt-6-astra",
+    opus: "gpt-6-astra",
+    haiku: "gpt-6-astra",
+    fable: "gpt-6-astra",
+  });
+  render(<Page />);
+  expect(screen.getAllByText("Saved")).toHaveLength(1);
+  const heading = screen.getByRole("heading", { name: "Claude model mapping" });
+  expect(heading.parentElement).toContainElement(screen.getByRole("status"));
+  expect(
+    screen.queryByText(/Choose an enabled Copilot model/),
+  ).not.toBeInTheDocument();
+});
+
+it("keeps the shared status saving until concurrent field writes finish", async () => {
+  const finishes: (() => void)[] = [];
+  mocks.save.mockImplementation(async (update) => {
+    await new Promise<void>((resolve) => finishes.push(resolve));
+    mocks.config = update(mocks.config);
+  });
+  render(<Page />);
+  fireEvent.change(screen.getByLabelText("sonnet"), {
+    target: { value: "gpt-6-astra" },
+  });
+  fireEvent.change(screen.getByLabelText("opus"), {
+    target: { value: "gpt-6-luna" },
+  });
+  expect(screen.getAllByText("Saving…")).toHaveLength(1);
+  await act(async () => finishes[0]());
+  expect(screen.getByRole("status")).toHaveTextContent("Saving…");
+  expect(screen.queryByText("Saved")).not.toBeInTheDocument();
+  await act(async () => finishes[1]());
+  expect(screen.getByRole("status")).toHaveTextContent("Saved");
+});
+
 it("counts each unset role, preserves explicit choices and clears only after saving", async () => {
   const { rerender } = render(<Page />);
   expect(

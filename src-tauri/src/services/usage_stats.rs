@@ -394,14 +394,7 @@ impl Database {
         provider_name: Option<&str>,
         model: Option<&str>,
     ) -> Result<UsageSummary, AppError> {
-        self.get_usage_summary_filtered(
-            start_date,
-            end_date,
-            app_type,
-            provider_name,
-            model,
-            None,
-        )
+        self.get_usage_summary_filtered(start_date, end_date, app_type, provider_name, model, None)
     }
 
     /// Client-filtered variant; the original method keeps all-client behavior.
@@ -1003,7 +996,12 @@ impl Database {
             filters.provider_name.as_deref(),
             filters.model.as_deref(),
         );
-        push_client_filter(&mut conditions, &mut params, "l", filters.client_name.as_deref());
+        push_client_filter(
+            &mut conditions,
+            &mut params,
+            "l",
+            filters.client_name.as_deref(),
+        );
         if let Some(status) = filters.status_code {
             conditions.push("l.status_code = ?".to_string());
             params.push(Box::new(status as i64));

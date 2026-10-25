@@ -168,15 +168,24 @@ mod tests {
     fn calendar_usage_presets_validate_and_round_trip_in_database() -> Result<(), AppError> {
         let db = Database::memory()?;
         for preset in ["this-week", "this-month"] {
-            let range = UsageDateRange { preset: preset.into(), ..Default::default() };
+            let range = UsageDateRange {
+                preset: preset.into(),
+                ..Default::default()
+            };
             range.validate()?;
             // Frontend resolves calendar bounds; no custom timestamps are required.
             db.set_usage_date_range(range.clone())?;
             assert_eq!(db.get_usage_date_range()?, range);
             let stored = db.get_setting("usage_date_range")?.unwrap();
-            assert_eq!(serde_json::from_str::<UsageDateRange>(&stored).unwrap(), range);
+            assert_eq!(
+                serde_json::from_str::<UsageDateRange>(&stored).unwrap(),
+                range
+            );
         }
-        let invalid = UsageDateRange { preset: "this-year".into(), ..Default::default() };
+        let invalid = UsageDateRange {
+            preset: "this-year".into(),
+            ..Default::default()
+        };
         assert!(invalid.validate().is_err());
         assert!(db.set_usage_date_range(invalid).is_err());
         db.set_setting("usage_date_range", r#"{"preset":"this-year"}"#)?;

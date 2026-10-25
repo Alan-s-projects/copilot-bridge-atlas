@@ -18,6 +18,7 @@ interface RequestLogTableProps {
   appType?: string;
   providerName?: string;
   model?: string;
+  clientName?: string;
   refreshIntervalMs: number;
 }
 
@@ -26,6 +27,7 @@ export function RequestLogTable({
   appType: dashboardAppType,
   providerName,
   model,
+  clientName,
   refreshIntervalMs,
   columns,
 }: RequestLogTableProps) {
@@ -44,6 +46,7 @@ export function RequestLogTable({
         : undefined,
     providerName,
     model,
+    clientName,
   };
 
   const { data: result, isLoading } = useRequestLogs({
@@ -66,6 +69,7 @@ export function RequestLogTable({
     dashboardAppType,
     providerName,
     model,
+    clientName,
     range.customEndDate,
     range.customStartDate,
     range.liveEndTime,

@@ -29,9 +29,8 @@ describe("Connect client selection", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("copies gateway values and opens model settings without changing the connection", () => {
-    const openModels = vi.fn();
-    render(<ConnectPage onOpenModels={openModels} mappingCount={2} />);
+  it("copies gateway values without the removed Models footer", () => {
+    render(<ConnectPage />);
     fireEvent.click(screen.getByRole("button", { name: "Claude Desktop" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Copy gateway base url" }),
@@ -41,8 +40,10 @@ describe("Connect client selection", () => {
       screen.getByRole("button", { name: "Copy gateway api key" }),
     );
     expect(copyText).toHaveBeenCalledWith("atlas-local");
-    fireEvent.click(screen.getByRole("button", { name: /Open Models/ }));
-    expect(openModels).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByRole("button", { name: /Open Models/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Models & account")).not.toBeInTheDocument();
   });
   it("keeps Codex as default and shows the unprefixed Claude gateway setup", () => {
     render(<ConnectPage />);

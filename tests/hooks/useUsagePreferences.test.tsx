@@ -53,6 +53,30 @@ function setup() {
 }
 
 describe("Usage preferences", () => {
+  it.each(["this-week", "this-month"] as const)(
+    "persists and reloads the %s calendar preset",
+    async (preset) => {
+      const first = setup();
+      await waitFor(() =>
+        expect(first.result.current.range.range.preset).toBe("7d"),
+      );
+      act(() => first.result.current.range.change({ preset }));
+      await waitFor(() =>
+        expect(mocks.setRange).toHaveBeenCalledWith(
+          { preset },
+          expect.anything(),
+        ),
+      );
+      await waitFor(() =>
+        expect(first.result.current.range.range).toEqual({ preset }),
+      );
+      first.unmount();
+      const reopened = setup();
+      await waitFor(() =>
+        expect(reopened.result.current.range.range).toEqual({ preset }),
+      );
+    },
+  );
   it("orders rapid date changes so the latest selection stays saved", async () => {
     const { result } = setup();
     await waitFor(() =>

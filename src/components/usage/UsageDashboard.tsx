@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { UsageHero } from "./UsageHero";
 import { UsageTrendChart } from "./UsageTrendChart";
@@ -6,13 +6,7 @@ import { RequestLogTable } from "./RequestLogTable";
 import { ModelStatsTable } from "./ModelStatsTable";
 import { type UsageRangeSelection } from "@/types/usage";
 import { motion } from "framer-motion";
-import {
-  AlertTriangle,
-  BarChart3,
-  Coins,
-  ListFilter,
-  RefreshCw,
-} from "lucide-react";
+import { AlertTriangle, BarChart3, Coins, ListFilter } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -22,9 +16,8 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { useQueryClient } from "@tanstack/react-query";
 import {
-  usageKeys,
+  useUsageClients,
   useModelStats,
   useUnpricedModelUsage,
 } from "@/lib/query/usage";
@@ -39,17 +32,9 @@ import type { UsageTableColumns, UsageTableName } from "@/lib/api/settings";
 import { TableColumnsMenu } from "./TableColumnsMenu";
 import { MODEL_STATS_COLUMNS, REQUEST_LOG_COLUMNS } from "./tableColumns";
 
-const DEFAULT_REFRESH_INTERVAL_MS = 30000;
-const REFRESH_INTERVAL_OPTIONS_MS = [0, 5000, 10000, 30000, 60000] as const;
-type RefreshIntervalOption = (typeof REFRESH_INTERVAL_OPTIONS_MS)[number];
-
-const isRefreshIntervalOption = (
-  value: number | undefined,
-): value is RefreshIntervalOption =>
-  REFRESH_INTERVAL_OPTIONS_MS.includes(value as RefreshIntervalOption);
-
-const normalizeRefreshInterval = (value: number | undefined) =>
-  isRefreshIntervalOption(value) ? value : DEFAULT_REFRESH_INTERVAL_MS;
+const REFRESH_INTERVAL_MS = 30_000;
+const FILTER_TRIGGER_CLASS =
+  "h-9 w-full gap-2 bg-background text-sm [&>span:nth-of-type(2)]:min-w-0 [&>span:nth-of-type(2)]:flex-1 [&>span:nth-of-type(2)]:truncate [&>span:nth-of-type(2)]:text-left";
 
 // The "all" sentinel of Select and the user-defined name are in the same value range - there is really a model called "all"
 // There will be name collision (duplicate value, clear the filter when selected). Dynamic options are uniformly prefixed to encode isolated value ranges.
@@ -67,13 +52,9 @@ interface UsageDashboardProps {
     columns: string[],
   ) => Promise<void>;
   columnsSaving?: boolean;
-  refreshIntervalMs?: number;
-  onRefreshIntervalChange?: (next: number) => Promise<boolean> | boolean | void;
 }
 
 export function UsageDashboard({
-  refreshIntervalMs: savedRefreshIntervalMs,
-  onRefreshIntervalChange,
   tableColumns,
   onTableColumnsChange,
   columnsSaving,
@@ -81,45 +62,20 @@ export function UsageDashboard({
   onRangeChange,
 }: UsageDashboardProps = {}) {
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
   const [localRange, setLocalRange] = useState<UsageRangeSelection>({
     preset: "today",
   });
   const range = savedRange ?? localRange;
   const setRange = onRangeChange ?? setLocalRange;
   const appType = "codex";
+  const [clientName, setClientName] = useState<string | undefined>(undefined);
   const [model, setModel] = useState<string | undefined>(undefined);
   const [activeTab, setActiveTab] = useState("logs");
-  const [refreshIntervalMs, setRefreshIntervalMs] = useState(() =>
-    normalizeRefreshInterval(savedRefreshIntervalMs),
-  );
-
-  useEffect(() => {
-    setRefreshIntervalMs(normalizeRefreshInterval(savedRefreshIntervalMs));
-  }, [savedRefreshIntervalMs]);
+  const refreshIntervalMs = REFRESH_INTERVAL_MS;
 
   // When the backend writes a new log, emit `usage-log-recorded`, this hook immediately invalidates all
   // usage query to achieve real-time refresh (only takes effect when the Dashboard is mounted, and monitoring is automatically canceled when leaving the page)
   useUsageEventBridge();
-
-  const changeRefreshInterval = async (next: number) => {
-    const normalized = normalizeRefreshInterval(next);
-    const previous = refreshIntervalMs;
-    setRefreshIntervalMs(normalized);
-    queryClient.invalidateQueries({ queryKey: usageKeys.all });
-    try {
-      const saved = await onRefreshIntervalChange?.(normalized);
-      if (saved === false) {
-        setRefreshIntervalMs(previous);
-      }
-    } catch (error) {
-      console.error(
-        "[UsageDashboard] Failed to persist refresh interval",
-        error,
-      );
-      setRefreshIntervalMs(previous);
-    }
-  };
 
   const locale = "en-US";
   const resolvedRange = useMemo(() => resolveUsageRange(range), [range]);
@@ -142,12 +98,13 @@ export function UsageDashboard({
     return `${startStr} - ${endStr}`;
   }, [locale, range, resolvedRange.endDate, resolvedRange.startDate, t]);
 
-  // The options query shares the model table's cache key, so it must respect
-  // the dashboard interval even when automatic refresh is disabled.
-  const optionsRefetch = {
-    refetchInterval:
-      refreshIntervalMs > 0 ? refreshIntervalMs : (false as const),
-  };
+  const optionsRefetch = { refetchInterval: REFRESH_INTERVAL_MS };
+  const clientsQuery = useUsageClients();
+  const clientOptions = useMemo(() => {
+    const names = new Set(clientsQuery.data ?? []);
+    if (clientName !== undefined) names.add(clientName);
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [clientsQuery.data, clientName]);
   const { data: modelOptionsData } = useModelStats(
     range,
     { appType },
@@ -155,7 +112,7 @@ export function UsageDashboard({
   );
   const unpricedUsageQuery = useUnpricedModelUsage(
     range,
-    { appType, model },
+    { appType, model, clientName },
     optionsRefetch,
   );
 
@@ -169,196 +126,232 @@ export function UsageDashboard({
   }, [modelOptionsData, model]);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4 }}
-      className="space-y-8 pb-8"
-    >
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <h1 className="text-2xl font-bold">{t("usage.title")}</h1>
-        </div>
-
-        <div className="flex max-w-full flex-wrap items-center gap-2">
-          <Select
-            value={model != null ? encodeOptionValue(model) : "all"}
-            onValueChange={(v) => setModel(decodeOptionValue(v))}
-          >
-            <SelectTrigger
-              className="h-9 w-[100px] bg-background text-xs focus:border-border-default [&>span]:min-w-0 [&>span]:truncate"
-              title={model ?? t("usage.filterByModel")}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="max-w-[280px]">
-              <SelectItem value="all">{t("usage.allModels")}</SelectItem>
-              {modelOptions.map((name) => (
-                <SelectItem
-                  key={name}
-                  value={encodeOptionValue(name)}
-                  title={name}
-                  className="[&>span]:min-w-0 [&>span]:truncate"
-                >
-                  {name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <div className="flex items-center gap-2">
+    <>
+      <h1 className="sr-only">{t("usage.title")}</h1>
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+        className="space-y-8 pb-8"
+      >
+        <div
+          className="flex flex-wrap items-center justify-between gap-3"
+          aria-label="Usage filters"
+        >
+          <div className="grid w-full grid-cols-1 gap-2 min-[480px]:grid-cols-2 md:flex md:w-auto">
             <Select
-              value={String(refreshIntervalMs)}
-              onValueChange={(v) => changeRefreshInterval(Number(v))}
+              value={
+                clientName !== undefined ? encodeOptionValue(clientName) : "all"
+              }
+              onValueChange={(value) => setClientName(decodeOptionValue(value))}
             >
               <SelectTrigger
-                className="h-9 w-[100px] bg-background text-xs focus:border-border-default"
-                title={t("usage.refreshInterval")}
-                aria-label={t("usage.refreshInterval")}
+                className={`${FILTER_TRIGGER_CLASS} md:w-[230px]`}
+                aria-label={t("usage.filterByClient", "Filter by client")}
+                title={clientName ?? t("usage.allClients", "All clients")}
               >
-                <span className="flex items-center gap-2">
-                  <RefreshCw className="h-3.5 w-3.5 shrink-0" />
-                  <SelectValue />
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {t("usage.client", "Client")}
                 </span>
+                <SelectValue>
+                  {clientName ?? t("common.all", "All")}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                {REFRESH_INTERVAL_OPTIONS_MS.map((ms) => (
-                  <SelectItem key={ms} value={String(ms)}>
-                    {ms > 0 ? `${ms / 1000}s` : t("usage.refreshOff")}
+                <SelectItem value="all">
+                  {t("usage.allClients", "All clients")}
+                </SelectItem>
+                {clientOptions.map((name) => (
+                  <SelectItem
+                    key={encodeOptionValue(name)}
+                    value={encodeOptionValue(name)}
+                  >
+                    {name}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-
+            <Select
+              value={model !== undefined ? encodeOptionValue(model) : "all"}
+              onValueChange={(value) => setModel(decodeOptionValue(value))}
+            >
+              <SelectTrigger
+                className={`${FILTER_TRIGGER_CLASS} md:w-[280px]`}
+                aria-label={t("usage.filterByModel")}
+                title={model ?? t("usage.allModels")}
+              >
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {t("usage.model", "Model")}
+                </span>
+                <SelectValue>{model ?? t("common.all", "All")}</SelectValue>
+              </SelectTrigger>
+              <SelectContent className="max-w-[360px]">
+                <SelectItem value="all">{t("usage.allModels")}</SelectItem>
+                {modelOptions.map((name) => (
+                  <SelectItem
+                    key={encodeOptionValue(name)}
+                    value={encodeOptionValue(name)}
+                    title={name}
+                  >
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="ml-auto shrink-0 [&>button]:min-w-[150px]">
             <UsageDateRangePicker
               selection={range}
               triggerLabel={rangeLabel}
-              onApply={(nextRange) => setRange(nextRange)}
+              onApply={setRange}
             />
           </div>
         </div>
-      </div>
+        {clientsQuery.isError && (
+          <Alert>
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription className="flex items-center justify-between gap-3">
+              <span>Could not load client filters.</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void clientsQuery.refetch()}
+              >
+                Retry
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
 
-      {unpricedUsageQuery.isError ? (
-        <Alert className="border-amber-500/40 bg-amber-500/10">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
-            <p>
-              {t(
-                "usage.priceCheckFailed",
-                "Could not check prices for this usage range. No missing-price result is available.",
-              )}
-            </p>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={unpricedUsageQuery.isFetching}
-              onClick={() => void unpricedUsageQuery.refetch()}
-            >
-              {unpricedUsageQuery.isFetching
-                ? t("common.loading", "Loading...")
-                : t("usage.retryPriceCheck", "Retry price check")}
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : (
-        unpricedUsageQuery.data &&
-        unpricedUsageQuery.data.length > 0 && (
-          <UnpricedModelsAlert
-            models={unpricedUsageQuery.data}
-            onReviewPricing={() => setActiveTab("pricing")}
-          />
-        )
-      )}
+        {unpricedUsageQuery.isError ? (
+          <Alert className="border-amber-500/40 bg-amber-500/10">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+              <p>
+                {t(
+                  "usage.priceCheckFailed",
+                  "Could not check prices for this usage range. No missing-price result is available.",
+                )}
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={unpricedUsageQuery.isFetching}
+                onClick={() => void unpricedUsageQuery.refetch()}
+              >
+                {unpricedUsageQuery.isFetching
+                  ? t("common.loading", "Loading...")
+                  : t("usage.retryPriceCheck", "Retry price check")}
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : (
+          unpricedUsageQuery.data &&
+          unpricedUsageQuery.data.length > 0 && (
+            <UnpricedModelsAlert
+              models={unpricedUsageQuery.data}
+              onReviewPricing={() => setActiveTab("pricing")}
+            />
+          )
+        )}
 
-      <UsageHero
-        range={range}
-        appType={appType}
-        model={model}
-        refreshIntervalMs={refreshIntervalMs}
-      />
+        <UsageHero
+          range={range}
+          appType={appType}
+          model={model}
+          clientName={clientName}
+          refreshIntervalMs={refreshIntervalMs}
+        />
 
-      <UsageTrendChart
-        range={range}
-        appType={appType}
-        model={model}
-        refreshIntervalMs={refreshIntervalMs}
-      />
+        <UsageTrendChart
+          range={range}
+          appType={appType}
+          model={model}
+          clientName={clientName}
+          refreshIntervalMs={refreshIntervalMs}
+        />
 
-      <div className="space-y-4">
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <TabsList className="bg-muted/50">
-              <TabsTrigger value="logs" className="gap-2">
-                <ListFilter className="h-4 w-4" />
-                {t("usage.requestLogs")}
-              </TabsTrigger>
-              <TabsTrigger value="models" className="gap-2">
-                <BarChart3 className="h-4 w-4" />
-                {t("usage.modelStats")}
-              </TabsTrigger>
-              <TabsTrigger value="pricing" className="gap-2">
-                <Coins className="h-4 w-4" />
-                {t("usage.costPricing", "Cost Pricing")}
-              </TabsTrigger>
-            </TabsList>
-            {activeTab !== "pricing" && (
-              <TableColumnsMenu
-                options={
-                  activeTab === "logs"
-                    ? REQUEST_LOG_COLUMNS
-                    : MODEL_STATS_COLUMNS
-                }
-                selected={
-                  activeTab === "logs"
-                    ? tableColumns?.requestLogs
-                    : tableColumns?.modelStats
-                }
-                saving={columnsSaving}
-                onChange={
-                  onTableColumnsChange
-                    ? (columns) =>
-                        onTableColumnsChange(
-                          activeTab === "logs" ? "requestLogs" : "modelStats",
-                          columns,
-                        )
-                    : undefined
-                }
-              />
-            )}
-          </div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
+        <div className="space-y-4">
+          <Tabs
+            value={activeTab}
+            onValueChange={setActiveTab}
+            className="w-full"
           >
-            <TabsContent value="logs" className="mt-0">
-              <RequestLogTable
-                columns={tableColumns?.requestLogs}
-                range={range}
-                appType={appType}
-                model={model}
-                refreshIntervalMs={refreshIntervalMs}
-              />
-            </TabsContent>
-            <TabsContent value="models" className="mt-0">
-              <ModelStatsTable
-                columns={tableColumns?.modelStats}
-                range={range}
-                appType={appType}
-                model={model}
-                refreshIntervalMs={refreshIntervalMs}
-              />
-            </TabsContent>
-            <TabsContent value="pricing" className="mt-0">
-              <PricingConfigPanel />
-            </TabsContent>
-          </motion.div>
-        </Tabs>
-      </div>
-    </motion.div>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <TabsList className="bg-muted/50">
+                <TabsTrigger value="logs" className="gap-2">
+                  <ListFilter className="h-4 w-4" />
+                  {t("usage.requestLogs")}
+                </TabsTrigger>
+                <TabsTrigger value="models" className="gap-2">
+                  <BarChart3 className="h-4 w-4" />
+                  {t("usage.modelStats")}
+                </TabsTrigger>
+                <TabsTrigger value="pricing" className="gap-2">
+                  <Coins className="h-4 w-4" />
+                  {t("usage.costPricing", "Cost Pricing")}
+                </TabsTrigger>
+              </TabsList>
+              {activeTab !== "pricing" && (
+                <TableColumnsMenu
+                  options={
+                    activeTab === "logs"
+                      ? REQUEST_LOG_COLUMNS
+                      : MODEL_STATS_COLUMNS
+                  }
+                  selected={
+                    activeTab === "logs"
+                      ? tableColumns?.requestLogs
+                      : tableColumns?.modelStats
+                  }
+                  saving={columnsSaving}
+                  onChange={
+                    onTableColumnsChange
+                      ? (columns) =>
+                          onTableColumnsChange(
+                            activeTab === "logs" ? "requestLogs" : "modelStats",
+                            columns,
+                          )
+                      : undefined
+                  }
+                />
+              )}
+            </div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+            >
+              <TabsContent value="logs" className="mt-0">
+                <RequestLogTable
+                  columns={tableColumns?.requestLogs}
+                  range={range}
+                  appType={appType}
+                  model={model}
+                  clientName={clientName}
+                  refreshIntervalMs={refreshIntervalMs}
+                />
+              </TabsContent>
+              <TabsContent value="models" className="mt-0">
+                <ModelStatsTable
+                  columns={tableColumns?.modelStats}
+                  range={range}
+                  appType={appType}
+                  model={model}
+                  clientName={clientName}
+                  refreshIntervalMs={refreshIntervalMs}
+                />
+              </TabsContent>
+              <TabsContent value="pricing" className="mt-0">
+                <PricingConfigPanel />
+              </TabsContent>
+            </motion.div>
+          </Tabs>
+        </div>
+      </motion.div>
+    </>
   );
 }
 

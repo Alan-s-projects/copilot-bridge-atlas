@@ -36,7 +36,6 @@ const navigation = [
 export default function App() {
   const { count: mappingCount } = useClaudeMappings();
   const [settingsEntry, setSettingsEntry] = useState(0);
-  const [settingsInitialTab, setSettingsInitialTab] = useState<string>();
   const [view, setView] = useState<View>("provider");
   const { status } = useProxyStatus();
   const { data: availableReleaseVersion } = useAvailableRelease();
@@ -66,7 +65,6 @@ export default function App() {
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "," && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
-        setSettingsInitialTab(undefined);
         setView("settings");
       } else if (
         event.key === "Escape" &&
@@ -98,7 +96,6 @@ export default function App() {
               onClick={() => {
                 setView(target);
                 if (target === "settings") {
-                  setSettingsInitialTab(undefined);
                   setSettingsEntry((value) => value + 1);
                 }
               }}
@@ -122,44 +119,29 @@ export default function App() {
       <main
         className={`flex min-h-0 min-w-0 flex-1 flex-col ${view === "setup" || view === "settings" ? "overflow-hidden" : "overflow-y-auto"}`}
       >
+        {view === "provider" && <h1 className="sr-only">Overview</h1>}
         {view === "settings" ? (
           <SettingsPage
             key={settingsEntry}
-            initialTab={
-              settingsInitialTab ?? (mappingCount ? "copilot" : "general")
-            }
+            initialTab={mappingCount ? "copilot" : "general"}
             mappingCount={mappingCount}
             availableReleaseVersion={availableReleaseVersion}
           />
         ) : view === "setup" ? (
-          <ConnectPage
-            mappingCount={mappingCount}
-            onOpenModels={() => {
-              setSettingsInitialTab("copilot");
-              setSettingsEntry((value) => value + 1);
-              setView("settings");
-            }}
-          />
+          <ConnectPage />
         ) : view === "usage" ? (
           <UsagePage />
         ) : (
           <div className="space-y-5 px-6 pb-6 pt-4">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex min-w-0 flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  <h1 className="text-2xl font-bold tracking-tight">
-                    Overview
-                  </h1>
-                  <OverviewRefreshButton />
-                </div>
-              </div>
-            </div>
             <BridgeWarnings status={status} />
             {isLoading ? (
               <Loader2 className="h-6 w-6 animate-spin" />
             ) : provider ? (
               <>
-                <CopilotCard provider={provider} />
+                <CopilotCard
+                  provider={provider}
+                  actions={<OverviewRefreshButton />}
+                />
                 <BridgeOverview status={status} />
               </>
             ) : (

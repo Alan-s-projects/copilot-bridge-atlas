@@ -44,6 +44,34 @@ beforeEach(() => {
 });
 
 describe("Usage summary", () => {
+  it("explains excluded legacy rollups in a client-filtered view", () => {
+    summaryMock.mockReturnValue({
+      isLoading: false,
+      data: { totalRequests: 0, clientFilterIncomplete: true },
+    });
+    const { rerender } = render(
+      <UsageHero
+        range={{ preset: "30d" }}
+        clientName="Codex"
+        refreshIntervalMs={30000}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "older aggregated records",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("All clients");
+    expect(summaryMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ clientName: "Codex" }),
+      expect.anything(),
+    );
+    summaryMock.mockReturnValue({
+      isLoading: false,
+      data: { totalRequests: 0, clientFilterIncomplete: false },
+    });
+    rerender(<UsageHero range={{ preset: "30d" }} refreshIntervalMs={30000} />);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
   it("shows a compact unified summary with every metric and no client branding", () => {
     render(
       <UsageHero

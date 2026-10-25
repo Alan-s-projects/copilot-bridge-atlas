@@ -20,7 +20,15 @@ import type { UsageRangePreset, UsageRangeSelection } from "@/types/usage";
 
 type DraftField = "start" | "end";
 
-const PRESETS: UsageRangePreset[] = ["today", "1d", "7d", "14d", "30d"];
+const PRESETS: UsageRangePreset[] = [
+  "today",
+  "1d",
+  "7d",
+  "14d",
+  "30d",
+  "this-week",
+  "this-month",
+];
 
 interface UsageDateRangePickerProps {
   selection: UsageRangeSelection;

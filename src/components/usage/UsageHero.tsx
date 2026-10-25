@@ -11,6 +11,7 @@ interface UsageHeroProps {
   appType?: "codex";
   providerName?: string;
   model?: string;
+  clientName?: string;
   refreshIntervalMs: number;
 }
 
@@ -23,17 +24,28 @@ export function UsageHero({
   appType = "codex",
   providerName,
   model,
+  clientName,
   refreshIntervalMs,
 }: UsageHeroProps) {
   const { data: summary, isLoading } = useUsageSummary(
     range,
-    { appType, providerName, model },
+    { appType, providerName, model, clientName },
     {
       refetchInterval: refreshIntervalMs > 0 ? refreshIntervalMs : false,
     },
   );
 
-  return <UsageSummaryCard summary={summary} isLoading={isLoading} />;
+  return (
+    <UsageSummaryCard
+      summary={summary}
+      isLoading={isLoading}
+      notice={
+        summary?.clientFilterIncomplete
+          ? "Some older aggregated records have no per-client breakdown and are excluded from this filtered view. Choose All clients to include the complete history."
+          : undefined
+      }
+    />
+  );
 }
 
 export function UsageSummaryCard({

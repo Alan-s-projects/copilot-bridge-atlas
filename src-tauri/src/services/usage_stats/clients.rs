@@ -86,7 +86,8 @@ impl Database {
     /// names, even when it cannot supply trustworthy filtered usage metrics.
     pub fn get_usage_clients(&self) -> Result<Vec<String>, AppError> {
         let conn = lock_conn!(self.conn);
-        let sql = format!("SELECT DISTINCT client_name FROM (
+        let sql = format!(
+            "SELECT DISTINCT client_name FROM (
             SELECT {name} AS client_name FROM proxy_request_logs l WHERE {logs}
             UNION ALL
             SELECT COALESCE(NULLIF(trim(c.key), ''), 'Unknown')
@@ -95,8 +96,10 @@ impl Database {
             SELECT COALESCE(NULLIF(trim(c.key), ''), 'Unknown')
             FROM usage_daily_rollups r, json_each(r.client_costs) c WHERE {rollups}
         ) ORDER BY client_name COLLATE NOCASE, client_name",
-            name = client_name_sql("l"), logs = effective_usage_log_filter("l"),
-            rollups = effective_usage_rollup_filter("r"));
+            name = client_name_sql("l"),
+            logs = effective_usage_log_filter("l"),
+            rollups = effective_usage_rollup_filter("r")
+        );
         let mut statement = conn.prepare(&sql)?;
         let rows = statement.query_map([], |row| row.get(0))?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -157,8 +160,11 @@ mod tests {
             conn.execute("INSERT INTO proxy_request_logs
                 (request_id,provider_id,app_type,model,client_name,latency_ms,status_code,created_at)
                 VALUES ('foreign','p','other-app','m','Unrelated app',1,200,1578000000)", [])?;
-            conn.execute("INSERT INTO usage_daily_rollups (date,app_type,provider_id,model,client_costs)
-                VALUES ('2020-01-02','other-app','p','m','{\"Foreign archive\":1}')", [])?;
+            conn.execute(
+                "INSERT INTO usage_daily_rollups (date,app_type,provider_id,model,client_costs)
+                VALUES ('2020-01-02','other-app','p','m','{\"Foreign archive\":1}')",
+                [],
+            )?;
         }
         assert_eq!(db.get_usage_clients()?, vec!["Claude Code", "Unknown"]);
         for selected in ["Unknown", "", "   "] {
@@ -177,7 +183,10 @@ mod tests {
             10,
         )?;
         assert_eq!(logs.total, 4);
-        assert!(logs.data.iter().all(|row| row.client.client_name == "Unknown"));
+        assert!(logs
+            .data
+            .iter()
+            .all(|row| row.client.client_name == "Unknown"));
         assert!(logs
             .data
             .iter()

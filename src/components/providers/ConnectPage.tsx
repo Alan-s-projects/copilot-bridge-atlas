@@ -1,31 +1,42 @@
 import { useState } from "react";
+import { Code2, Monitor, Terminal } from "lucide-react";
 import { CodexSetupSuggestion } from "./CodexSetupSuggestion";
 import { useGlobalProxyConfig } from "@/lib/query/proxy";
 import { copyText } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
+import { MappingCountBadge } from "@/components/settings/MappingCountBadge";
+import {
+  SettingsSection,
+  settingsSidebarClassName,
+  settingsSidebarItemClassName,
+} from "@/components/ui/settings-section";
 
-export function ConnectPage() {
+export function ConnectPage({
+  onOpenModels,
+  mappingCount,
+}: {
+  onOpenModels?: () => void;
+  mappingCount?: number;
+}) {
   const [client, setClient] = useState("codex");
   const { data: config } = useGlobalProxyConfig();
   const sidebar = (
-    <nav
-      aria-label="Clients"
-      className="flex w-36 shrink-0 flex-col gap-1 self-start rounded-lg border border-border/60 bg-muted/30 p-2 sm:w-44"
-    >
+    <nav aria-label="Clients" className={settingsSidebarClassName}>
       {(
         [
-          ["codex", "Codex"],
-          ["desktop", "Claude Desktop"],
-          ["cli", "Claude Code"],
+          ["codex", "Codex", Code2],
+          ["desktop", "Claude Desktop", Monitor],
+          ["cli", "Claude Code", Terminal],
         ] as const
-      ).map(([id, label]) => (
+      ).map(([id, label, Icon]) => (
         <Button
           key={id}
           variant="ghost"
           aria-current={client === id ? "page" : undefined}
-          className={`justify-start whitespace-normal text-left ${client === id ? "bg-background" : ""}`}
+          className={settingsSidebarItemClassName}
           onClick={() => setClient(id)}
         >
+          <Icon aria-hidden className="h-4 w-4 shrink-0" />
           {label}
         </Button>
       ))}
@@ -38,58 +49,78 @@ export function ConnectPage() {
   const base = `http://${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${config?.claude?.port ?? 15723}`;
   const shell = `ANTHROPIC_BASE_URL='${base}' ANTHROPIC_API_KEY='atlas-local' ANTHROPIC_MODEL='claude-sonnet-5' claude`;
   return (
-    <section className="space-y-5 overflow-auto px-6 pb-6 pt-4">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-2xl font-bold tracking-tight">Connect</h1>
-      </div>
-      <div className="flex min-w-0 gap-3 sm:gap-5">
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 sm:px-6">
+      <h1 className="sr-only">Connect</h1>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 sm:flex-row sm:gap-5">
         {sidebar}
-        <section className="min-w-0 flex-1 space-y-4 rounded-xl border bg-card p-6">
-          <h2 className="font-semibold">
-            {client === "desktop" ? "Claude Desktop gateway" : "Claude Code"}
-          </h2>
-          {client === "desktop" ? (
-            <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-4 text-sm">
-              <dt>Gateway base URL</dt>
-              <dd className="flex items-center justify-between gap-3">
-                <code>{base}</code>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void copyText(base)}
-                >
-                  Copy
+        <div className="min-h-0 min-w-0 flex-1 space-y-6 overflow-y-auto overscroll-contain pb-1 pr-1">
+          <SettingsSection
+            title={
+              client === "desktop" ? "Claude Desktop gateway" : "Claude Code"
+            }
+          >
+            {client === "desktop" ? (
+              <dl className="space-y-2 text-sm">
+                {[
+                  ["Gateway base URL", base, true],
+                  ["Credential kind", "Static API key", false],
+                  ["Gateway API key", "atlas-local", true],
+                  ["Auth scheme", "x-api-key", false],
+                  ["Model discovery", "On", false],
+                ].map(([label, value, canCopy]) => (
+                  <div
+                    key={String(label)}
+                    className="grid gap-1 py-1 sm:grid-cols-[160px_minmax(0,1fr)] sm:items-center sm:gap-4"
+                  >
+                    <dt>{label}</dt>
+                    <dd className="flex min-w-0 items-center justify-between gap-3">
+                      <span
+                        className={
+                          label === "Credential kind" ||
+                          label === "Model discovery"
+                            ? ""
+                            : "break-all font-mono"
+                        }
+                      >
+                        {value}
+                      </span>
+                      {canCopy && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`Copy ${String(label).toLowerCase()}`}
+                          onClick={() => void copyText(String(value))}
+                        >
+                          Copy
+                        </Button>
+                      )}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            ) : (
+              <>
+                <pre className="overflow-auto whitespace-pre-wrap break-all rounded-lg border bg-background p-4 text-sm">
+                  {shell}
+                </pre>
+                <Button variant="outline" onClick={() => void copyText(shell)}>
+                  Copy command
                 </Button>
-              </dd>
-              <dt>Credential kind</dt>
-              <dd>Static API key</dd>
-              <dt>Gateway API key</dt>
-              <dd>
-                <code>atlas-local</code>
-              </dd>
-              <dt>Auth scheme</dt>
-              <dd>
-                <code>x-api-key</code>
-              </dd>
-              <dt>Model discovery</dt>
-              <dd>On</dd>
-            </dl>
-          ) : (
-            <>
-              <pre className="overflow-auto whitespace-pre-wrap break-all rounded-lg bg-muted p-4 text-sm">
-                {shell}
-              </pre>
-              <Button variant="outline" onClick={() => void copyText(shell)}>
-                Copy command
+              </>
+            )}
+          </SettingsSection>
+          {onOpenModels && (
+            <SettingsSection title="Models & account">
+              <p className="text-sm text-muted-foreground">
+                Uses the GitHub account and explicit Claude model mappings
+                selected in Models.
+              </p>
+              <Button variant="outline" onClick={onOpenModels}>
+                Open Models <MappingCountBadge count={mappingCount} />
               </Button>
-            </>
+            </SettingsSection>
           )}
-          <p className="text-xs text-muted-foreground">
-            Atlas uses the Copilot account selected in Settings. The local key
-            is a placeholder, not a Copilot credential. Keep the gateway on
-            loopback.
-          </p>
-        </section>
+        </div>
       </div>
     </section>
   );

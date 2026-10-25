@@ -1,3 +1,4 @@
+import { SettingsSection } from "@/components/ui/settings-section";
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { ArrowUpRight, CircleArrowUp, Github } from "lucide-react";
@@ -59,10 +60,7 @@ export function AboutSection({
           </Button>
         </div>
       )}
-      <section className="space-y-5 rounded-xl border bg-card p-6">
-        <h2 className="text-xl font-semibold">
-          Copilot Bridge Atlas {version}
-        </h2>
+      <SettingsSection title={`Copilot Bridge Atlas ${version}`}>
         <div className="flex flex-wrap gap-3">
           <Button
             variant="outline"
@@ -76,7 +74,7 @@ export function AboutSection({
             GitHub
           </Button>
         </div>
-      </section>
+      </SettingsSection>
     </div>
   );
 }

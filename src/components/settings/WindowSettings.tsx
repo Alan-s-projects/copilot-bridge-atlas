@@ -1,7 +1,8 @@
 import { useTranslation } from "react-i18next";
 import type { SettingsFormState } from "@/hooks/useSettings";
 import { Power } from "lucide-react";
-import { ToggleRow } from "@/components/ui/toggle-row";
+import { Switch } from "@/components/ui/switch";
+import { SettingsSection } from "@/components/ui/settings-section";
 
 export function WindowSettings({
   settings,
@@ -12,14 +13,18 @@ export function WindowSettings({
 }) {
   const { t } = useTranslation();
   return (
-    <section className="space-y-4">
-      <h3 className="text-sm font-medium">{t("settings.windowBehavior")}</h3>
-      <ToggleRow
-        icon={<Power className="h-4 w-4" />}
-        title={t("settings.launchOnStartup")}
-        checked={!!settings.launchOnStartup}
-        onCheckedChange={(value) => onChange({ launchOnStartup: value })}
-      />
-    </section>
+    <SettingsSection title={t("settings.windowBehavior")}>
+      <label className="flex items-center justify-between gap-4">
+        <span className="flex items-center gap-3 text-sm">
+          <Power aria-hidden className="h-4 w-4" />
+          {t("settings.launchOnStartup")}
+        </span>
+        <Switch
+          checked={!!settings.launchOnStartup}
+          onCheckedChange={(value) => onChange({ launchOnStartup: value })}
+          aria-label={t("settings.launchOnStartup")}
+        />
+      </label>
+    </SettingsSection>
   );
 }

@@ -59,28 +59,52 @@ fn claude_client(user_agent: &str) -> Option<&'static str> {
     }
 }
 
+// Desktop's Electron networking (including gateway probes) is separate from
+// the claude-cli agent. Read an exact product token, not an arbitrary substring
+// or a generic Electron/Anthropic SDK signature shared by other applications.
+fn claude_desktop_version(user_agent: &str) -> Option<&str> {
+    user_agent.split_ascii_whitespace().find_map(|token| {
+        let (product, version) = token.split_once('/')?;
+        (product.eq_ignore_ascii_case("claude")
+            && !version.is_empty()
+            && version.len() <= 64
+            && version.as_bytes()[0].is_ascii_digit()
+            && version
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b".-_+".contains(&c)))
+        .then_some(version)
+    })
+}
+
 pub fn detect_client(headers: &HeaderMap) -> ClientIdentity {
     let ua = headers
         .get("user-agent")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .trim();
-    let (ua_id, version) = ua.split_once('/').unwrap_or((ua, ""));
-    let ua_name = claude_client(ua).or_else(|| {
-        if version.is_empty() {
-            let lower = ua.to_ascii_lowercase();
-            ["codex/", "codex_", "codex-", "codex "]
-                .iter()
-                .any(|p| lower.starts_with(p))
-                .then_some("Codex — unspecified")
-        } else {
-            classify(&ua_id.to_ascii_lowercase()).or_else(|| {
-                ua_id
-                    .eq_ignore_ascii_case("codex")
+    let (ua_id, mut version) = ua.split_once('/').unwrap_or((ua, ""));
+    let desktop_version = claude_desktop_version(ua);
+    let ua_name = desktop_version
+        .map(|_| "Claude Desktop")
+        .or_else(|| claude_client(ua))
+        .or_else(|| {
+            if version.is_empty() {
+                let lower = ua.to_ascii_lowercase();
+                ["codex/", "codex_", "codex-", "codex "]
+                    .iter()
+                    .any(|p| lower.starts_with(p))
                     .then_some("Codex — unspecified")
-            })
-        }
-    });
+            } else {
+                classify(&ua_id.to_ascii_lowercase()).or_else(|| {
+                    ua_id
+                        .eq_ignore_ascii_case("codex")
+                        .then_some("Codex — unspecified")
+                })
+            }
+        });
+    if let Some(desktop_version) = desktop_version {
+        version = desktop_version;
+    }
     let origin = headers
         .get("originator")
         .and_then(|v| v.to_str().ok())
@@ -111,6 +135,51 @@ pub fn detect_client(headers: &HeaderMap) -> ClientIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn observed_desktop_gateway_probe_user_agent() {
+        // Captured from Claude Desktop's Test connection action. Its native
+        // Electron probe does not use the claude-cli agent's User-Agent.
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Claude/3.6556.2 Chrome/152.0.7977.167 Electron/44.9.3 Safari/537.36".parse().unwrap());
+        let identity = detect_client(&headers);
+        assert_eq!(identity.client_name, "Claude Desktop");
+        assert_eq!(identity.client_source, "user-agent");
+        assert_eq!(identity.client_version.as_deref(), Some("3.6556.2"));
+    }
+
+    #[test]
+    fn desktop_product_token_is_distinct_from_cli_and_generic_clients() {
+        let mut headers = HeaderMap::new();
+        for ua in [
+            "Claude/1.0.0",
+            "Mozilla/5.0 Chrome/130.0.0.0 Claude/1.0.0 Electron/33.0.0 Safari/537.36",
+            "Mozilla/5.0 claude/1.0.0",
+        ] {
+            headers.insert("user-agent", ua.parse().unwrap());
+            let identity = detect_client(&headers);
+            assert_eq!(identity.client_name, "Claude Desktop");
+            assert_eq!(identity.client_source, "user-agent");
+            assert_eq!(identity.client_version.as_deref(), Some("1.0.0"));
+        }
+        for ua in [
+            "Mozilla/5.0 Chrome/130.0.0.0 Electron/33.0.0",
+            "NotClaude/1.0.0",
+            "https://example.com/Claude/1.0.0",
+            "Claude/",
+            "Claude/not-a-version",
+            "Claude/1.0.0!",
+            "Anthropic/JS 0.137.0",
+        ] {
+            headers.insert("user-agent", ua.parse().unwrap());
+            assert_eq!(detect_client(&headers), ClientIdentity::default(), "{ua}");
+        }
+        headers.insert("user-agent", "Claude/1.0.0".parse().unwrap());
+        headers.insert("originator", "codex_desktop".parse().unwrap());
+        let identity = detect_client(&headers);
+        assert_eq!(identity.client_name, "Codex Desktop");
+        assert_eq!(identity.client_source, "originator");
+        assert_eq!(identity.client_version, None);
+    }
     #[test]
     fn approved_rules_and_precedence() {
         for (origin, ua, name, source, version) in [

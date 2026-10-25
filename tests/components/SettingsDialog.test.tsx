@@ -230,3 +230,18 @@ describe("SettingsPage", () => {
     });
   });
 });
+
+it("places the outstanding mapping count on Models and opens the requested section", () => {
+  render(
+    <SettingsPage
+      mappingCount={2}
+      initialTab="copilot"
+      availableReleaseVersion="7.1.0"
+    />,
+  );
+  expect(
+    screen.getByLabelText("2 Claude mappings need attention"),
+  ).toHaveTextContent("2");
+  expect(screen.getByText("Copilot settings")).toBeVisible();
+  expect(screen.getByLabelText("1 update available")).toBeVisible();
+});

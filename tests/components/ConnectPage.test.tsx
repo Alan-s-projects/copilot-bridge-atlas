@@ -7,8 +7,8 @@ vi.mock("@/lib/query/proxy", () => ({
   }),
 }));
 vi.mock("@/components/providers/CodexSetupSuggestion", () => ({
-  CodexSetupSuggestion: ({ clientSelector }: any) => (
-    <div>Codex TOML preview{clientSelector}</div>
+  CodexSetupSuggestion: ({ clientNavigation }: any) => (
+    <div>Codex TOML preview{clientNavigation}</div>
   ),
 }));
 vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn() }));
@@ -16,24 +16,22 @@ describe("Connect client selection", () => {
   it("keeps Codex as default and shows the unprefixed Claude gateway setup", () => {
     render(<ConnectPage />);
     expect(screen.getByText("Codex TOML preview")).toBeVisible();
-    fireEvent.change(screen.getByLabelText("Client"), {
-      target: { value: "desktop" },
-    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Claude Desktop", exact: true }),
+    );
     expect(
       screen.getByRole("heading", { name: "Claude Desktop gateway" }),
     ).toBeVisible();
     expect(screen.getByText("http://127.0.0.1:15723")).toBeVisible();
     expect(screen.getByText("atlas-local")).toBeVisible();
     expect(screen.queryByText("Codex TOML preview")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Client"), {
-      target: { value: "cli" },
-    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Claude Code", exact: true }),
+    );
     expect(screen.getByText(/ANTHROPIC_BASE_URL=/)).toHaveTextContent(
       "http://127.0.0.1:15723",
     );
-    fireEvent.change(screen.getByLabelText("Client"), {
-      target: { value: "codex" },
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Codex", exact: true }));
     expect(screen.getByText("Codex TOML preview")).toBeVisible();
   });
 });

@@ -99,40 +99,17 @@ fn configured_models(provider: &crate::Provider) -> Vec<String> {
         .collect()
 }
 fn resolve_model(id: &str, config: &ClaudeConfig, models: &[String]) -> Result<String, ProxyError> {
-    let primary = if config.sonnet.is_empty() {
-        models.first().map(String::as_str).unwrap_or("")
-    } else {
-        &config.sonnet
-    };
     let target = match role(id) {
-        Some("sonnet") => primary,
-        Some("opus") => {
-            if config.opus.is_empty() {
-                primary
-            } else {
-                &config.opus
-            }
-        }
-        Some("haiku") => {
-            if config.haiku.is_empty() {
-                primary
-            } else {
-                &config.haiku
-            }
-        }
-        Some("fable") => {
-            if config.fable.is_empty() {
-                primary
-            } else {
-                &config.fable
-            }
-        }
+        Some("sonnet") => &config.sonnet,
+        Some("opus") => &config.opus,
+        Some("haiku") => &config.haiku,
+        Some("fable") => &config.fable,
         _ => id,
     };
     if models.iter().any(|m| m == target) {
         Ok(target.into())
     } else {
-        Err(ProxyError::InvalidRequest("Select an available Copilot model in Settings → Models and check the Claude mappings in Routing".into()))
+        Err(ProxyError::InvalidRequest("Configure this Claude role with an enabled, available model in Settings → Models → Claude model mapping".into()))
     }
 }
 fn discovery(config: &ClaudeConfig, models: &[String]) -> Value {
@@ -463,10 +440,72 @@ mod tests {
         db.set_current_provider("codex", &p.id).unwrap();
         db
     }
+    fn mapped_config() -> ClaudeConfig {
+        ClaudeConfig {
+            sonnet: "gpt-6-astra".into(),
+            opus: "gpt-6-astra".into(),
+            haiku: "gpt-6-astra".into(),
+            fable: "gpt-6-astra".into(),
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn mappings_are_explicit_and_discovery_only_lists_valid_roles() {
+        let models = vec!["gpt-6-astra".into(), "gpt-6-luna".into()];
+        let mut config = ClaudeConfig::default();
+        assert!(discovery(&config, &models)["data"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(resolve_model("claude-sonnet-5", &config, &models).is_err());
+        config.sonnet = "gpt-6-astra".into();
+        assert_eq!(
+            discovery(&config, &models)["data"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        for role in ["opus", "haiku", "fable"] {
+            assert!(resolve_model(&format!("claude-{role}-5"), &config, &models).is_err());
+        }
+        config.opus = "gpt-6-luna".into();
+        assert_eq!(
+            resolve_model("claude-opus-5", &config, &models).unwrap(),
+            "gpt-6-luna"
+        );
+        let only_astra = vec!["gpt-6-astra".into()];
+        assert!(resolve_model("claude-opus-5", &config, &only_astra).is_err());
+        assert_eq!(
+            discovery(&config, &only_astra)["data"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            resolve_model("gpt-6-astra", &config, &models).unwrap(),
+            "gpt-6-astra"
+        );
+    }
+    #[tokio::test]
+    async fn unmapped_requests_fail_before_upstream_forwarding() {
+        let state = state(db());
+        state.config.write().await.claude = ClaudeConfig::default();
+        let response = messages(State(state), request(json!({"model":"claude-sonnet-5", "max_tokens":1, "messages":[{"role":"user","content":"Hi"}]}))).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("Claude model mapping"));
+    }
     fn state(db: Arc<Database>) -> ProxyState {
         ProxyState {
             db: db.clone(),
-            config: Arc::new(RwLock::new(ProxyConfig::default())),
+            config: Arc::new(RwLock::new(ProxyConfig {
+                claude: mapped_config(),
+                ..Default::default()
+            })),
             status: Arc::new(RwLock::new(Default::default())),
             start_time: Arc::new(RwLock::new(None)),
             current_providers: Arc::new(RwLock::new(HashMap::new())),
@@ -493,7 +532,13 @@ mod tests {
     }
     #[test]
     fn aliases_are_separate_from_actual_models_and_invalid_mappings_fail() {
-        let config = ClaudeConfig::default();
+        let config = ClaudeConfig {
+            sonnet: "gpt-6-astra".into(),
+            opus: "gpt-6-astra".into(),
+            haiku: "gpt-6-astra".into(),
+            fable: "gpt-6-astra".into(),
+            ..Default::default()
+        };
         let models = vec!["gpt-6-astra".into()];
         let list = discovery(&config, &models);
         assert_eq!(list["data"].as_array().unwrap().len(), 4);
@@ -524,7 +569,7 @@ mod tests {
                 listen_port: 0,
                 claude: ClaudeConfig {
                     port: 0,
-                    ..Default::default()
+                    ..mapped_config()
                 },
                 ..Default::default()
             },

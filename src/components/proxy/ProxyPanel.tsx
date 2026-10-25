@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useProvidersQuery } from "@/lib/query";
 import {
   useGlobalProxyConfig,
   useUpdateGlobalProxyConfig,
@@ -24,23 +23,19 @@ type Draft = {
   port: string;
   claudeAddress: string;
   claudePort: string;
-  mappings: Pick<ClaudeGatewayConfig, "sonnet" | "opus" | "haiku" | "fable">;
 };
 const initial: Draft = {
   address: "127.0.0.1",
   port: "15722",
   claudeAddress: "127.0.0.1",
   claudePort: "15723",
-  mappings: { sonnet: "", opus: "", haiku: "", fable: "" },
 };
-const roles = ["sonnet", "opus", "haiku", "fable"] as const;
 function endpoint(address: string, port: string, suffix: string) {
   return `http://${address.includes(":") && !address.startsWith("[") ? `[${address}]` : address}:${port}${suffix}`;
 }
 export function ProxyPanel() {
   const { data: config } = useGlobalProxyConfig();
   const { data: status } = useProxyStatusQuery();
-  const { data: providers } = useProvidersQuery();
   const { mutateAsync, isPending } = useUpdateGlobalProxyConfig({
     showSuccessToast: false,
   });
@@ -67,12 +62,6 @@ export function ProxyPanel() {
       port: String(config.listenPort),
       claudeAddress: c.address,
       claudePort: String(c.port),
-      mappings: {
-        sonnet: c.sonnet,
-        opus: c.opus,
-        haiku: c.haiku,
-        fable: c.fable,
-      },
     };
     latest.current = next;
     setDraft(next);
@@ -113,16 +102,16 @@ export function ProxyPanel() {
       .then(async () => {
         const base = current.current;
         if (!base) return;
-        const value: GlobalProxyConfig = {
+        const value = (base: GlobalProxyConfig): GlobalProxyConfig => ({
           ...base,
           listenAddress: next.address.trim(),
           listenPort: a,
           claude: {
+            ...(base.claude ?? defaultClaude),
             address: next.claudeAddress.trim(),
             port: b,
-            ...next.mappings,
           },
-        };
+        });
         try {
           await mutateAsync(value);
           if (version.current === rev) {
@@ -163,19 +152,6 @@ export function ProxyPanel() {
     setNotice("");
     setInvalid(false);
   };
-  const provider =
-    providers?.providers[providers.currentProviderId] ??
-    Object.values(providers?.providers ?? {})[0];
-  const models: string[] = (
-    provider?.settingsConfig?.modelCatalog?.models ?? []
-  )
-    .filter(
-      (m: any) =>
-        m.enabled !== false &&
-        m.available !== false &&
-        typeof m.model === "string",
-    )
-    .map((m: any) => m.model);
   return (
     <div className="space-y-5">
       {(
@@ -255,51 +231,6 @@ export function ProxyPanel() {
           </div>
         </section>
       ))}
-      <section
-        aria-label="Claude model mapping"
-        className="space-y-4 rounded-xl border bg-card p-6"
-      >
-        <h3 className="font-semibold">Claude model mapping</h3>
-        {roles.map((role) => (
-          <div
-            key={role}
-            className="grid grid-cols-[80px_1fr] items-center gap-4"
-          >
-            <Label htmlFor={`claude-${role}`} className="capitalize">
-              {role}
-            </Label>
-            <select
-              id={`claude-${role}`}
-              disabled={!config}
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-              value={draft.mappings[role]}
-              onChange={(e) =>
-                edit({
-                  mappings: { ...draft.mappings, [role]: e.target.value },
-                })
-              }
-              onBlur={save}
-            >
-              <option value="">
-                {role === "sonnet"
-                  ? `Automatic${models[0] ? ` (${models[0]})` : " — select models in Settings"}`
-                  : "Use Sonnet mapping"}
-              </option>
-              {draft.mappings[role] &&
-                !models.includes(draft.mappings[role]) && (
-                  <option value={draft.mappings[role]}>
-                    {draft.mappings[role]} (unavailable)
-                  </option>
-                )}
-              {models.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
-          </div>
-        ))}
-      </section>
       {(notice || isPending) && (
         <p
           role={invalid ? "alert" : "status"}

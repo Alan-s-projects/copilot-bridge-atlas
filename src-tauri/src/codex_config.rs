@@ -239,11 +239,6 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
     else {
         return Vec::new();
     };
-    let ultra_enabled = settings
-        .get("enableUltraReasoning")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
     let mut seen = std::collections::HashSet::new();
     let mut specs = Vec::new();
 
@@ -314,7 +309,7 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
                 .collect::<Vec<_>>();
             reasoning_levels = Some(supported.into_iter().map(str::to_string).collect());
         }
-        if ultra_enabled {
+        {
             if let Some(ref mut levels) = reasoning_levels {
                 let has_reasoning = levels.iter().any(|l| l != "none");
                 if has_reasoning && !levels.iter().any(|l| l == "ultra") {
@@ -535,13 +530,13 @@ mod tests {
         assert_eq!(first["supports_reasoning_summaries"], false);
         let second = &catalog["models"][1];
         assert_eq!(second["context_window"], 936000);
-        assert_eq!(second["default_reasoning_level"], "high");
+        assert_eq!(second["default_reasoning_level"], "ultra");
         assert_eq!(
             second["supported_reasoning_levels"]
                 .as_array()
                 .unwrap()
                 .len(),
-            2
+            3
         );
         assert_eq!(
             settings["modelCatalog"]["models"][0]["reasoningLevels"],
@@ -563,7 +558,7 @@ mod tests {
     }
 
     #[test]
-    fn ultra_toggle_extends_live_efforts() {
+    fn ultra_is_always_exposed_even_for_legacy_disabled_settings() {
         let models = json!([
             {"model":"reasoning", "reasoningLevels":["low","high"], "supportedReasoningLevels":["low","high","max"]},
             {"model":"none-only", "supportedReasoningLevels":["none"]},
@@ -586,14 +581,7 @@ mod tests {
                 .iter()
                 .map(|level| level["effort"].as_str().unwrap())
                 .collect();
-            assert_eq!(
-                levels,
-                if enabled {
-                    vec!["low", "high", "max", "ultra"]
-                } else {
-                    vec!["low", "high", "max"]
-                }
-            );
+            assert_eq!(levels, vec!["low", "high", "max", "ultra"]);
             assert_eq!(
                 entries[1]["supported_reasoning_levels"][0]["effort"],
                 "none"

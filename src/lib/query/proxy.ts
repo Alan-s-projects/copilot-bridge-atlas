@@ -1,8 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { proxyApi } from "@/lib/api/proxy";
+import { proxyApi, type GlobalConfigUpdate } from "@/lib/api/proxy";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
-import type { GlobalProxyConfig } from "@/types/proxy";
 import { useWindowActive } from "@/lib/windowActivity";
 
 export const proxyKeys = {
@@ -52,9 +51,10 @@ export function useUpdateGlobalProxyConfig({
   const { t } = useTranslation();
 
   return useMutation({
-    mutationFn: (config: GlobalProxyConfig) =>
+    mutationFn: (config: GlobalConfigUpdate) =>
       proxyApi.updateGlobalProxyConfig(config),
-    onSuccess: () => {
+    onSuccess: (config) => {
+      queryClient.setQueryData(proxyKeys.globalConfig, config);
       if (showSuccessToast) {
         toast.success(t("proxy.settings.toast.saved"), { closeButton: true });
       }

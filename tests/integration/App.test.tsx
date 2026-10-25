@@ -1,3 +1,6 @@
+vi.mock("@/hooks/useClaudeMappings", () => ({
+  useClaudeMappings: () => ({ count: mocks.mappingCount }),
+}));
 import {
   act,
   fireEvent,
@@ -11,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "@/App";
 import { createTestQueryClient } from "../utils/testQueryClient";
 const mocks = vi.hoisted(() => ({
+  mappingCount: undefined as number | undefined,
   autoSaveSettings: vi.fn().mockResolvedValue(true),
   getAvailableReleaseVersion: vi.fn(),
   providers: vi.fn(() => ({
@@ -64,11 +68,14 @@ vi.mock("@/components/proxy/ProxyToggle", () => ({
 vi.mock("@/components/settings/SettingsPage", () => ({
   SettingsPage: ({
     availableReleaseVersion,
+    initialTab,
   }: {
     availableReleaseVersion?: string | null;
+    initialTab?: string;
   }) => (
     <div
       data-testid="settings-page"
+      data-initial-tab={initialTab}
       data-available-release={availableReleaseVersion ?? ""}
     >
       settings
@@ -282,4 +289,23 @@ describe("Atlas application scope", () => {
       "page",
     );
   });
+});
+
+it("opens Models from the numbered warning while retaining update notifications", async () => {
+  mocks.mappingCount = 3;
+  mocks.getAvailableReleaseVersion.mockResolvedValue("7.1.0");
+  renderApp();
+  expect(
+    screen.getByLabelText("3 Claude mappings need attention"),
+  ).toHaveTextContent("3");
+  expect(await screen.findByLabelText("1 update available")).toBeVisible();
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: /Settings 3 Claude mappings need attention/,
+    }),
+  );
+  expect(screen.getByTestId("settings-page")).toHaveAttribute(
+    "data-initial-tab",
+    "copilot",
+  );
 });

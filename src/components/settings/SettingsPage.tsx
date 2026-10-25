@@ -1,3 +1,4 @@
+import { MappingCountBadge } from "./MappingCountBadge";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
@@ -30,13 +31,17 @@ import type { SettingsFormState } from "@/hooks/useSettings";
 
 export function SettingsPage({
   availableReleaseVersion,
+  mappingCount,
+  initialTab = "general",
 }: {
   availableReleaseVersion?: string | null;
+  mappingCount?: number;
+  initialTab?: string;
 }) {
   const { t } = useTranslation();
   const { settings, isLoading, isSaving, autoSaveSettings } = useSettings();
 
-  const [activeTab, setActiveTab] = useState<string>("general");
+  const [activeTab, setActiveTab] = useState<string>(initialTab);
   const tabScrollContainerRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
@@ -116,6 +121,9 @@ export function SettingsPage({
               >
                 <Icon aria-hidden className="h-4 w-4 shrink-0" />
                 {label}
+                {value === "copilot" && (
+                  <MappingCountBadge count={mappingCount} className="ml-auto" />
+                )}
                 {value === "about" && availableReleaseVersion && (
                   <ReleaseUpdateBadge className="ml-auto" />
                 )}

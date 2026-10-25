@@ -35,6 +35,9 @@ fn anthropic_sse(event_name: &str, payload: &Value) -> Bytes {
 }
 
 fn responses_error_details(data: &Value, fallback: &str) -> (String, String) {
+    if let Some(message) = super::context_overflow::context_overflow_message(data) {
+        return (message, "invalid_request_error".into());
+    }
     let response = response_object_from_event(data);
     let error = response.get("error").unwrap_or(response);
     let message = error

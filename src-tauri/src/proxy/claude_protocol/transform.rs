@@ -145,12 +145,12 @@ fn clean_schema_inner(mut schema: Value, is_root: bool) -> Value {
             obj.insert("properties".to_string(), json!({}));
         }
 
-        // 移除 "format": "uri"
+        // Remove "format": "uri"
         if obj.get("format").and_then(|v| v.as_str()) == Some("uri") {
             obj.remove("format");
         }
 
-        // 递归清理嵌套 schema
+        // Recursively clean nested schemas
         if let Some(properties) = obj.get_mut("properties").and_then(|v| v.as_object_mut()) {
             for (_, value) in properties.iter_mut() {
                 *value = clean_schema_inner(value.clone(), false);

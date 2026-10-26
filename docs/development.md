@@ -4,6 +4,13 @@ Copilot Bridge Atlas is a Windows x64 and macOS Intel desktop app connecting Cod
 
 User installation and connection steps are in the [README](../README.md).
 
+## Source language
+
+Use English for comments, documentation, diagnostics, and test assertion messages.
+Keep Unicode coverage in fixtures, but represent CJK text with Unicode escapes so
+source files remain readable without knowing Chinese. Do not change fixture bytes
+or weaken Unicode handling merely to make the source English-only.
+
 ## Product behavior
 
 Atlas never writes Codex configuration, authentication, MCP, skills, instructions, or conversation files. Connect offers a side-by-side comparison for the bridge and for returning to OpenAI sign-in, with scrolling inside the code pane and copying of the proposed TOML. File selection sits above aligned Connection and Context dropdowns, defaulting to Copilot Bridge and Unchanged. A manual TOML location changes the preview only.

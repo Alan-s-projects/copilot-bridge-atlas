@@ -1,12 +1,12 @@
-//! OpenAI Responses API 格式转换模块
+//! OpenAI Responses API format conversion module
 //!
-//! 实现 Anthropic Messages ↔ OpenAI Responses API 格式转换。
-//! Responses API 是 OpenAI 2025 年推出的新一代 API，采用扁平化的 input/output 结构。
+//! Converts between Anthropic Messages and OpenAI Responses API formats.
+//! Introduced by OpenAI in 2025, the Responses API uses a flat input/output structure.
 //!
-//! 与 Chat Completions 的主要差异：
-//! - tool_use/tool_result 从 message content 中"提升"为顶层 input item
-//! - system prompt 使用 `instructions` 字段而非 system role message
-//! - usage 字段命名与 Anthropic 一致 (input_tokens/output_tokens)
+//! Key differences from Chat Completions:
+//! - tool_use/tool_result are lifted from message content into top-level input items
+//! - System prompts use the `instructions` field instead of system role messages
+//! - Usage field names match Anthropic (input_tokens/output_tokens)
 
 use super::tool_media::{
     strip_and_clamp_media_from_tool_value, ToolMediaScope, TOOL_RESULT_MEDIA_ATTACHED_MARKER,
@@ -21,9 +21,9 @@ use super::reasoning_bridge::{
 
 pub(crate) const TOOL_RESULT_ERROR_MARKER: &str = "[cc-switch:tool-result-error]";
 
-/// OpenAI Responses API 拒绝 `max_output_tokens` 小于 16。Anthropic 侧的合法
-/// 小预算探测请求（如 Claude Desktop 的模型可用性探测发 `max_tokens=1`）
-/// 会被严格网关整体拒绝，转换时把低于下限的预算抬到最小值而不是让请求失败。
+/// The OpenAI Responses API rejects `max_output_tokens` below 16. Valid Anthropic
+/// low-budget probes (e.g. Claude Desktop model availability checks with `max_tokens=1`)
+/// are rejected outright by strict gateways; clamp these budgets to the minimum instead.
 pub(crate) const RESPONSES_MIN_MAX_OUTPUT_TOKENS: u64 = 16;
 
 fn has_http_url_scheme(value: &str) -> bool {
@@ -1761,14 +1761,14 @@ fn responses_web_search_call_from_anthropic_blocks(
     }))
 }
 
-/// Anthropic 请求 → OpenAI Responses 请求
+/// Anthropic request → OpenAI Responses request
 ///
 /// `cache_key`: optional prompt_cache_key to inject for improved cache routing
-/// `is_codex_oauth`: 当目标后端是 ChatGPT Plus/Pro 反代 (`chatgpt.com/backend-api/codex`) 时为 true。
-/// 该后端强制要求 `store: false`，并要求 `include` 包含 `reasoning.encrypted_content`
-/// 以便在无服务端状态下保持多轮 reasoning 上下文。
-/// `codex_fast_mode`: 仅在 `is_codex_oauth` 为 true 时生效，控制是否注入
-/// `service_tier = "priority"`。
+/// `is_codex_oauth`: true for the ChatGPT Plus/Pro reverse-proxy backend (`chatgpt.com/backend-api/codex`).
+/// This backend requires `store: false` and `reasoning.encrypted_content` in `include`
+/// to preserve multi-turn reasoning context without server-side state.
+/// `codex_fast_mode`: only applies when `is_codex_oauth` is true; controls injection of
+/// `service_tier = "priority"`\u{3002}
 pub fn anthropic_to_responses(
     body: Value,
     cache_key: Option<&str>,
@@ -1777,12 +1777,12 @@ pub fn anthropic_to_responses(
 ) -> Result<Value, ProxyError> {
     let mut result = json!({});
 
-    // NOTE: 模型映射由上游统一处理（proxy::model_mapper），格式转换层只做结构转换。
+    // NOTE: Model mapping is handled upstream (proxy::model_mapper); this layer only converts structure.
     if let Some(model) = body.get("model").and_then(|m| m.as_str()) {
         result["model"] = json!(model);
     }
 
-    // system → instructions (Responses API 使用 instructions 字段)
+    // system → instructions (the Responses API uses the instructions field)
     if let Some(system) = body.get("system") {
         let instructions = if let Some(text) = system.as_str() {
             super::transform::strip_leading_anthropic_billing_header(text).to_string()
@@ -1823,7 +1823,7 @@ pub fn anthropic_to_responses(
         };
     }
 
-    // 直接透传的参数
+    // Pass-through parameters
     if let Some(v) = body.get("temperature") {
         result["temperature"] = v.clone();
     }
@@ -1843,9 +1843,9 @@ pub fn anthropic_to_responses(
         }
     }
 
-    // stop_sequences → 丢弃 (Responses API 不支持)
+    // stop_sequences → discard (unsupported by the Responses API)
 
-    // 转换 tools (过滤 BatchTool)
+    // Convert tools (filter out BatchTool)
     //
     // The Codex OAuth request contract accepts only a string `tool_choice`.
     // When Anthropic forces one hosted WebSearch tool, `"required"` is exact
@@ -1905,8 +1905,8 @@ pub fn anthropic_to_responses(
                     "name": tool.get("name").and_then(Value::as_str).unwrap_or(""),
                     "strict": tool.get("strict").and_then(Value::as_bool).unwrap_or(false),
                 });
-                // 同 transform.rs：缺失的 description 省略而非输出 null，
-                // 否则严格上游会拒绝整个请求。
+                // As in transform.rs, omit missing descriptions instead of emitting null;
+                // otherwise strict upstreams reject the entire request.
                 if let Some(description) = tool.get("description").filter(|d| !d.is_null()) {
                     response_tool["description"] = description.clone();
                 }
@@ -1956,12 +1956,9 @@ pub fn anthropic_to_responses(
     if let Some(v) = body.get("tool_choice") {
         result["tool_choice"] =
             map_tool_choice_to_responses(v, &hosted_web_search_names, is_codex_oauth);
-        if is_codex_oauth {
-            if let Some(disable_parallel) =
-                v.get("disable_parallel_tool_use").and_then(Value::as_bool)
-            {
-                result["parallel_tool_calls"] = json!(!disable_parallel);
-            }
+        if let Some(disable_parallel) = v.get("disable_parallel_tool_use").and_then(Value::as_bool)
+        {
+            result["parallel_tool_calls"] = json!(!disable_parallel);
         }
     }
 
@@ -1978,25 +1975,25 @@ pub fn anthropic_to_responses(
         result["prompt_cache_key"] = json!(key);
     }
 
-    // Codex OAuth (ChatGPT Plus/Pro 反代) 特殊协议约束：
-    // 整体依据：OpenAI 官方 codex-rs 的 `ResponsesApiRequest` 结构体
-    // (codex-rs/codex-api/src/common.rs) 是 ChatGPT 反代后端的协议契约。
-    // 任何不在该结构体里的字段都可能被 ChatGPT 后端以
-    // "Unsupported parameter: ..." 400 拒绝；任何在结构体里的必填字段
-    // 都需要在请求体里出现。
+    // Codex OAuth (ChatGPT Plus/Pro reverse proxy) protocol constraints:
+    // Basis: the official OpenAI codex-rs `ResponsesApiRequest` struct
+    // (codex-rs/codex-api/src/common.rs) defines the ChatGPT reverse-proxy protocol contract.
+    // Fields absent from that struct may cause the ChatGPT backend to return
+    // a 400 "Unsupported parameter: ..." error; all required struct fields
+    // must be present in the request body.
     //
-    // 字段处理：
-    // - store: 必须显式为 false（ChatGPT 消费级后端不允许服务端持久化）
-    // - include: 必须包含 "reasoning.encrypted_content"，
-    //   否则多轮 reasoning 中间态会丢失（无服务端状态 + 无加密回传 = 上下文断链）
-    // - max_output_tokens / temperature / top_p: 必须删除
-    //   （codex-rs 结构体根本没有这三个字段，OpenAI 自己的客户端不发它们）
-    // - instructions / tools / parallel_tool_calls: 必填字段，缺则兜底默认值
-    //   （cc-switch 的 transform 当前是"条件写入"，可能产生缺失）
-    // - service_tier: 仅在 FAST mode 开启时写入 "priority"
-    //   （与 OpenAI 官方 codex-rs 当前请求结构保持一致）
-    // - stream: 必须永远 true（codex-rs 硬编码 true，且 cc-switch 的
-    //   SSE 解析层只处理流式响应，强制覆盖避免客户端误传 false）
+    // Field handling:
+    // - store: explicitly false (the consumer ChatGPT backend forbids server-side persistence)
+    // - include: must contain "reasoning.encrypted_content";
+    //   otherwise intermediate multi-turn reasoning state is lost (no server state or encrypted round-trip)
+    // - max_output_tokens / temperature / top_p: remove all three
+    //   (absent from the codex-rs struct and never sent by OpenAI's own client)
+    // - instructions / tools / parallel_tool_calls: required; supply defaults when absent
+    //   (cc-switch currently writes these conditionally and may omit them)
+    // - service_tier: set to "priority" only when FAST mode is enabled
+    //   (matching the current official OpenAI codex-rs request structure)
+    // - stream: always true (hardcoded in codex-rs; cc-switch's SSE parser
+    //   only handles streaming responses, so override any client-supplied false)
     if is_codex_oauth {
         result["store"] = json!(false);
         if codex_fast_mode {
@@ -2025,22 +2022,22 @@ pub fn anthropic_to_responses(
         result["include"] = json!(includes);
 
         if let Some(obj) = result.as_object_mut() {
-            // —— 删除 ChatGPT 反代不接受的字段 ——
+            // Remove fields unsupported by the ChatGPT reverse proxy
             obj.remove("max_output_tokens");
             obj.remove("temperature");
             obj.remove("top_p");
 
-            // —— 兜底必填字段（or_insert：客户端送了什么就保留，否则注入默认值）——
+            // Default required fields (or_insert preserves client values when present)
             obj.entry("instructions".to_string()).or_insert(json!(""));
             obj.entry("tools".to_string()).or_insert(json!([]));
-            // Anthropic 默认允许并行工具调用。优先保留上方已转换的显式设置，
-            // 否则允许支持该能力的 Codex 模型在同一响应中批量调用独立工具。
+            // Anthropic allows parallel tool calls by default. Preserve explicit settings converted above;
+            // otherwise let capable Codex models batch independent tool calls in one response.
             obj.entry("parallel_tool_calls".to_string())
                 .or_insert(json!(true));
 
-            // —— 强制覆盖 stream = true ——
-            // 即便客户端误传 stream:false 也要覆盖，因为 codex-rs 永远 true，
-            // 且 cc-switch SSE 解析层只支持流式响应。
+            // Force stream = true
+            // Override even client-supplied stream:false: codex-rs always uses true,
+            // and cc-switch's SSE parser only supports streaming responses.
             obj.insert("stream".to_string(), json!(true));
         }
     }
@@ -2262,11 +2259,11 @@ pub(crate) fn build_anthropic_usage_from_responses(usage: Option<&Value>) -> Val
         result["cache_creation"] = v.clone();
     }
 
-    // OpenAI/Responses 的 input(prompt_tokens/input_tokens)含缓存命中，Anthropic input_tokens 不含
-    // → 减去 cache_read 与 cache_creation，使其成为 fresh input。本函数在计量意义上是 claude 专属
-    // （Codex Responses 透传走 from_codex_response_*，不调用本函数），故可安全在此扣减。三桶互斥，
-    // 恒等：input + cache_read + cache_creation == 上游 input(inclusive)。与 build_anthropic_usage_json
-    // (#2774) 及 transform_gemini 的 saturating_sub 对称；一处同时覆盖非流式与流式(streaming_responses)。
+    // OpenAI/Responses input (prompt_tokens/input_tokens) includes cache hits; Anthropic input_tokens does not.
+    // Subtract cache_read and cache_creation to get fresh input. This function handles Claude usage only
+    // (Codex Responses pass through from_codex_response_* instead), so subtraction is safe here. The three buckets
+    // are disjoint: input + cache_read + cache_creation == upstream input (inclusive). This mirrors build_anthropic_usage_json
+    // (#2774) and transform_gemini's saturating_sub, covering both non-streaming and streaming_responses paths.
     let cached = result
         .get("cache_read_input_tokens")
         .and_then(|v| v.as_u64())
@@ -2282,15 +2279,15 @@ pub(crate) fn build_anthropic_usage_from_responses(usage: Option<&Value>) -> Val
     result
 }
 
-/// 将 Anthropic messages 数组转换为 Responses API input 数组
+/// Convert the Anthropic messages array into a Responses API input array
 ///
-/// 核心转换逻辑：
-/// - user/assistant 的 text 内容 → 对应 role 的 message item
-/// - tool_use 从 assistant message 中"提升"为独立的 function_call item
-/// - tool_result 从 user message 中"提升"为独立的 function_call_output item
+/// Core conversion rules:
+/// - user/assistant text → message items with the corresponding role
+/// - tool_use in assistant messages → standalone function_call items
+/// - tool_result in user messages → standalone function_call_output items
 /// - hosted WebSearch call/result blocks → restore one Responses web_search_call item
 /// - bridge-owned thinking blocks → restore the original Responses reasoning item
-/// - unrelated native thinking blocks → 丢弃
+/// - unrelated native thinking blocks → discard
 fn convert_messages_to_input(messages: &[Value]) -> Result<Vec<Value>, ProxyError> {
     let mut input = Vec::new();
 
@@ -2300,7 +2297,7 @@ fn convert_messages_to_input(messages: &[Value]) -> Result<Vec<Value>, ProxyErro
         let message_input_start = input.len();
 
         match content {
-            // 字符串内容
+            // String content
             Some(Value::String(text)) => {
                 let content_type = if role == "assistant" {
                     "output_text"
@@ -2313,7 +2310,7 @@ fn convert_messages_to_input(messages: &[Value]) -> Result<Vec<Value>, ProxyErro
                 }));
             }
 
-            // 数组内容（多模态/工具调用）
+            // Array content (multimodal/tool calls)
             Some(Value::Array(blocks)) => {
                 let mut message_content = Vec::new();
                 let hosted_web_search_results: HashMap<&str, &Value> = blocks
@@ -2368,7 +2365,7 @@ fn convert_messages_to_input(messages: &[Value]) -> Result<Vec<Value>, ProxyErro
                         }
 
                         "tool_use" => {
-                            // 先刷新已累积的消息内容
+                            // Flush accumulated message content first
                             if !message_content.is_empty() {
                                 input.push(json!({
                                     "role": role,
@@ -2377,7 +2374,7 @@ fn convert_messages_to_input(messages: &[Value]) -> Result<Vec<Value>, ProxyErro
                                 message_content.clear();
                             }
 
-                            // 提升为独立的 function_call item
+                            // Lift into a standalone function_call item
                             let id = block.get("id").and_then(|i| i.as_str()).unwrap_or("");
                             let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
                             let arguments = block.get("input").cloned().unwrap_or(json!({}));
@@ -2391,7 +2388,7 @@ fn convert_messages_to_input(messages: &[Value]) -> Result<Vec<Value>, ProxyErro
                         }
 
                         "tool_result" => {
-                            // 先刷新已累积的消息内容
+                            // Flush accumulated message content first
                             if !message_content.is_empty() {
                                 input.push(json!({
                                     "role": role,
@@ -2400,7 +2397,7 @@ fn convert_messages_to_input(messages: &[Value]) -> Result<Vec<Value>, ProxyErro
                                 message_content.clear();
                             }
 
-                            // 提升为独立的 function_call_output item
+                            // Lift into a standalone function_call_output item
                             let call_id = block
                                 .get("tool_use_id")
                                 .and_then(|i| i.as_str())
@@ -2460,7 +2457,7 @@ fn convert_messages_to_input(messages: &[Value]) -> Result<Vec<Value>, ProxyErro
                     }
                 }
 
-                // 刷新剩余的消息内容
+                // Flush remaining message content
                 if !message_content.is_empty() {
                     input.push(json!({
                         "role": role,
@@ -2470,7 +2467,7 @@ fn convert_messages_to_input(messages: &[Value]) -> Result<Vec<Value>, ProxyErro
             }
 
             _ => {
-                // 无内容或 null
+                // Missing or null content
                 input.push(json!({ "role": role }));
             }
         }
@@ -2501,7 +2498,7 @@ fn convert_messages_to_input(messages: &[Value]) -> Result<Vec<Value>, ProxyErro
     Ok(input)
 }
 
-/// OpenAI Responses 响应 → Anthropic 响应
+/// OpenAI Responses response → Anthropic response
 pub fn responses_to_anthropic(body: Value) -> Result<Value, ProxyError> {
     responses_to_anthropic_with_web_search_name(body, None)
 }
@@ -2819,7 +2816,7 @@ mod tests {
 
     #[test]
     fn test_text_with_url_citations_preserves_unicode_character_ranges() {
-        let text = "查看 Rust 文档和 Cargo。";
+        let text = "\u{67e5}\u{770b} Rust \u{6587}\u{6863}\u{548c} Cargo\u{3002}";
         let annotations = json!([
             {
                 "type": "url_citation",
@@ -2839,7 +2836,7 @@ mod tests {
 
         assert_eq!(
             text_with_url_citations(text, annotations.as_array().unwrap()),
-            "查看 [Rust](https://www.rust-lang.org/) 文档和 [Cargo](https://doc.rust-lang.org/cargo/)。"
+            "\u{67e5}\u{770b} [Rust](https://www.rust-lang.org/) \u{6587}\u{6863}\u{548c} [Cargo](https://doc.rust-lang.org/cargo/)\u{3002}"
         );
     }
 
@@ -3420,7 +3417,7 @@ mod tests {
         let result = anthropic_to_responses(input, None, false, false).unwrap();
         let tools = result["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 2);
-        // 缺 description：省略字段而不是序列化成 null（严格上游会 400）
+        // Missing description: omit the field instead of serializing null (strict upstreams return 400)
         assert!(tools[0].get("description").is_none());
         assert!(tools[0].get("parameters").is_some());
         assert_eq!(tools[1]["description"], json!("Has one"));
@@ -4857,7 +4854,7 @@ mod tests {
         });
 
         let result = responses_to_anthropic(input).unwrap();
-        // input_tokens(100) 含 cached(80)，转换后 input 应为 fresh = 100 - 80 = 20
+        // input_tokens(100) includes cached(80); converted input should be fresh = 100 - 80 = 20
         assert_eq!(result["usage"]["input_tokens"], 20);
         assert_eq!(result["usage"]["output_tokens"], 50);
         assert_eq!(result["usage"]["cache_read_input_tokens"], 80);
@@ -4882,8 +4879,8 @@ mod tests {
         });
 
         let result = responses_to_anthropic(input).unwrap();
-        // cache_read(60)+cache_creation(20) 均从 input(100) 扣除，fresh = 100 - 60 - 20 = 20
-        // 守恒：input(20) + cache_read(60) + cache_creation(20) == 上游 input(100)
+        // Subtract both cache_read(60) and cache_creation(20) from input(100): fresh = 100 - 60 - 20 = 20
+        // Conservation: input(20) + cache_read(60) + cache_creation(20) == upstream input(100)
         assert_eq!(result["usage"]["input_tokens"], 20);
         assert_eq!(result["usage"]["cache_read_input_tokens"], 60);
         assert_eq!(result["usage"]["cache_creation_input_tokens"], 20);
@@ -5045,7 +5042,7 @@ mod tests {
         assert!(result.get("reasoning").is_none());
     }
 
-    // ==================== Codex OAuth (ChatGPT 反代) 协议约束 ====================
+    // ==================== Codex OAuth (ChatGPT reverse proxy) protocol constraints ====================
 
     #[test]
     fn test_anthropic_to_responses_codex_oauth_sets_store_and_include() {
@@ -5057,18 +5054,18 @@ mod tests {
 
         let result = anthropic_to_responses(input, None, true, true).unwrap();
 
-        // store 必须显式为 false（ChatGPT 后端拒绝 true）
+        // store must be explicitly false (the ChatGPT backend rejects true)
         assert_eq!(result["store"], json!(false));
         assert_eq!(result["service_tier"], json!("priority"));
 
-        // include 必须包含 reasoning.encrypted_content（无服务端状态下保持多轮 reasoning）
+        // include must contain reasoning.encrypted_content (preserves multi-turn reasoning without server state)
         assert_eq!(result["include"], json!(["reasoning.encrypted_content"]));
     }
 
     #[test]
     fn test_anthropic_to_responses_non_codex_omits_store_and_include() {
-        // 回归护栏：is_codex_oauth=false 时，行为必须与今日字节级一致
-        // —— 不写 store、不写 include，OpenRouter / Azure / OpenAI 付费 API 路径不受影响
+        // Regression guard: is_codex_oauth=false must preserve today's behavior byte for byte
+        // Do not write store or include; leave OpenRouter / Azure / paid OpenAI API paths unchanged
         let input = json!({
             "model": "gpt-5-codex",
             "max_tokens": 1024,
@@ -5084,7 +5081,7 @@ mod tests {
 
     #[test]
     fn test_anthropic_to_responses_codex_oauth_preserves_existing_include() {
-        // 客户端预置了 include：union 保留原有项 + 添加 marker，不重复
+        // Client-supplied include: union preserves existing entries and adds the marker without duplicates
         let input = json!({
             "model": "gpt-5-codex",
             "max_tokens": 1024,
@@ -5097,20 +5094,23 @@ mod tests {
             .as_array()
             .expect("include should be array");
 
-        // 原有项必须保留
+        // Preserve existing entries
         assert!(includes
             .iter()
             .any(|v| v.as_str() == Some("something.else")));
-        // marker 必须存在
+        // The marker must be present
         assert!(includes
             .iter()
             .any(|v| v.as_str() == Some("reasoning.encrypted_content")));
-        // 不重复：marker 只出现一次
+        // No duplicates: the marker appears exactly once
         let marker_count = includes
             .iter()
             .filter(|v| v.as_str() == Some("reasoning.encrypted_content"))
             .count();
-        assert_eq!(marker_count, 1, "marker 不应被重复添加（idempotent 失败）");
+        assert_eq!(
+            marker_count, 1,
+            "marker must not be added twice (idempotency failure)"
+        );
     }
 
     #[test]
@@ -5130,8 +5130,8 @@ mod tests {
 
     #[test]
     fn test_anthropic_to_responses_codex_oauth_strips_max_output_tokens() {
-        // ChatGPT Plus/Pro 反代不接受 max_output_tokens（OpenAI 官方 codex-rs 的
-        // ResponsesApiRequest 结构体里也没有这个字段），必须删除，否则服务端 400：
+        // The ChatGPT Plus/Pro reverse proxy does not accept max_output_tokens (also absent from
+        // the official OpenAI codex-rs ResponsesApiRequest struct); remove it to avoid a server 400:
         // "Unsupported parameter: max_output_tokens"
         let input = json!({
             "model": "gpt-5-codex",
@@ -5143,14 +5143,14 @@ mod tests {
 
         assert!(
             result.get("max_output_tokens").is_none(),
-            "Codex OAuth 路径必须删除 max_output_tokens"
+            "Codex OAuth must omit max_output_tokens"
         );
     }
 
     #[test]
     fn test_anthropic_to_responses_non_codex_keeps_max_output_tokens() {
-        // 回归护栏：非 Codex OAuth 路径必须保留 max_output_tokens
-        // —— OpenAI 付费 Responses API / Azure 等仍然依赖这个字段
+        // Regression guard: non-Codex OAuth paths must preserve max_output_tokens
+        // Paid OpenAI Responses API / Azure paths still depend on this field
         let input = json!({
             "model": "gpt-5-codex",
             "max_tokens": 1024,
@@ -5164,9 +5164,9 @@ mod tests {
 
     #[test]
     fn test_anthropic_to_responses_clamps_sub_floor_max_tokens() {
-        // Responses API 拒绝 max_output_tokens < 16（"The number must be >= 16"）。
-        // Claude Desktop 的模型可用性探测发 max_tokens=1，原样转发会让整个
-        // 探测请求 400，客户端因此判定"配置的模型不可用"（#7103）。
+        // The Responses API rejects max_output_tokens < 16 ("The number must be >= 16").
+        // Claude Desktop sends max_tokens=1 for model availability probes; forwarding it unchanged
+        // yields a 400, causing the client to mark the configured model as unavailable (#7103).
         for budget in [1u64, 8, 15] {
             let input = json!({
                 "model": "claude-haiku-4-5",
@@ -5177,7 +5177,7 @@ mod tests {
             assert_eq!(result["max_output_tokens"], json!(16));
         }
 
-        // 下限本身与正常预算保持原样
+        // Preserve the minimum itself and normal budgets
         for budget in [16u64, 1024] {
             let input = json!({
                 "model": "claude-haiku-4-5",
@@ -5188,7 +5188,7 @@ mod tests {
             assert_eq!(result["max_output_tokens"], json!(budget));
         }
 
-        // 0 与非整数不抬升：保持既有透传语义，把非法值留给上游裁决
+        // Do not clamp zero or non-integers: preserve pass-through semantics and let upstream validate
         for raw in [json!(0), json!("16"), json!(12.5)] {
             let input = json!({
                 "model": "claude-haiku-4-5",
@@ -5200,12 +5200,12 @@ mod tests {
         }
     }
 
-    // ==================== 第二轮：P0 + P1 字段对齐 ====================
+    // ==================== Round two: P0 + P1 field alignment ====================
 
     #[test]
     fn test_codex_oauth_strips_temperature() {
-        // P0: ChatGPT 反代不接受 temperature
-        // 依据：OpenAI 官方 codex-rs 的 ResponsesApiRequest 结构体根本没有这个字段
+        // P0: The ChatGPT reverse proxy does not accept temperature
+        // Basis: this field is absent from the official OpenAI codex-rs ResponsesApiRequest struct
         let input = json!({
             "model": "gpt-5-codex",
             "max_tokens": 1024,
@@ -5217,13 +5217,13 @@ mod tests {
 
         assert!(
             result.get("temperature").is_none(),
-            "Codex OAuth 路径必须删除 temperature"
+            "Codex OAuth must omit temperature"
         );
     }
 
     #[test]
     fn test_codex_oauth_strips_top_p() {
-        // P0: ChatGPT 反代不接受 top_p
+        // P0: The ChatGPT reverse proxy does not accept top_p
         let input = json!({
             "model": "gpt-5-codex",
             "max_tokens": 1024,
@@ -5233,15 +5233,12 @@ mod tests {
 
         let result = anthropic_to_responses(input, None, true, true).unwrap();
 
-        assert!(
-            result.get("top_p").is_none(),
-            "Codex OAuth 路径必须删除 top_p"
-        );
+        assert!(result.get("top_p").is_none(), "Codex OAuth must omit top_p");
     }
 
     #[test]
     fn test_codex_oauth_defaults_required_fields_when_absent() {
-        // P1: 极简输入（无 system / 无 tools / 无 stream），断言四个必填字段都被注入默认值
+        // P1: Minimal input (no system / tools / stream); assert defaults for all four required fields
         let input = json!({
             "model": "gpt-5-codex",
             "max_tokens": 1024,
@@ -5253,63 +5250,56 @@ mod tests {
         assert_eq!(
             result["instructions"],
             json!(""),
-            "instructions 缺失时应兜底为空字符串"
+            "missing instructions must default to an empty string"
         );
-        assert_eq!(result["tools"], json!([]), "tools 缺失时应兜底为空数组");
+        assert_eq!(
+            result["tools"],
+            json!([]),
+            "missing tools must default to an empty array"
+        );
         assert_eq!(
             result["parallel_tool_calls"],
             json!(true),
-            "parallel_tool_calls 应默认允许并行工具调用"
+            "parallel_tool_calls must allow parallel calls by default"
         );
-        assert_eq!(result["stream"], json!(true), "stream 应被强制设为 true");
+        assert_eq!(
+            result["stream"],
+            json!(true),
+            "stream must be forced to true"
+        );
     }
 
     #[test]
-    fn test_codex_oauth_maps_anthropic_parallel_tool_choice() {
-        let enabled = anthropic_to_responses(
-            json!({
-                "model": "gpt-5.6-sol",
-                "tools": [{
-                    "name": "read_file",
-                    "input_schema": {"type": "object"}
-                }],
-                "tool_choice": {
-                    "type": "auto",
-                    "disable_parallel_tool_use": false
-                },
-                "messages": [{"role": "user", "content": "Read both files"}]
-            }),
-            None,
-            true,
-            true,
-        )
-        .unwrap();
-        assert_eq!(enabled["parallel_tool_calls"], json!(true));
-
-        let disabled = anthropic_to_responses(
-            json!({
-                "model": "gpt-5.6-sol",
-                "tools": [{
-                    "name": "read_file",
-                    "input_schema": {"type": "object"}
-                }],
-                "tool_choice": {
-                    "type": "auto",
-                    "disable_parallel_tool_use": true
-                },
-                "messages": [{"role": "user", "content": "Read one file"}]
-            }),
-            None,
-            true,
-            true,
-        )
-        .unwrap();
-        assert_eq!(disabled["parallel_tool_calls"], json!(false));
+    fn test_anthropic_parallel_tool_choice_maps_for_both_backends() {
+        for is_codex_oauth in [false, true] {
+            for disable_parallel in [false, true] {
+                let result = anthropic_to_responses(
+                    json!({
+                        "model": "gpt-5.6-sol",
+                        "tools": [{
+                            "name": "read_file",
+                            "input_schema": {"type": "object"}
+                        }],
+                        "tool_choice": {
+                            "type": "auto",
+                            "disable_parallel_tool_use": disable_parallel
+                        },
+                        "messages": [{"role": "user", "content": "Read the files"}]
+                    }),
+                    None,
+                    is_codex_oauth,
+                    is_codex_oauth,
+                )
+                .unwrap();
+                assert_eq!(result["parallel_tool_calls"], json!(!disable_parallel));
+                assert_eq!(result["tool_choice"], "auto");
+            }
+        }
     }
 
     #[test]
     fn test_codex_oauth_preserves_existing_instructions_and_tools() {
-        // P1: 客户端送了 system 和 tools，应保留原值，不被默认值覆盖
+        // P1: Preserve client-supplied system and tools; do not overwrite them with defaults
         let input = json!({
             "model": "gpt-5-codex",
             "max_tokens": 1024,
@@ -5330,18 +5320,18 @@ mod tests {
         assert_eq!(
             result["instructions"],
             json!("You are a helpful assistant"),
-            "client 已送的 instructions 必须保留"
+            "client-provided instructions must be preserved"
         );
 
-        let tools = result["tools"].as_array().expect("tools 应为数组");
-        assert_eq!(tools.len(), 1, "client 已送的 tools 必须保留");
+        let tools = result["tools"].as_array().expect("tools must be an array");
+        assert_eq!(tools.len(), 1, "client-provided tools must be preserved");
         assert_eq!(tools[0]["name"], json!("get_weather"));
     }
 
     #[test]
     fn test_codex_oauth_forces_stream_true_even_when_client_sends_false() {
-        // 即使客户端误传 stream:false，也要强制覆盖为 true
-        // 依据：cc-switch SSE 解析层只支持流式响应
+        // Force true even when the client supplies stream:false
+        // Basis: cc-switch's SSE parser only supports streaming responses
         let input = json!({
             "model": "gpt-5-codex",
             "max_tokens": 1024,
@@ -5354,14 +5344,14 @@ mod tests {
         assert_eq!(
             result["stream"],
             json!(true),
-            "Codex OAuth 路径下 stream 必须强制为 true"
+            "Codex OAuth must force stream to true"
         );
     }
 
     #[test]
     fn test_non_codex_keeps_temperature_and_top_p() {
-        // 回归护栏：非 Codex OAuth 路径必须保留 temperature/top_p
-        // —— 防止 P0 删除逻辑误扩散到 OpenRouter / Azure / 付费 OpenAI 路径
+        // Regression guard: non-Codex OAuth paths must preserve temperature/top_p
+        // Keep P0 removal logic from affecting OpenRouter / Azure / paid OpenAI paths
         let input = json!({
             "model": "gpt-5-codex",
             "max_tokens": 1024,
@@ -5378,14 +5368,13 @@ mod tests {
 
     #[test]
     fn test_non_codex_does_not_inject_default_required_fields() {
-        // 回归护栏：非 Codex OAuth 路径不应被 P1 默认值污染
-        // —— OpenRouter / Azure / 付费 OpenAI 等保持原有"条件写入"语义
+        // Regression guard: P1 defaults must not affect non-Codex OAuth paths
+        // Preserve conditional-write semantics for OpenRouter / Azure / paid OpenAI paths
         let input = json!({
             "model": "gpt-5-codex",
             "max_tokens": 1024,
             "tool_choice": {
-                "type": "auto",
-                "disable_parallel_tool_use": false
+                "type": "auto"
             },
             "messages": [{"role": "user", "content": "Hello"}]
         });
@@ -5394,20 +5383,20 @@ mod tests {
 
         assert!(
             result.get("parallel_tool_calls").is_none(),
-            "非 Codex OAuth 路径不应注入 parallel_tool_calls"
+            "non-Codex OAuth requests must not inject parallel_tool_calls"
         );
         assert!(
             result.get("stream").is_none(),
-            "非 Codex OAuth 路径不应注入 stream"
+            "non-Codex OAuth requests must not gain an unspecified stream field"
         );
-        // instructions 和 tools 因为客户端没送，所以不应出现
+        // instructions and tools should be absent because the client did not supply them
         assert!(
             result.get("instructions").is_none(),
-            "非 Codex OAuth 路径下 instructions 在客户端未送时不应被注入"
+            "non-Codex OAuth requests must not gain instructions omitted by the client"
         );
         assert!(
             result.get("tools").is_none(),
-            "非 Codex OAuth 路径下 tools 在客户端未送时不应被注入"
+            "non-Codex OAuth requests must not gain tools omitted by the client"
         );
     }
 
@@ -5483,7 +5472,7 @@ mod tests {
                 "cached_tokens": 80
             }
         })));
-        // input_tokens(100) 含 nested cached(80)，转换后 input 应为 fresh = 100 - 80 = 20
+        // input_tokens(100) includes nested cached(80); converted input should be fresh = 100 - 80 = 20
         assert_eq!(result["input_tokens"], json!(20));
         assert_eq!(result["output_tokens"], json!(50));
         assert_eq!(result["cache_read_input_tokens"], json!(80));
@@ -5514,15 +5503,15 @@ mod tests {
             },
             "cache_read_input_tokens": 100
         })));
-        // 直传 cache_read(100) 优先于 nested(80)；input(100) - 100 = 0（fresh）
+        // Direct cache_read(100) takes precedence over nested(80); input(100) - 100 = 0 (fresh)
         assert_eq!(result["input_tokens"], json!(0));
         assert_eq!(result["cache_read_input_tokens"], json!(100)); // Direct field overrides nested
     }
 
     #[test]
     fn test_build_usage_clamps_input_when_cache_exceeds_input() {
-        // input(100) < cache_read(60)+cache_creation(50)=110：saturating 钳到 0，防下溢。
-        // 钉桩：阻止未来把 saturating_sub 误改成普通减法(debug panic / release wrap)。
+        // input(100) < cache_read(60)+cache_creation(50)=110: saturate at zero to prevent underflow.
+        // Regression guard: do not replace saturating_sub with subtraction (debug panic / release wrap).
         let result = build_anthropic_usage_from_responses(Some(&json!({
             "input_tokens": 100,
             "output_tokens": 10,

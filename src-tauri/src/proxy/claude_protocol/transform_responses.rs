@@ -1903,6 +1903,7 @@ pub fn anthropic_to_responses(
                 let mut response_tool = json!({
                     "type": "function",
                     "name": tool.get("name").and_then(Value::as_str).unwrap_or(""),
+                    "strict": tool.get("strict").and_then(Value::as_bool).unwrap_or(false),
                 });
                 // 同 transform.rs：缺失的 description 省略而非输出 null，
                 // 否则严格上游会拒绝整个请求。
@@ -3347,6 +3348,60 @@ mod tests {
         );
         // input_schema should not appear
         assert!(result["tools"][0].get("input_schema").is_none());
+    }
+
+    #[test]
+    fn test_anthropic_to_responses_function_tool_strict() {
+        for is_codex_oauth in [false, true] {
+            for (strict, expected) in [
+                (None, false),
+                (Some(json!(false)), false),
+                (Some(json!(true)), true),
+                (Some(Value::Null), false),
+                (Some(json!("true")), false),
+                (Some(json!(1)), false),
+                (Some(json!([])), false),
+                (Some(json!({})), false),
+            ] {
+                let schema = json!({
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}}
+                });
+                let mut tool = json!({
+                    "name": "get_weather",
+                    "description": "Get weather info",
+                    "input_schema": schema
+                });
+                if let Some(strict) = strict {
+                    tool["strict"] = strict;
+                }
+                let input = json!({
+                    "model": "gpt-5",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "tools": [
+                        tool,
+                        {"type": "web_search_20250305", "name": "web_search"},
+                        {"type": "BatchTool", "name": "batch"}
+                    ]
+                });
+
+                let result = anthropic_to_responses(input, None, is_codex_oauth, false).unwrap();
+                let tools = result["tools"].as_array().unwrap();
+                assert_eq!(tools.len(), 2);
+                assert_eq!(
+                    tools[0],
+                    json!({
+                        "type": "function",
+                        "name": "get_weather",
+                        "description": "Get weather info",
+                        "parameters": schema,
+                        "strict": expected
+                    })
+                );
+                assert_eq!(tools[1]["type"], "web_search");
+                assert!(tools[1].get("strict").is_none());
+            }
+        }
     }
 
     #[test]

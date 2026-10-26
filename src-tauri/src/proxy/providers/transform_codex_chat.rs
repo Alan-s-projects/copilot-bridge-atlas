@@ -1270,6 +1270,9 @@ fn responses_function_tool_to_chat_tool(tool: &Value, chat_name: &str) -> Option
             obj.insert("parameters".to_string(), parameters);
 
             obj.insert("name".to_string(), json!(chat_name));
+            if obj.get("description").is_some_and(Value::is_null) {
+                obj.remove("description");
+            }
             if let Some(strict) = tool.get("strict").cloned() {
                 obj.entry("strict".to_string()).or_insert(strict);
             }
@@ -2394,26 +2397,37 @@ mod tests {
     }
 
     #[test]
-    fn responses_request_to_chat_omits_missing_tool_description() {
-        // A missing description must be omitted, not serialized as null —
-        // strict OpenAI-compatible upstreams reject the whole request on a
-        // null value (400 "expected string, received null").
-        let input = json!({
-            "model": "gpt-5.4",
-            "input": [
-                {"role": "user", "content": [{"type": "input_text", "text": "hi"}]}
-            ],
-            "tools": [
-                {"type": "function", "name": "no_desc", "parameters": {"type": "object"}},
-                {"type": "function", "name": "with_desc", "description": "Has one", "parameters": {"type": "object"}}
-            ]
-        });
+    fn responses_request_to_chat_omits_missing_or_null_tool_descriptions() {
+        for nested in [false, true] {
+            let mut input = json!({
+                "model": "gpt-5.4",
+                "input": [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}],
+                "tools": [
+                    {"type": "function", "name": "no_desc", "parameters": {"type": "object"}, "strict": true},
+                    {"type": "function", "name": "null_desc", "description": null, "parameters": {"type": "object"}, "strict": false},
+                    {"type": "function", "name": "with_desc", "description": "Has one", "parameters": {"type": "object"}}
+                ]
+            });
+            if nested {
+                for tool in input["tools"].as_array_mut().unwrap() {
+                    let mut function = tool.take();
+                    function.as_object_mut().unwrap().remove("type");
+                    *tool = json!({"type": "function", "function": function});
+                }
+            }
 
-        let result = responses_to_chat_completions(input).unwrap();
-        let tools = result["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 2);
-        assert!(tools[0]["function"].get("description").is_none());
-        assert_eq!(tools[1]["function"]["description"], "Has one");
+            let result = responses_to_chat_completions(input).unwrap();
+            let tools = result["tools"].as_array().unwrap();
+            assert_eq!(tools.len(), 3);
+            assert!(tools[0]["function"].get("description").is_none());
+            assert!(tools[1]["function"].get("description").is_none());
+            assert_eq!(tools[2]["function"]["description"], "Has one");
+            assert_eq!(tools[0]["function"]["strict"], true);
+            assert_eq!(tools[1]["function"]["strict"], false);
+            for tool in tools {
+                assert_eq!(tool["function"]["parameters"], json!({"type": "object"}));
+            }
+        }
     }
 
     #[test]

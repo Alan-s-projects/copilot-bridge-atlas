@@ -204,7 +204,7 @@ fn bundled_prices_are_unique_github_copilot_rates_for_only_documented_models() {
     use rust_decimal::Decimal;
     use std::str::FromStr;
     let prices = Database::bundled_model_prices().unwrap();
-    assert_eq!(prices.len(), 34);
+    assert_eq!(prices.len(), 35);
     let mut ids = std::collections::HashSet::new();
     for [id, name, input, output, cache_read, cache_creation] in &prices {
         assert!(ids.insert(id));
@@ -220,6 +220,7 @@ fn bundled_prices_are_unique_github_copilot_rates_for_only_documented_models() {
         ("grok-4.7", "2", "6", "0.50"),
         ("grok-4.5", "2", "6", "0.50"),
         ("gpt-6.1-sol", "2", "10", "0.10"),
+        ("gpt-6.1-terra", "1", "5", "0.05"),
     ] {
         let row = prices.iter().find(|row| row[0] == id).unwrap();
         assert_eq!((&*row[2], &*row[3], &*row[4]), (input, output, cache));
@@ -227,6 +228,8 @@ fn bundled_prices_are_unique_github_copilot_rates_for_only_documented_models() {
     assert!(ids.contains(&"mai-code-1.1-flash".to_string()));
     let sol_6_1 = prices.iter().find(|row| row[0] == "gpt-6.1-sol").unwrap();
     assert_eq!(sol_6_1[5], "2.50");
+    let terra_6_1 = prices.iter().find(|row| row[0] == "gpt-6.1-terra").unwrap();
+    assert_eq!(terra_6_1[5], "1.25");
     for retired in [
         "gpt-5",
         "gpt-5.6-cyber",

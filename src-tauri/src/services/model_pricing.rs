@@ -521,99 +521,103 @@ mod tests {
 
     #[test]
     #[serial]
-    fn new_bundled_price_backfills_sol_6_1_usage_after_local_preferences() {
-        const MODEL: &str = "gpt-6.1-sol";
-        for (preference, expected_costs, expected_tiers) in [
-            (
-                "bundled",
-                ["0.131500", "0.213004"],
-                [Some("default"), Some("long_context")],
-            ),
-            (
-                "custom",
-                ["0.035000", "0.035001"],
-                [Some("default"), Some("default")],
-            ),
-            ("deleted", ["0", "0"], [None, None]),
+    fn new_bundled_prices_backfill_usage_after_local_preferences() {
+        for (model, bundled_costs) in [
+            ("gpt-6.1-sol", ["0.131500", "0.213004"]),
+            ("gpt-6.1-terra", ["0.065750", "0.106502"]),
         ] {
-            with_test_home(|db, _path| {
-                let mut file = ModelPricingFile::default();
-                match preference {
-                    "custom" => file.models.push(ModelPricingInfo {
-                        model_id: MODEL.into(),
-                        display_name: "Custom Sol pricing".into(),
-                        input_cost_per_million: "1".into(),
-                        output_cost_per_million: "2".into(),
-                        cache_read_cost_per_million: "0.05".into(),
-                        cache_creation_cost_per_million: "0.50".into(),
-                        long_context: None,
-                    }),
-                    "deleted" => file.deleted_model_ids.push(MODEL.into()),
-                    _ => {}
-                }
-                write_file_unlocked(&file).unwrap();
-                {
-                    let conn = db.conn.lock().unwrap();
-                    conn.execute("DELETE FROM model_pricing WHERE model_id = ?1", [MODEL])
-                        .unwrap();
-                    for (id, input) in [("boundary", 272000), ("long", 272001)] {
-                        conn.execute(
+            for (preference, expected_costs, expected_tiers) in [
+                (
+                    "bundled",
+                    bundled_costs,
+                    [Some("default"), Some("long_context")],
+                ),
+                (
+                    "custom",
+                    ["0.035000", "0.035001"],
+                    [Some("default"), Some("default")],
+                ),
+                ("deleted", ["0", "0"], [None, None]),
+            ] {
+                with_test_home(|db, _path| {
+                    let mut file = ModelPricingFile::default();
+                    match preference {
+                        "custom" => file.models.push(ModelPricingInfo {
+                            model_id: model.into(),
+                            display_name: "Custom model pricing".into(),
+                            input_cost_per_million: "1".into(),
+                            output_cost_per_million: "2".into(),
+                            cache_read_cost_per_million: "0.05".into(),
+                            cache_creation_cost_per_million: "0.50".into(),
+                            long_context: None,
+                        }),
+                        "deleted" => file.deleted_model_ids.push(model.into()),
+                        _ => {}
+                    }
+                    write_file_unlocked(&file).unwrap();
+                    {
+                        let conn = db.conn.lock().unwrap();
+                        conn.execute("DELETE FROM model_pricing WHERE model_id = ?1", [model])
+                            .unwrap();
+                        for (id, input) in [("boundary", 272000), ("long", 272001)] {
+                            conn.execute(
                             "INSERT INTO proxy_request_logs (
                                 request_id, provider_id, app_type, model, pricing_model,
                                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                                 latency_ms, status_code, created_at
                             ) VALUES (?1, 'copilot', 'codex', ?2, ?2, ?3, 10000, 270000, 1000, 100, 200, ?4)",
-                            params![id, MODEL, input, chrono::Utc::now().timestamp()],
+                            params![id, model, input, chrono::Utc::now().timestamp()],
                         ).unwrap();
-                    }
-                    conn.execute(
-                        "INSERT INTO proxy_request_logs (
+                        }
+                        conn.execute(
+                            "INSERT INTO proxy_request_logs (
                             request_id, provider_id, app_type, model, pricing_model,
                             input_tokens, output_tokens, total_cost_usd, pricing_tier,
                             latency_ms, status_code, created_at
                         ) VALUES ('recorded', 'copilot', 'codex', ?1, ?1, 1000, 10000,
                                   '7.123456', 'default', 100, 200, ?2)",
-                        params![MODEL, chrono::Utc::now().timestamp()],
-                    )
-                    .unwrap();
-                }
-                assert_eq!(
-                    db.get_unpriced_model_usage(None, None, Some("codex"), None, Some(MODEL))
-                        .unwrap()
-                        .len(),
-                    1
-                );
+                            params![model, chrono::Utc::now().timestamp()],
+                        )
+                        .unwrap();
+                    }
+                    assert_eq!(
+                        db.get_unpriced_model_usage(None, None, Some("codex"), None, Some(model))
+                            .unwrap()
+                            .len(),
+                        1
+                    );
 
-                let seeded = db.ensure_model_pricing_seeded().unwrap();
-                assert_eq!(seeded, [MODEL]);
-                sync_seeded_model_pricing(db, &seeded).unwrap();
+                    let seeded = db.ensure_model_pricing_seeded().unwrap();
+                    assert_eq!(seeded, [model]);
+                    sync_seeded_model_pricing(db, &seeded).unwrap();
 
-                // Query stored totals directly; opening Request Logs must not be
-                // necessary to trigger the missing-cost repair.
-                let conn = db.conn.lock().unwrap();
-                for (index, id) in ["boundary", "long"].into_iter().enumerate() {
-                    let (cost, tier): (String, Option<String>) = conn.query_row(
+                    // Query stored totals directly; opening Request Logs must not be
+                    // necessary to trigger the missing-cost repair.
+                    let conn = db.conn.lock().unwrap();
+                    for (index, id) in ["boundary", "long"].into_iter().enumerate() {
+                        let (cost, tier): (String, Option<String>) = conn.query_row(
                         "SELECT total_cost_usd, pricing_tier FROM proxy_request_logs WHERE request_id = ?1",
                         [id],
                         |row| Ok((row.get(0)?, row.get(1)?)),
                     ).unwrap();
-                    assert_eq!(cost, expected_costs[index], "{preference}: {id}");
-                    assert_eq!(tier.as_deref(), expected_tiers[index], "{preference}: {id}");
-                }
-                let recorded: String = conn
+                        assert_eq!(cost, expected_costs[index], "{preference}: {id}");
+                        assert_eq!(tier.as_deref(), expected_tiers[index], "{preference}: {id}");
+                    }
+                    let recorded: String = conn
                     .query_row(
                         "SELECT total_cost_usd FROM proxy_request_logs WHERE request_id = 'recorded'",
                         [],
                         |row| row.get(0),
                     )
                     .unwrap();
-                assert_eq!(recorded, "7.123456");
-                drop(conn);
-                let unpriced = db
-                    .get_unpriced_model_usage(None, None, Some("codex"), None, Some(MODEL))
-                    .unwrap();
-                assert_eq!(unpriced.is_empty(), preference != "deleted");
-            });
+                    assert_eq!(recorded, "7.123456");
+                    drop(conn);
+                    let unpriced = db
+                        .get_unpriced_model_usage(None, None, Some("codex"), None, Some(model))
+                        .unwrap();
+                    assert_eq!(unpriced.is_empty(), preference != "deleted");
+                });
+            }
         }
     }
 

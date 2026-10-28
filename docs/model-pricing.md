@@ -1,9 +1,10 @@
 # GitHub Copilot Pricing
 
-Atlas bundles 34 model/mode entries from GitHub's
+Atlas bundles 35 model/mode entries from GitHub's
 [Models and pricing](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing)
 table. The initial 33 entries were verified September 27, 2026; GPT-6.1 Sol
-was added using the rates verified October 8, 2026.
+was added using the rates verified October 8, 2026, and GPT-6.1 Terra using
+the rates verified October 29, 2026.
 The snapshot is compiled from `src-tauri/src/resources/model-pricing.json`;
 Atlas does not fetch or scrape pricing at runtime.
 
@@ -13,10 +14,10 @@ request-based billing. GitHub defines one AI credit as USD 0.01.
 
 ## Long Context
 
-The `longContext` map records 12 published long-context tiers:
+The `longContext` map records 13 published long-context tiers:
 
 - 272,000 input tokens: GPT-5.4, GPT-5.5, GPT-5.6 Sol/Terra, GPT-6 Astra/Luna/Sol,
-  and GPT-6.1 Sol.
+  and GPT-6.1 Sol/Terra.
 - 200,000 input tokens: GPT-5.6 Luna and Grok 4.5/4.6/4.7.
 
 The higher tier applies **strictly above** the threshold, to the entire request,
@@ -62,6 +63,17 @@ GPT-6 Sol. Rates are USD per one million tokens:
 | --- | ---: | ---: | ---: | ---: |
 | Up to 272,000 tokens | $2.00 | $10.00 | $0.10 | $2.50 |
 | Above 272,000 tokens | $4.00 | $15.00 | $0.20 | $5.00 |
+
+## GPT-6.1 Terra
+
+GPT-6.1 Terra is priced separately from GPT-6.1 Sol and GPT-5.6 Terra.
+Rates verified against GitHub's Copilot pricing table on October 29, 2026,
+in USD per one million tokens:
+
+| Total input per request | Fresh input | Output | Cached input | Cache write |
+| --- | ---: | ---: | ---: | ---: |
+| Up to 272,000 tokens | $1.00 | $5.00 | $0.05 | $1.25 |
+| Above 272,000 tokens | $2.00 | $7.50 | $0.10 | $2.50 |
 
 ## Snapshot Limits
 

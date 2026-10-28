@@ -1735,7 +1735,7 @@ mod tests {
         let db = Database::memory()?;
         let conn = lock_conn!(db.conn);
         let tiers = Database::bundled_long_context_prices()?;
-        assert_eq!(tiers.len(), 12);
+        assert_eq!(tiers.len(), 13);
         for (model, tier) in tiers {
             let base = find_model_pricing_row(&conn, &model)?.unwrap();
             for total in [tier.threshold_input_tokens - 1, tier.threshold_input_tokens] {
@@ -1770,6 +1770,14 @@ mod tests {
         assert_eq!(
             find_model_pricing_for_input(&conn, "gpt-6.1-sol", 272001)?,
             Some(("4".into(), "15".into(), "0.20".into(), "5".into())),
+        );
+        assert_eq!(
+            find_model_pricing_for_input(&conn, "gpt-6.1-terra", 272000)?,
+            Some(("1".into(), "5".into(), "0.05".into(), "1.25".into())),
+        );
+        assert_eq!(
+            find_model_pricing_for_input(&conn, "gpt-6.1-terra", 272001)?,
+            Some(("2".into(), "7.50".into(), "0.10".into(), "2.50".into())),
         );
         Ok(())
     }

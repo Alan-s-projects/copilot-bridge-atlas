@@ -43,6 +43,40 @@ pub fn is_selectable_model(model: &CopilotModel) -> bool {
         && transport_for(model).is_some()
 }
 
+/// Models shown in management include native decisions, not just chat choices.
+pub fn is_manageable_model(model: &CopilotModel) -> bool {
+    is_selectable_model(model)
+        || (is_valid_model_id(&model.id)
+            && model.model_type == "decisions"
+            && model.policy_state.as_deref() != Some("disabled")
+            && endpoint_transport(model, "/v1/systemone").is_some())
+}
+
+/// Saved catalogs predate type metadata. Keep those chat rows, but never expose
+/// a native decision as chat, even when its type is missing or malformed.
+pub(crate) fn is_saved_decision_model(row: &serde_json::Value) -> bool {
+    row.get("modelType")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("decisions"))
+        || row
+            .get("supportedEndpoints")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|endpoints| {
+                endpoints
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .any(|endpoint| {
+                        endpoint
+                            .trim()
+                            .split('?')
+                            .next()
+                            .unwrap_or("")
+                            .trim_end_matches('/')
+                            .eq_ignore_ascii_case("/v1/systemone")
+                    })
+            })
+}
+
 pub fn model_enabled_in_settings(settings: &serde_json::Value, model_id: &str) -> bool {
     !settings
         .pointer("/modelCatalog/models")
@@ -153,6 +187,33 @@ mod tests {
             ..Default::default()
         }
     }
+    #[test]
+    fn decision_management_keeps_hidden_systemone_separate_from_chat() {
+        let mut decision = model("microsoft-decision-1", &["/v1/systemone"]);
+        decision.model_type = "decisions".into();
+        decision.model_picker_enabled = false;
+        assert!(is_manageable_model(&decision));
+        assert!(!is_selectable_model(&decision));
+        assert!(resolve_model(&decision.id, &[decision.clone()]).is_none());
+        assert!(
+            resolve_endpoint_model(&decision.id, &[decision.clone()], "/v1/systemone").is_some()
+        );
+        let mut blocked = decision.clone();
+        blocked.policy_state = Some("disabled".into());
+        let mut hidden = model("hidden", &["/responses"]);
+        hidden.model_picker_enabled = false;
+        let mut embedding = model("embedding", &["/responses"]);
+        embedding.model_type = "embeddings".into();
+        let mut unsupported = decision.clone();
+        unsupported.supported_endpoints = vec!["/responses".into()];
+        let mut invalid = decision;
+        invalid.id = "bad id".into();
+        for model in [blocked, hidden, embedding, unsupported, invalid] {
+            assert!(!is_manageable_model(&model), "{}", model.id);
+        }
+        assert!(is_manageable_model(&model("chat", &["/responses"])));
+    }
+
     #[test]
     fn selects_any_advertised_chat_model_and_automatically_chooses_its_protocol() {
         let models = vec![

@@ -54,6 +54,7 @@ export const normalizeCodexCatalogModelsForSave = (
 
     normalized.push({
       model,
+      ...(item.modelType ? { modelType: item.modelType } : {}),
       ...(item.enabled === false ? { enabled: false } : {}),
       ...(typeof item.available === "boolean"
         ? { available: item.available }

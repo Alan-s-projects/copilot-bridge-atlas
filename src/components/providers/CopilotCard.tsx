@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Github } from "lucide-react";
-import type { Provider } from "@/types";
+import type { CodexCatalogModel, Provider } from "@/types";
+import { isDecisionCatalogModel } from "@/utils/codexModelCatalog";
 import { useCopilotAuth } from "./forms/hooks/useCopilotAuth";
 import { Badge } from "@/components/ui/badge";
 import CopilotQuotaFooter from "@/components/CopilotQuotaFooter";
@@ -25,7 +26,8 @@ export function CopilotCard({
     (model) =>
       !model ||
       typeof model !== "object" ||
-      ((model as { enabled?: unknown }).enabled !== false &&
+      (!isDecisionCatalogModel(model as CodexCatalogModel) &&
+        (model as { enabled?: unknown }).enabled !== false &&
         (model as { available?: unknown }).available !== false),
   ).length;
   const needsSetup = !account || enabledModelCount === 0;

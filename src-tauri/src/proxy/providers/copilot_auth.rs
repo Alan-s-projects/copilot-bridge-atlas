@@ -936,7 +936,7 @@ impl CopilotAuthManager {
             .load_models_for_account(account_id, true)
             .await?
             .into_iter()
-            .filter(super::copilot_model_map::is_selectable_model)
+            .filter(super::copilot_model_map::is_manageable_model)
             .collect())
     }
 

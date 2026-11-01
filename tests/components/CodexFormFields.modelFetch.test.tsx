@@ -343,7 +343,7 @@ describe("Copilot model catalog import", () => {
     fireEvent.click(fetchButton());
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        "No compatible chat models are available to this Copilot account.",
+        "No compatible models are available to this Copilot account.",
       ),
     );
   });

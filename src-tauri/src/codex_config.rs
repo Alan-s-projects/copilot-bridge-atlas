@@ -245,6 +245,7 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
     for model_config in models {
         if model_config.get("enabled").and_then(Value::as_bool) == Some(false)
             || model_config.get("available").and_then(Value::as_bool) == Some(false)
+            || crate::proxy::providers::copilot_model_map::is_saved_decision_model(model_config)
         {
             continue;
         }
@@ -476,6 +477,21 @@ mod tests {
         assert_eq!(levels, ["low", "high", "ultra"]);
         assert!(entry.get("base_instructions").is_some());
         assert!(entry.get("supports_reasoning_summaries").is_some());
+    }
+
+    #[test]
+    fn generated_chat_catalog_excludes_decisions_even_when_enabled() {
+        let settings = json!({"modelCatalog":{"models":[
+            {"model":"legacy-chat"},
+            {"model":"decision-typed","enabled":true,"modelType":"decisions","supportedEndpoints":["/responses"]},
+            {"model":"decision-legacy","enabled":true,"supportedEndpoints":["/v1/systemone"]},
+            {"model":"decision-malformed","enabled":true,"modelType":"chat","supportedEndpoints":[" /V1/SYSTEMONE/?v=1 ","/responses"]}
+        ]}});
+        let catalog = codex_model_catalog_from_settings(&settings, "")
+            .unwrap()
+            .unwrap();
+        assert_eq!(catalog["models"].as_array().unwrap().len(), 1);
+        assert_eq!(catalog["models"][0]["slug"], "legacy-chat");
     }
 
     #[test]

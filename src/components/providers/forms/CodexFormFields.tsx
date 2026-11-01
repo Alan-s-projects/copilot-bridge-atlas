@@ -15,6 +15,7 @@ import {
 import { extractErrorMessage } from "@/utils/errorUtils";
 import {
   getCopilotModelProtocol,
+  isDecisionCatalogModel,
   isValidModelId,
 } from "@/utils/codexModelCatalog";
 import type { CodexCatalogModel } from "@/types";
@@ -28,6 +29,16 @@ export function isCopilotModelSupportedByCodex(model: CopilotModel): boolean {
   )
     return false;
   return getCopilotModelProtocol(model.supported_endpoints) !== undefined;
+}
+
+export function isCopilotModelManageable(model: CopilotModel): boolean {
+  return (
+    isCopilotModelSupportedByCodex(model) ||
+    (isValidModelId(model.id) &&
+      model.model_type === "decisions" &&
+      model.policy_state !== "disabled" &&
+      model.supported_endpoints?.includes("/v1/systemone") === true)
+  );
 }
 
 export function resolveCopilotCatalogContextWindow(
@@ -44,6 +55,7 @@ export function mergeCopilotModelCapabilities(
   return {
     ...existing,
     model: model.id,
+    modelType: model.model_type,
     available: true,
     vendor: model.vendor || existing?.vendor,
     supportedEndpoints: model.supported_endpoints ?? [],
@@ -130,7 +142,7 @@ export function CodexFormFields({
       const existing = new Map(
         catalogModels.map((model) => [model.model.trim().toLowerCase(), model]),
       );
-      const usable = models.filter(isCopilotModelSupportedByCodex);
+      const usable = models.filter(isCopilotModelManageable);
       onCatalogModelsChange(
         usable.map((model) =>
           mergeCopilotModelCapabilities(
@@ -141,7 +153,7 @@ export function CodexFormFields({
       );
       if (!usable.length) {
         toast.error(
-          "No compatible chat models are available to this Copilot account.",
+          "No compatible models are available to this Copilot account.",
         );
         return;
       }
@@ -238,6 +250,48 @@ export function CodexFormFields({
           </p>
         )}
         {sortedCatalogModels.map(({ model, index }) => {
+          if (isDecisionCatalogModel(model)) {
+            return (
+              <div
+                key={index}
+                className="flex items-center justify-between gap-4 rounded-lg border px-4 py-3"
+              >
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <h4
+                      title={model.model}
+                      className="break-words text-base font-medium"
+                    >
+                      {model.displayName?.trim() || model.model}
+                    </h4>
+                    <span className="text-xs text-muted-foreground">
+                      Decisions
+                    </span>
+                  </div>
+                  <code className="text-xs text-muted-foreground">
+                    /v1/systemone
+                  </code>
+                  {model.available === false && (
+                    <p
+                      role="status"
+                      className="text-xs text-amber-600 dark:text-amber-400"
+                    >
+                      Unavailable in the current Copilot catalog
+                    </p>
+                  )}
+                </div>
+                <Switch
+                  className="shrink-0"
+                  checked={model.enabled !== false}
+                  disabled={model.available === false}
+                  onCheckedChange={(enabled) =>
+                    updateModel(index, { enabled: enabled ? undefined : false })
+                  }
+                  aria-label={`Enable ${model.displayName?.trim() || model.model} for SystemOne`}
+                />
+              </div>
+            );
+          }
           const protocol = getCopilotModelProtocol(model.supportedEndpoints);
           return (
             <div

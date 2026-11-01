@@ -139,6 +139,7 @@ fn merge_live_capabilities(
             row["model"] = json!(model.id);
             row["displayName"] = json!(model.name);
             row["vendor"] = json!(model.vendor);
+            row["modelType"] = json!(model.model_type);
             row["supportedEndpoints"] = json!(model.supported_endpoints);
             row["supportedReasoningLevels"] =
                 json!(model.reasoning_efforts.as_deref().unwrap_or(&[]));
@@ -182,6 +183,7 @@ fn merge_live_capabilities(
                 "displayName": model.name,
                 "available": true,
                 "vendor": model.vendor,
+                "modelType": model.model_type,
                 "supportedEndpoints": model.supported_endpoints,
                 "contextWindow": model.context_window,
                 "maxContextWindow": model.max_context_window_tokens,
@@ -1351,6 +1353,53 @@ notify = ["unchanged"]
             first.keys().collect::<Vec<_>>()
         );
         assert!(db.get_provider_by_id("legacy", "codex").unwrap().is_some());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn decision_toggle_survives_refresh_and_saved_provider_reload() {
+        use crate::proxy::providers::{copilot_auth::CopilotModel, copilot_model_map};
+        use serde_json::json;
+        let _fixture = TestHome::new();
+        let db = Database::init().unwrap();
+        let mut provider = Provider::with_id(
+            "copilot".into(),
+            "Copilot".into(),
+            json!({"modelCatalog":{"models":[]}}),
+        );
+        let models = [CopilotModel {
+            id: "microsoft-decision-1".into(),
+            model_type: "decisions".into(),
+            supported_endpoints: vec!["/v1/systemone".into()],
+            ..Default::default()
+        }];
+        assert!(merge_live_capabilities(&mut provider, &models));
+        assert_eq!(
+            provider.settings_config["modelCatalog"]["models"][0]["modelType"],
+            "decisions"
+        );
+        provider.settings_config["modelCatalog"]["models"][0]["enabled"] = json!(false);
+        db.save_provider("codex", &provider).unwrap();
+        drop(db);
+        let db = std::sync::Arc::new(Database::init().unwrap());
+        initialize(&AppState::new(db.clone())).unwrap();
+        let mut reloaded = db.get_provider_by_id("copilot", "codex").unwrap().unwrap();
+        assert!(!merge_live_capabilities(&mut reloaded, &models));
+        assert!(!copilot_model_map::model_enabled_in_settings(
+            &reloaded.settings_config,
+            "microsoft-decision-1"
+        ));
+        let mut account_models = models.clone();
+        account_models[0].name = "Microsoft Decision-1".into();
+        assert!(merge_live_capabilities(&mut reloaded, &account_models));
+        assert_eq!(
+            reloaded.settings_config["modelCatalog"]["models"][0]["enabled"],
+            false
+        );
+        assert_eq!(
+            reloaded.settings_config["modelCatalog"]["models"][0]["modelType"],
+            "decisions"
+        );
     }
 
     #[test]

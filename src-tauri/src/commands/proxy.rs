@@ -5,6 +5,11 @@
 use crate::proxy::types::*;
 use crate::store::AppState;
 
+#[tauri::command]
+pub fn get_proxy_endpoints() -> Vec<crate::proxy::endpoint_registry::ProxyEndpoint> {
+    crate::proxy::endpoint_registry::list_endpoints()
+}
+
 /// Start the proxy server (only starts the service, does not take over the Live configuration)
 #[tauri::command]
 pub async fn start_proxy_server(

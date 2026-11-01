@@ -66,6 +66,59 @@ beforeEach(() => {
 });
 
 describe("Manual pricing configuration", () => {
+  it("labels Decision pricing as a dated Foundry reference, not a Copilot rate", () => {
+    mocks.pricing.mockReturnValue({
+      data: [
+        {
+          ...model,
+          modelId: "microsoft-decision-1",
+          metadata: {
+            source: "foundry_reference_estimate",
+            verifiedAt: "2026-11-01",
+            policy: "all_input_at_base_rate",
+            actualCopilotPriceUnpublished: true,
+          },
+        },
+      ],
+      isLoading: false,
+    });
+    render(<PricingConfigPanel />);
+    expect(
+      screen.getByText(/Microsoft Foundry reference estimate/),
+    ).toHaveTextContent("2026-11-01");
+    expect(screen.getByText("Actual Copilot price unpublished.")).toBeVisible();
+    expect(screen.getByText(/All input at base rate/)).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("link", { name: "Official Microsoft Foundry source" }),
+    );
+    expect(mocks.openSource).toHaveBeenCalledWith(
+      "https://commandline.microsoft.com/microsoft-decision-1-model-foundry/",
+    );
+  });
+
+  it("does not label user overrides as publisher verified", () => {
+    mocks.pricing.mockReturnValue({
+      data: [
+        {
+          ...model,
+          metadata: {
+            source: "user_override",
+            policy: "all_input_at_base_rate",
+            actualCopilotPriceUnpublished: true,
+          },
+        },
+      ],
+      isLoading: false,
+    });
+    render(<PricingConfigPanel />);
+    expect(
+      screen.getByText("User override — not publisher verified."),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(/Microsoft Foundry reference estimate/),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows long-context thresholds and all four rates beside the default model", () => {
     mocks.pricing.mockReturnValue({
       data: [

@@ -12,6 +12,7 @@ use std::time::Duration;
 
 /// Global HTTP client instance
 static GLOBAL_CLIENT: OnceCell<RwLock<Client>> = OnceCell::new();
+static NO_REDIRECT_CLIENT: OnceCell<RwLock<Client>> = OnceCell::new();
 
 /// Copilot Bridge Atlas proxy server is currently listening on the port
 static CLAUDE_PROXY_PORT: AtomicU16 = AtomicU16::new(15723);
@@ -58,11 +59,17 @@ pub fn validate_proxy(proxy_url: Option<&str>) -> Result<(), String> {
 pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = effective_proxy_url(proxy_url);
     let new_client = build_client(effective_url)?;
+    let new_no_redirect = build_client_with_redirects(effective_url, false)?;
     let lock = GLOBAL_CLIENT.get_or_init(|| RwLock::new(new_client.clone()));
+    let no_redirect_lock = NO_REDIRECT_CLIENT.get_or_init(|| RwLock::new(new_no_redirect.clone()));
     let mut client = lock
         .write()
         .map_err(|_| "Failed to update proxy: HTTP client lock poisoned".to_string())?;
+    let mut no_redirect = no_redirect_lock
+        .write()
+        .map_err(|_| "Failed to update proxy: HTTP client lock poisoned".to_string())?;
     *client = new_client;
+    *no_redirect = new_no_redirect;
 
     log::info!(
         "[GlobalProxy] Applied: {}",
@@ -81,6 +88,14 @@ pub fn get() -> Result<Client, String> {
     client_from(&GLOBAL_CLIENT)
 }
 
+pub fn get_no_redirect() -> Result<Client, String> {
+    let lock = NO_REDIRECT_CLIENT
+        .get_or_try_init(|| build_client_with_redirects(None, false).map(RwLock::new))?;
+    lock.read()
+        .map(|client| client.clone())
+        .map_err(|_| "Failed to read proxy: HTTP client lock poisoned".to_string())
+}
+
 fn client_from(cell: &OnceCell<RwLock<Client>>) -> Result<Client, String> {
     let lock = cell.get_or_try_init(|| build_client(None).map(RwLock::new))?;
     lock.read()
@@ -90,7 +105,19 @@ fn client_from(cell: &OnceCell<RwLock<Client>>) -> Result<Client, String> {
 
 /// Building an HTTP client
 fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
+    build_client_with_redirects(proxy_url, true)
+}
+
+fn build_client_with_redirects(
+    proxy_url: Option<&str>,
+    follow_redirects: bool,
+) -> Result<Client, String> {
     let mut builder = Client::builder()
+        .redirect(if follow_redirects {
+            reqwest::redirect::Policy::default()
+        } else {
+            reqwest::redirect::Policy::none()
+        })
         .timeout(Duration::from_secs(600))
         .connect_timeout(Duration::from_secs(30))
         .pool_max_idle_per_host(10)

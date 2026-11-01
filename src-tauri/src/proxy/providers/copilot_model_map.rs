@@ -43,6 +43,61 @@ pub fn is_selectable_model(model: &CopilotModel) -> bool {
         && transport_for(model).is_some()
 }
 
+pub fn model_enabled_in_settings(settings: &serde_json::Value, model_id: &str) -> bool {
+    !settings
+        .pointer("/modelCatalog/models")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|rows| {
+            rows.iter().any(|row| {
+                row.get("model")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|id| id.eq_ignore_ascii_case(model_id))
+                    && row.get("enabled").and_then(serde_json::Value::as_bool) == Some(false)
+            })
+        })
+}
+
+pub fn endpoint_transport(model: &CopilotModel, endpoint: &str) -> Option<&'static str> {
+    let candidates: &[&str] = match endpoint {
+        "/chat/completions" | "/v1/chat/completions" => {
+            &["/chat/completions", "/v1/chat/completions"]
+        }
+        "/v1/systemone" => &["/v1/systemone"],
+        "ws:/responses" => &["ws:/responses"],
+        _ => return None,
+    };
+    candidates.iter().copied().find(|candidate| {
+        model
+            .supported_endpoints
+            .iter()
+            .any(|value| value == candidate)
+    })
+}
+
+pub fn resolve_endpoint_model(
+    model_id: &str,
+    models: &[CopilotModel],
+    endpoint: &str,
+) -> Option<CopilotModel> {
+    if !is_valid_model_id(model_id) {
+        return None;
+    }
+    models
+        .iter()
+        .find(|model| {
+            model.id.eq_ignore_ascii_case(model_id.trim())
+                && model.policy_state.as_deref() != Some("disabled")
+                && endpoint_transport(model, endpoint).is_some()
+                && if endpoint == "/v1/systemone" {
+                    model.model_type == "decisions"
+                } else {
+                    model.model_picker_enabled
+                        && (model.model_type.is_empty() || model.model_type == "chat")
+                }
+        })
+        .cloned()
+}
+
 pub fn resolve_model(client_id: &str, models: &[CopilotModel]) -> Option<ResolvedCopilotModel> {
     if !is_valid_model_id(client_id) {
         return None;

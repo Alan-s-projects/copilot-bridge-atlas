@@ -1,9 +1,29 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render as rtlRender,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
+import { proxyEndpoints } from "../fixtures/proxyEndpoints";
+
+function render(ui: ReactElement) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return rtlRender(
+    <QueryClientProvider client={client}>{ui}</QueryClientProvider>,
+  );
+}
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProxyPanel } from "@/components/proxy/ProxyPanel";
 
 const mocks = vi.hoisted(() => ({
   save: vi.fn(),
+  endpoints: vi.fn(),
+  running: false,
   copy: vi.fn(),
   config: {
     claude: {
@@ -20,6 +40,17 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+vi.mock("@/lib/api/proxy", () => ({
+  proxyApi: { getProxyEndpoints: mocks.endpoints },
+}));
+
+beforeEach(() => {
+  mocks.endpoints.mockReset().mockResolvedValue(proxyEndpoints);
+  mocks.running = false;
+  mocks.config.listenAddress = "127.0.0.1";
+  mocks.config.claude.address = "127.0.0.1";
+});
+
 vi.mock("@/lib/query", () => ({
   useProvidersQuery: () => ({ data: { providers: {}, currentProviderId: "" } }),
 }));
@@ -31,7 +62,7 @@ vi.mock("@/lib/query/proxy", () => ({
   useGlobalProxyConfig: () => ({ data: mocks.config }),
   useProxyStatusQuery: () => ({
     data: {
-      running: false,
+      running: mocks.running,
       total_requests: 0,
       active_connections: 0,
       success_rate: 100,
@@ -115,4 +146,118 @@ it("shows two copyable URLs without mappings without per-server switches or disp
   expect(screen.queryAllByRole("combobox")).toHaveLength(0);
   expect(screen.queryByText("Display name")).not.toBeInTheDocument();
   expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+});
+
+it("loads all twelve registry entries with both directories and every row collapsed", async () => {
+  render(<ProxyPanel />);
+  const responses = within(
+    screen.getByRole("region", { name: "Responses API" }),
+  );
+  const messages = within(screen.getByRole("region", { name: "Messages API" }));
+  const showResponses = await responses.findByRole("button", {
+    name: "Show 9 endpoints",
+  });
+  const showMessages = await messages.findByRole("button", {
+    name: "Show 3 endpoints",
+  });
+  expect(showResponses).toHaveAttribute("aria-expanded", "false");
+  expect(showMessages).toHaveAttribute("aria-expanded", "false");
+  expect(
+    screen.queryByRole("button", { name: / details$/ }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(showResponses);
+  expect(responses.getAllByRole("button", { name: / details$/ })).toHaveLength(
+    9,
+  );
+  expect(
+    messages.queryByRole("button", { name: / details$/ }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(showMessages);
+  expect(messages.getAllByRole("button", { name: / details$/ })).toHaveLength(
+    3,
+  );
+  for (const row of screen.getAllByRole("button", { name: / details$/ })) {
+    expect(row).toHaveAttribute("aria-expanded", "false");
+  }
+  const first = responses.getByRole("button", {
+    name: "POST /v1/responses details",
+  });
+  const second = responses.getByRole("button", {
+    name: "WS /v1/responses details",
+  });
+  fireEvent.click(first);
+  fireEvent.click(second);
+  expect(screen.getByText("Description 0")).toBeVisible();
+  expect(screen.getByText("Description 3")).toBeVisible();
+  expect(within(second).getByText("Not implemented")).toBeVisible();
+  expect(within(first).getByText("Available")).toBeVisible();
+  fireEvent.click(first);
+  expect(screen.getByText("Description 0")).not.toBeVisible();
+  expect(screen.getByText("Description 3")).toBeVisible();
+  expect(screen.getByText("Sample request 3")).toBeVisible();
+  expect(screen.getByText("Sample response 3")).toBeVisible();
+  expect(screen.getAllByRole("button", { name: /Copy/ })).toHaveLength(2);
+  for (const removed of [
+    /refresh/i,
+    /^search$/i,
+    /filter/i,
+    /pricing/i,
+    /alias/i,
+  ]) {
+    expect(
+      screen.queryByRole("button", { name: removed }),
+    ).not.toBeInTheDocument();
+  }
+  expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  expect(mocks.endpoints).toHaveBeenCalledTimes(1);
+});
+
+it("shows load failures without inventing endpoints", async () => {
+  mocks.endpoints.mockRejectedValue(new Error("IPC unavailable"));
+  render(<ProxyPanel />);
+  expect(await screen.findAllByRole("alert")).toHaveLength(2);
+  expect(screen.getAllByText("Could not load endpoints.")).toHaveLength(2);
+  expect(
+    screen.queryByRole("button", { name: /Show .* endpoints/ }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: / details$/ }),
+  ).not.toBeInTheDocument();
+});
+
+it("shows an empty directory instead of a production fallback", async () => {
+  mocks.endpoints.mockResolvedValue([]);
+  render(<ProxyPanel />);
+  const toggles = await screen.findAllByRole("button", {
+    name: "Show 0 endpoints",
+  });
+  fireEvent.click(toggles[0]);
+  expect(screen.getAllByText("No endpoints available.")[0]).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: / details$/ }),
+  ).not.toBeInTheDocument();
+});
+
+it("preserves running read-only fields and IPv6 base URL copies", async () => {
+  mocks.running = true;
+  mocks.config.listenAddress = "::1";
+  mocks.config.claude.address = "[::1]";
+  render(<ProxyPanel />);
+  await screen.findByRole("button", { name: "Show 9 endpoints" });
+  expect(screen.getAllByText("Running")).toHaveLength(2);
+  expect(
+    screen.getByRole("textbox", { name: "Responses API listen address" }),
+  ).toBeDisabled();
+  expect(
+    screen.getByRole("textbox", { name: "Messages API port" }),
+  ).toBeDisabled();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Copy Responses API URL" }),
+  );
+  expect(mocks.copy).toHaveBeenLastCalledWith("http://[::1]:15722/v1");
+  fireEvent.click(
+    screen.getByRole("button", { name: "Copy Messages API URL" }),
+  );
+  expect(mocks.copy).toHaveBeenLastCalledWith("http://[::1]:15723");
 });

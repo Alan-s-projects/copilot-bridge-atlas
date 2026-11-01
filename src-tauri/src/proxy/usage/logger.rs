@@ -327,9 +327,11 @@ impl<'a> UsageLogger<'a> {
             Some(crate::services::usage_stats::SelectedPricing {
                 rates: (input, output, cache_read, cache_creation),
                 tier,
+                policy,
             }) => ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation)
                 .map(|mut pricing| {
                     pricing.pricing_tier = tier;
+                    pricing.policy = policy;
                     Some(pricing)
                 })
                 .map_err(|e| AppError::Database(format!("Failed to parse pricing data: {e}"))),

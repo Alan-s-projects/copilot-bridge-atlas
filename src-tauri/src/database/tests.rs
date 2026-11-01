@@ -169,6 +169,39 @@ fn unsupported_schema_does_not_modify_tables_or_version() {
 }
 
 #[test]
+fn pricing_metadata_column_is_additively_repaired_without_repricing() {
+    let db = Database::memory().unwrap();
+    let conn = db.conn.lock().unwrap();
+    conn.execute(
+        "UPDATE model_pricing SET input_cost_per_million='99' WHERE model_id='gpt-6-astra'",
+        [],
+    )
+    .unwrap();
+    conn.execute("ALTER TABLE model_pricing DROP COLUMN metadata", [])
+        .unwrap();
+    Database::initialize_schema_on_conn(&conn).unwrap();
+    Database::initialize_schema_on_conn(&conn).unwrap();
+    assert_eq!(Database::get_user_version(&conn).unwrap(), SCHEMA_VERSION);
+    assert_eq!(
+        conn.query_row(
+            "SELECT input_cost_per_million FROM model_pricing WHERE model_id='gpt-6-astra'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "99"
+    );
+    let metadata: Option<String> = conn
+        .query_row(
+            "SELECT metadata FROM model_pricing WHERE model_id='gpt-6-astra'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(metadata.is_none());
+}
+
+#[test]
 fn pricing_seeds_all_bundled_models_and_preserves_custom_prices() {
     let db = Database::memory().unwrap();
     {
@@ -200,11 +233,11 @@ fn pricing_seeds_all_bundled_models_and_preserves_custom_prices() {
 }
 
 #[test]
-fn bundled_prices_are_unique_github_copilot_rates_for_only_documented_models() {
+fn bundled_prices_are_unique_documented_copilot_rates_and_foundry_reference() {
     use rust_decimal::Decimal;
     use std::str::FromStr;
     let prices = Database::bundled_model_prices().unwrap();
-    assert_eq!(prices.len(), 35);
+    assert_eq!(prices.len(), 36);
     let mut ids = std::collections::HashSet::new();
     for [id, name, input, output, cache_read, cache_creation] in &prices {
         assert!(ids.insert(id));
@@ -215,6 +248,7 @@ fn bundled_prices_are_unique_github_copilot_rates_for_only_documented_models() {
         }
     }
     for (id, input, output, cache) in [
+        ("microsoft-decision-1", "0.042", "0", "0"),
         ("gemini-3.8-flash", "0.75", "3.75", "0.075"),
         ("gemini-3.5-flash", "1.50", "9.00", "0.15"),
         ("grok-4.7", "2", "6", "0.50"),

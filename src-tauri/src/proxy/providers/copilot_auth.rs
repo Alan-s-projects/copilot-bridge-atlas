@@ -1036,6 +1036,18 @@ impl CopilotAuthManager {
         Ok(models)
     }
 
+    pub async fn resolve_endpoint_model_for_account(
+        &self,
+        account_id: &str,
+        model_id: &str,
+        endpoint: &str,
+    ) -> Result<Option<CopilotModel>, CopilotAuthError> {
+        let models = self.load_models_for_account(account_id, false).await?;
+        Ok(super::copilot_model_map::resolve_endpoint_model(
+            model_id, &models, endpoint,
+        ))
+    }
+
     pub async fn resolve_model_for_account(
         &self,
         account_id: &str,

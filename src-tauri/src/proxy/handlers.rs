@@ -305,6 +305,90 @@ pub async fn handle_images_edits(
     handle_codex_standalone_passthrough(state, request, "/images/edits").await
 }
 
+pub async fn handle_chat_completions(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_codex_standalone_passthrough(state, request, "/chat/completions").await
+}
+
+pub async fn handle_systemone(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_codex_standalone_passthrough(state, request, "/v1/systemone").await
+}
+
+fn validate_native_request(
+    body: &Value,
+    endpoint: &str,
+    headers: &http::HeaderMap,
+) -> Result<(), ProxyError> {
+    if !matches!(endpoint, "/chat/completions" | "/v1/systemone") {
+        return Ok(());
+    }
+    if headers.contains_key(http::header::ORIGIN) {
+        return Err(ProxyError::InvalidRequest(
+            "Native Copilot APIs do not accept browser-origin requests".into(),
+        ));
+    }
+    if !body.is_object()
+        || !body
+            .get("model")
+            .and_then(Value::as_str)
+            .is_some_and(super::providers::copilot_model_map::is_valid_model_id)
+    {
+        return Err(ProxyError::InvalidRequest(
+            "A JSON object with a non-empty model identifier is required".into(),
+        ));
+    }
+    if let Some(stream) = body.get("stream") {
+        if !stream.is_boolean() {
+            return Err(ProxyError::InvalidRequest(
+                "stream must be a boolean".into(),
+            ));
+        }
+    }
+    if endpoint == "/v1/systemone" {
+        if body.get("stream").and_then(Value::as_bool) == Some(true)
+            || headers
+                .get(http::header::ACCEPT)
+                .and_then(|h| h.to_str().ok())
+                .is_some_and(|h| h.contains("text/event-stream"))
+        {
+            return Err(ProxyError::InvalidRequest(
+                "SystemOne does not support streaming".into(),
+            ));
+        }
+        if !body
+            .get("state")
+            .is_some_and(|s| s.is_string() || s.is_object() || s.is_array())
+        {
+            return Err(ProxyError::InvalidRequest(
+                "SystemOne requires state as text, an object, or an array".into(),
+            ));
+        }
+        if !body
+            .get("questions")
+            .and_then(Value::as_object)
+            .is_some_and(|q| !q.is_empty())
+        {
+            return Err(ProxyError::InvalidRequest(
+                "SystemOne requires a non-empty questions object".into(),
+            ));
+        }
+    } else if !body
+        .get("messages")
+        .and_then(Value::as_array)
+        .is_some_and(|messages| !messages.is_empty())
+    {
+        return Err(ProxyError::InvalidRequest(
+            "Chat Completions requires a non-empty messages array".into(),
+        ));
+    }
+    Ok(())
+}
+
 async fn handle_codex_standalone_passthrough(
     state: ProxyState,
     request: axum::extract::Request,
@@ -317,6 +401,7 @@ async fn handle_codex_standalone_passthrough(
     let body =
         read_codex_request_body(&mut headers, req_body, MAX_CODEX_REQUEST_BODY_BYTES).await?;
 
+    validate_native_request(&body, canonical_endpoint, &headers)?;
     let mut ctx = RequestContext::new(&state, &body, &headers).await?;
     let endpoint = endpoint_with_query(&uri, canonical_endpoint);
 

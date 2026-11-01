@@ -1993,7 +1993,7 @@ command = "keep-me"
                 .await
                 .unwrap()
                 .status(),
-            405
+            400
         );
         let mut updated = state.proxy_service.get_config().await.unwrap();
         updated.listen_port = 0;

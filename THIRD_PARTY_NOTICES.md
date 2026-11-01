@@ -23,3 +23,11 @@ license and NOTICE. The Windows installer distributes it as `LICENSE.rtf`.
 The attribution documents are not injected into model instructions.
 
 Regenerate or verify the extraction with `scripts/vendor-openai-instructions.py`.
+
+Atlas 8.1 adds the following WebSocket transport dependencies; their MIT license
+texts are included in `BUNDLED_LICENSES.txt`:
+
+- `tokio-tungstenite` 0.24.0 — https://github.com/snapview/tokio-tungstenite
+- `tungstenite` 0.24.0 — https://github.com/snapview/tungstenite-rs
+- `data-encoding` 2.11.1 — https://github.com/ia0/data-encoding
+- `sha1` 0.10.7 — https://github.com/RustCrypto/hashes

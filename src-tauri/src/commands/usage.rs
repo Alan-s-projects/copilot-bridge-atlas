@@ -162,13 +162,25 @@ pub async fn get_model_pricing(
 
         let mut stmt = conn.prepare(
             "SELECT model_id, display_name, input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million, long_context
+                cache_read_cost_per_million, cache_creation_cost_per_million, long_context, metadata
          FROM model_pricing
          ORDER BY display_name",
         )?;
 
         let rows = stmt.query_map([], |row| {
             Ok(ModelPricingInfo {
+                metadata: row
+                    .get::<_, Option<String>>(7)?
+                    .map(|value| {
+                        serde_json::from_str(&value).map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                7,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })
+                    })
+                    .transpose()?,
                 model_id: row.get(0)?,
                 display_name: row.get(1)?,
                 input_cost_per_million: row.get(2)?,
@@ -211,12 +223,14 @@ pub async fn update_model_pricing(
     cache_read_cost: String,
     cache_creation_cost: String,
     long_context: Option<crate::services::model_pricing::LongContextPricing>,
+    metadata: Option<crate::services::model_pricing::PricingMetadata>,
 ) -> Result<(), AppError> {
     blocking_usage(state, move |db| {
         crate::services::model_pricing::update_model_pricing(
             db,
             ModelPricingInfo {
                 long_context,
+                metadata,
                 model_id,
                 display_name,
                 input_cost_per_million: input_cost,

@@ -1,5 +1,16 @@
 import type { PendingRequestLog } from "./usage";
 
+export interface ProxyEndpoint {
+  id: string;
+  listener: "responses" | "messages";
+  method: "GET" | "POST" | "WS";
+  path: string;
+  description: string;
+  sampleInput: string;
+  sampleOutput: string;
+  implemented: boolean;
+}
+
 export interface ProxyStatus {
   claude_address?: string;
   claude_port?: number;

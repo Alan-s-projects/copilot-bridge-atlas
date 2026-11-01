@@ -58,6 +58,37 @@ const PRICE_FIELDS = [
 ] as const;
 
 describe("PricingEditModal", () => {
+  it("retains the explicit policy and warns that edits are user overrides", async () => {
+    const metadata = {
+      source: "foundry_reference_estimate" as const,
+      policy: "all_input_at_base_rate" as const,
+      actualCopilotPriceUnpublished: true,
+      sourceUrl:
+        "https://commandline.microsoft.com/microsoft-decision-1-model-foundry/",
+      verifiedAt: "2026-11-01",
+    };
+    render(
+      <PricingEditModal
+        open
+        model={{ ...model, modelId: "microsoft-decision-1", metadata }}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByText(/Saving creates a User override/)).toBeVisible();
+    expect(
+      screen.getByText(/Policy retained: all input at base rate/),
+    ).toBeVisible();
+    fireEvent.change(document.getElementById("inputCost")!, {
+      target: { value: "0.1" },
+    });
+    fireEvent.submit(document.getElementById("pricing-form")!);
+    await waitFor(() =>
+      expect(updatePrice).toHaveBeenLastCalledWith(
+        expect.objectContaining({ inputCost: "0.1", metadata }),
+      ),
+    );
+  });
+
   it.each([false, true])(
     "allows an optional long-context tier in isNew=%s",
     async (isNew) => {

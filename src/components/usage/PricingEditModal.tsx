@@ -94,6 +94,7 @@ export function PricingEditModal({
         cacheReadCost: formData.cacheReadCost,
         cacheCreationCost: formData.cacheCreationCost,
         longContext,
+        ...(model.metadata ? { metadata: model.metadata } : {}),
       });
 
       toast.success(
@@ -138,6 +139,21 @@ export function PricingEditModal({
       }
     >
       <form id="pricing-form" onSubmit={handleSubmit} className="space-y-6">
+        {model.metadata && (
+          <div className="rounded-lg border p-3 text-sm text-muted-foreground">
+            Saving creates a User override, not publisher-verified pricing.
+            {model.metadata.actualCopilotPriceUnpublished && (
+              <p>Actual Copilot price unpublished.</p>
+            )}
+            {model.metadata.policy === "all_input_at_base_rate" && (
+              <p>
+                Policy retained: all input at base rate, including cached input
+                once. Cache read/write rates are ignored; output uses your
+                output rate.
+              </p>
+            )}
+          </div>
+        )}
         {isNew && (
           <div className="space-y-2">
             <Label htmlFor="modelId">{t("usage.modelId", "Model ID")}</Label>

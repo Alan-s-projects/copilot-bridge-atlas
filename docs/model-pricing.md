@@ -6,7 +6,8 @@ table. The initial 33 entries were verified September 27, 2026; GPT-6.1 Sol
 was added using the rates verified October 8, 2026, and GPT-6.1 Terra using
 the rates verified October 29, 2026.
 The snapshot is compiled from `src-tauri/src/resources/model-pricing.json`;
-Atlas does not fetch or scrape pricing at runtime.
+Atlas does not fetch or scrape pricing at runtime. A separate Microsoft Decision 1
+Foundry reference estimate is bundled as described below (36 entries total).
 
 Prices are decimal USD per one million tokens. They estimate token charges,
 not the final subscription bill, included allowance, tax, or annual-plan
@@ -82,3 +83,29 @@ The snapshot needs a reviewed update when that promotion or any published rate
 changes. Cache writes listed as not applicable, or absent from a vendor's table,
 have no separate charge. No unpublished storage, audio, batch, or tool fees are
 invented.
+
+## Microsoft Decision 1 reference estimate
+
+`microsoft-decision-1` uses **Microsoft Foundry reference pricing**, not a verified
+GitHub Copilot rate: **$0.042 per million input tokens and $0 per million output
+tokens**, verified **2026-11-01** against [Microsoft's official Foundry announcement](https://commandline.microsoft.com/microsoft-decision-1-model-foundry/).
+**Actual Copilot price unpublished.** The old catalog multiplier of 1 is obsolete
+for this usage-based account and is not a USD/token rate.
+
+The optional bundled `metadata` map preserves the existing six-string price rows
+and records source, verification date, and `all_input_at_base_rate` policy.
+This policy bills reported total input once, including cached input, at the base
+input rate. It neither subtracts cached tokens nor adds separate cache charges.
+Legacy fresh-input rows reconstruct total input from their disjoint fresh/cache
+buckets. At multiplier 1, 28 input tokens and 1 output token cost **$0.000001176**.
+Other model calculations and rates are unchanged.
+
+Cost Pricing (not Routing endpoint details) shows this source and warning.
+Numeric edits become **User override — not publisher verified**, retain the
+explicit policy, and clear the source verification claim. The output override is
+honored; cache rates are ignored under this policy. Older local overrides without
+metadata inherit this model's policy without changing their numeric rates.
+Reset restores reference metadata; deletion tombstones remain effective across
+reseeding. Metadata is current pricing configuration only: historical request
+costs are not labeled with today's source. Only missing retained costs are
+backfilled, at full decimal precision; existing costs and pruned totals stay intact.

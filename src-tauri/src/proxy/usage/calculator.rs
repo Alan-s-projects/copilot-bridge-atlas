@@ -20,6 +20,7 @@ pub struct CostBreakdown {
 /// Model pricing information
 #[derive(Debug, Clone)]
 pub struct ModelPricing {
+    pub policy: crate::services::model_pricing::PricingPolicy,
     pub pricing_tier: &'static str,
     pub input_cost_per_million: Decimal,
     pub output_cost_per_million: Decimal,
@@ -58,6 +59,29 @@ impl CostCalculator {
         input_includes_cache_read: bool,
     ) -> CostBreakdown {
         let million = Decimal::from(1_000_000);
+
+        // Foundry reference policy charges all reported input exactly once.
+        // Fresh-only legacy semantics reconstruct total input from disjoint buckets.
+        if pricing.policy == crate::services::model_pricing::PricingPolicy::AllInputAtBaseRate {
+            let total_input = if input_includes_cache_read {
+                u64::from(usage.input_tokens)
+            } else {
+                u64::from(usage.input_tokens)
+                    + u64::from(usage.cache_read_tokens)
+                    + u64::from(usage.cache_creation_tokens)
+            };
+            let input_cost = Decimal::from(total_input) * pricing.input_cost_per_million / million;
+            let output_cost =
+                Decimal::from(usage.output_tokens) * pricing.output_cost_per_million / million;
+            return CostBreakdown {
+                pricing_tier: pricing.pricing_tier,
+                input_cost,
+                output_cost,
+                cache_read_cost: Decimal::ZERO,
+                cache_creation_cost: Decimal::ZERO,
+                total_cost: (input_cost + output_cost) * cost_multiplier,
+            };
+        }
 
         // Subtract cached input only when the recorded semantics include it.
         let billable_input_tokens = if input_includes_cache_read {
@@ -113,6 +137,7 @@ impl ModelPricing {
         cache_creation: &str,
     ) -> Result<Self, rust_decimal::Error> {
         Ok(Self {
+            policy: Default::default(),
             pricing_tier: crate::services::model_pricing::DEFAULT_PRICING_TIER,
             input_cost_per_million: Decimal::from_str(input)?,
             output_cost_per_million: Decimal::from_str(output)?,
@@ -125,6 +150,44 @@ impl ModelPricing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decision_all_input_policy_includes_cache_once_and_honors_override() {
+        let mut pricing = ModelPricing::from_strings("0.042", "0", "99", "99").unwrap();
+        pricing.policy = crate::services::model_pricing::PricingPolicy::AllInputAtBaseRate;
+        for (app, input, read, write) in [
+            ("codex", 28, 0, 0),
+            ("codex", 28, 20, 4),
+            ("legacy", 4, 20, 4),
+        ] {
+            let usage = TokenUsage {
+                input_tokens: input,
+                output_tokens: 1,
+                cache_read_tokens: read,
+                cache_creation_tokens: write,
+                model: None,
+                message_id: None,
+            };
+            let cost = CostCalculator::calculate_for_app(app, &usage, &pricing, Decimal::ONE);
+            assert_eq!(cost.total_cost, Decimal::from_str("0.000001176").unwrap());
+            assert_eq!(
+                cost.cache_read_cost + cost.cache_creation_cost + cost.output_cost,
+                Decimal::ZERO
+            );
+        }
+        pricing.input_cost_per_million = Decimal::from(2);
+        pricing.output_cost_per_million = Decimal::from(3);
+        let usage = TokenUsage {
+            input_tokens: 28,
+            output_tokens: 1,
+            cache_read_tokens: 20,
+            cache_creation_tokens: 4,
+            model: None,
+            message_id: None,
+        };
+        let cost = CostCalculator::calculate_for_app("codex", &usage, &pricing, Decimal::from(2));
+        assert_eq!(cost.total_cost, Decimal::from_str("0.000118").unwrap());
+    }
 
     #[test]
     fn test_cost_calculation() {

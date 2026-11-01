@@ -271,6 +271,55 @@ export function PricingConfigPanel() {
                           </div>
                         </TableCell>
                       </TableRow>
+                      {model.metadata && (
+                        <TableRow>
+                          <TableCell
+                            colSpan={7}
+                            className="pl-6 text-xs text-muted-foreground"
+                          >
+                            <p>
+                              {model.metadata.source === "user_override"
+                                ? "User override — not publisher verified."
+                                : "Microsoft Foundry reference estimate"}
+                              {model.metadata.source ===
+                                "foundry_reference_estimate" && (
+                                <>
+                                  {" "}
+                                  — verified {model.metadata.verifiedAt}.{" "}
+                                  <a
+                                    className="underline"
+                                    href="https://commandline.microsoft.com/microsoft-decision-1-model-foundry/"
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      void settingsApi
+                                        .openExternal(
+                                          "https://commandline.microsoft.com/microsoft-decision-1-model-foundry/",
+                                        )
+                                        .catch((error) =>
+                                          toast.error(String(error)),
+                                        );
+                                    }}
+                                  >
+                                    Official Microsoft Foundry source
+                                  </a>
+                                </>
+                              )}
+                            </p>
+                            {model.metadata.actualCopilotPriceUnpublished && (
+                              <p>Actual Copilot price unpublished.</p>
+                            )}
+                            {model.metadata.policy ===
+                              "all_input_at_base_rate" && (
+                              <p>
+                                All input at base rate, including cached input
+                                once. Cache read/write rates are ignored.
+                              </p>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )}
                       {model.longContext && (
                         <TableRow className="text-muted-foreground">
                           <TableCell colSpan={2} className="pl-6 text-xs">

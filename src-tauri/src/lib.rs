@@ -361,6 +361,7 @@ pub fn run() {
             commands::start_proxy_server,
             commands::stop_proxy_server,
             commands::get_proxy_status,
+            commands::get_proxy_endpoints,
             commands::get_global_proxy_config,
             commands::update_global_proxy_config,
             commands::get_usage_summary,

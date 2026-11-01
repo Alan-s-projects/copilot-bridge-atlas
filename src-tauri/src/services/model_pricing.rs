@@ -33,6 +33,38 @@ pub struct ModelPricingInfo {
     pub cache_creation_cost_per_million: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub long_context: Option<LongContextPricing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<PricingMetadata>,
+}
+
+/// Calculation policy is independent of where the numeric rates came from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PricingPolicy {
+    #[default]
+    Standard,
+    AllInputAtBaseRate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PricingSource {
+    FoundryReferenceEstimate,
+    UserOverride,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PricingMetadata {
+    pub source: PricingSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_at: Option<String>,
+    #[serde(default)]
+    pub policy: PricingPolicy,
+    #[serde(default)]
+    pub actual_copilot_price_unpublished: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,7 +155,23 @@ fn normalize_pricing(entry: ModelPricingInfo) -> Result<ModelPricingInfo, AppErr
         return Err(AppError::Message("Display name is required".into()));
     }
 
+    // Local files and numeric edits are user overrides, never publisher verification.
+    // Legacy six-field edits inherit the model's explicit calculation policy.
+    let metadata = match entry.metadata {
+        Some(metadata) => Some(metadata),
+        None => Database::bundled_pricing_metadata()?.remove(&model_id),
+    }
+    .map(|mut metadata| {
+        if model_id == "microsoft-decision-1" {
+            metadata.actual_copilot_price_unpublished = true;
+        }
+        metadata.source = PricingSource::UserOverride;
+        metadata.source_url = None;
+        metadata.verified_at = None;
+        metadata
+    });
     Ok(ModelPricingInfo {
+        metadata,
         long_context: entry
             .long_context
             .map(LongContextPricing::normalize)
@@ -218,21 +266,23 @@ fn upsert_pricing(
         .execute(
             "INSERT INTO model_pricing (
                 model_id, display_name, input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million, long_context
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                cache_read_cost_per_million, cache_creation_cost_per_million, long_context, metadata
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             ON CONFLICT(model_id) DO UPDATE SET
                 display_name = excluded.display_name,
                 input_cost_per_million = excluded.input_cost_per_million,
                 output_cost_per_million = excluded.output_cost_per_million,
                 cache_read_cost_per_million = excluded.cache_read_cost_per_million,
                 cache_creation_cost_per_million = excluded.cache_creation_cost_per_million,
-                long_context = excluded.long_context
+                long_context = excluded.long_context,
+                metadata = excluded.metadata
             WHERE display_name <> excluded.display_name
                OR input_cost_per_million <> excluded.input_cost_per_million
                OR output_cost_per_million <> excluded.output_cost_per_million
                OR cache_read_cost_per_million <> excluded.cache_read_cost_per_million
                OR cache_creation_cost_per_million <> excluded.cache_creation_cost_per_million
-               OR long_context IS NOT excluded.long_context",
+               OR long_context IS NOT excluded.long_context
+               OR metadata IS NOT excluded.metadata",
             params![
                 entry.model_id,
                 entry.display_name,
@@ -242,6 +292,12 @@ fn upsert_pricing(
                 entry.cache_creation_cost_per_million,
                 entry
                     .long_context
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|e| AppError::Config(e.to_string()))?,
+                entry
+                    .metadata
                     .as_ref()
                     .map(serde_json::to_string)
                     .transpose()
@@ -425,6 +481,7 @@ mod tests {
     fn sample_pricing() -> ModelPricingInfo {
         ModelPricingInfo {
             long_context: None,
+            metadata: None,
             model_id: "gpt-custom-model".to_string(),
             display_name: "GPT Custom Model".to_string(),
             input_cost_per_million: "1.25".to_string(),
@@ -432,6 +489,108 @@ mod tests {
             cache_read_cost_per_million: "0.1".to_string(),
             cache_creation_cost_per_million: "1.5".to_string(),
         }
+    }
+
+    #[test]
+    #[serial]
+    fn decision_reference_override_tombstone_reset_and_missing_cost_roundtrip() {
+        with_test_home(|db, path| {
+            let metadata = |db: &Database| -> PricingMetadata {
+                let json: String = db
+                    .conn
+                    .lock()
+                    .unwrap()
+                    .query_row(
+                        "SELECT metadata FROM model_pricing WHERE model_id='microsoft-decision-1'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                serde_json::from_str(&json).unwrap()
+            };
+            assert_eq!(metadata(db).source, PricingSource::FoundryReferenceEstimate);
+            assert_eq!(metadata(db).verified_at.as_deref(), Some("2026-11-01"));
+            {
+                let conn = db.conn.lock().unwrap();
+                conn.execute(
+                    "DELETE FROM model_pricing WHERE model_id='microsoft-decision-1'",
+                    [],
+                )
+                .unwrap();
+                for (id, input, read, write, semantics) in [
+                    ("plain", 28, 0, 0, 1),
+                    ("cached", 28, 20, 4, 1),
+                    ("fresh", 4, 20, 4, 2),
+                    ("recorded", 28, 0, 0, 1),
+                ] {
+                    conn.execute("INSERT INTO proxy_request_logs
+                        (request_id, provider_id, app_type, model, pricing_model, input_tokens, output_tokens,
+                         cache_read_tokens, cache_creation_tokens, input_token_semantics, latency_ms, status_code, created_at)
+                        VALUES (?1, 'copilot', 'codex', 'microsoft-decision-1', 'microsoft-decision-1', ?2, 1, ?3, ?4, ?5, 1, 200, 1)",
+                        params![id, input, read, write, semantics]).unwrap();
+                }
+                conn.execute("UPDATE proxy_request_logs SET total_cost_usd='7.123456' WHERE request_id='recorded'", []).unwrap();
+            }
+            let seeded = db.ensure_model_pricing_seeded().unwrap();
+            sync_seeded_model_pricing(db, &seeded).unwrap();
+            for id in ["plain", "cached", "fresh"] {
+                let cost: String = db
+                    .conn
+                    .lock()
+                    .unwrap()
+                    .query_row(
+                        "SELECT total_cost_usd FROM proxy_request_logs WHERE request_id=?1",
+                        [id],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(cost, "0.000001176", "{id}");
+            }
+            let mut entry = sample_pricing();
+            entry.model_id = "microsoft-decision-1".into();
+            entry.input_cost_per_million = "2".into();
+            update_model_pricing(db, entry).unwrap();
+            let edited = metadata(db);
+            assert_eq!(edited.source, PricingSource::UserOverride);
+            assert_eq!(edited.policy, PricingPolicy::AllInputAtBaseRate);
+            assert!(edited.source_url.is_none() && edited.verified_at.is_none());
+            let file: ModelPricingFile = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            assert_eq!(file.models[0].metadata.as_ref(), Some(&edited));
+            sync_local_model_pricing(db).unwrap();
+            assert_eq!(metadata(db), edited);
+            delete_model_pricing(db, "microsoft-decision-1").unwrap();
+            let seeded = db.ensure_model_pricing_seeded().unwrap();
+            sync_seeded_model_pricing(db, &seeded).unwrap();
+            assert!(crate::services::usage_stats::find_model_pricing_row(
+                &db.conn.lock().unwrap(),
+                "microsoft-decision-1"
+            )
+            .unwrap()
+            .is_none());
+            reset_model_pricing_to_defaults(db).unwrap();
+            assert_eq!(metadata(db).source, PricingSource::FoundryReferenceEstimate);
+            let conn = db.conn.lock().unwrap();
+            assert_eq!(
+                conn.query_row(
+                    "SELECT total_cost_usd FROM proxy_request_logs WHERE request_id='recorded'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+                "7.123456"
+            );
+            for unknown in [
+                "vendor/microsoft-decision-1",
+                "microsoft-decision-1-high",
+                "microsoft-decision-1-2026-11-01",
+            ] {
+                assert!(
+                    crate::services::usage_stats::find_model_pricing_row(&conn, unknown)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        });
     }
 
     #[test]
@@ -550,6 +709,7 @@ mod tests {
                             cache_read_cost_per_million: "0.05".into(),
                             cache_creation_cost_per_million: "0.50".into(),
                             long_context: None,
+                            metadata: None,
                         }),
                         "deleted" => file.deleted_model_ids.push(model.into()),
                         _ => {}
@@ -692,6 +852,7 @@ mod tests {
         with_test_home(|db, path| {
             let edited_default = ModelPricingInfo {
                 long_context: None,
+                metadata: None,
                 model_id: "gpt-6-astra".into(),
                 display_name: "GPT-6 Astra custom".into(),
                 input_cost_per_million: "99".into(),
@@ -705,6 +866,7 @@ mod tests {
 
             let retired_entry = ModelPricingInfo {
                 long_context: None,
+                metadata: None,
                 model_id: "retired-model".into(),
                 display_name: "Retired model".into(),
                 input_cost_per_million: "4.2".into(),

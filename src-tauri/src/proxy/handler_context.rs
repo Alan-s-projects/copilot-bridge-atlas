@@ -34,14 +34,6 @@ impl RequestContext {
         body: &serde_json::Value,
         headers: &HeaderMap,
     ) -> Result<Self, ProxyError> {
-        let start_time = Instant::now();
-        let copilot_optimizer_config = state.db.get_copilot_optimizer_config().unwrap_or_default();
-        let request_model = body
-            .get("model")
-            .and_then(|model| model.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let session = extract_session_id(headers, body);
         let provider =
             state
                 .provider_router
@@ -53,6 +45,23 @@ impl RequestContext {
                     }
                     _ => ProxyError::DatabaseError(error.to_string()),
                 })?;
+        Self::new_for_provider(state, body, headers, provider).await
+    }
+
+    pub async fn new_for_provider(
+        state: &ProxyState,
+        body: &serde_json::Value,
+        headers: &HeaderMap,
+        provider: Provider,
+    ) -> Result<Self, ProxyError> {
+        let start_time = Instant::now();
+        let copilot_optimizer_config = state.db.get_copilot_optimizer_config().unwrap_or_default();
+        let request_model = body
+            .get("model")
+            .and_then(|model| model.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let session = extract_session_id(headers, body);
         log::debug!(
             "[Codex] Provider: {}, model: {}, session: {} (source: {:?}, client_provided: {})",
             provider.name,

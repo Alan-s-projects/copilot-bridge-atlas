@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { proxyApi } from "@/lib/api/proxy";
+import { EndpointDirectory } from "./EndpointDirectory";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SettingsSection } from "@/components/ui/settings-section";
@@ -37,6 +40,12 @@ function endpoint(address: string, port: string, suffix: string) {
 export function ProxyPanel() {
   const { data: config } = useGlobalProxyConfig();
   const { data: status } = useProxyStatusQuery();
+  const endpoints = useQuery({
+    queryKey: ["proxyEndpoints"],
+    queryFn: () => proxyApi.getProxyEndpoints(),
+    staleTime: Infinity,
+    retry: false,
+  });
   const { mutateAsync, isPending } = useUpdateGlobalProxyConfig({
     showSuccessToast: false,
   });
@@ -228,6 +237,14 @@ export function ProxyPanel() {
               Copy
             </Button>
           </div>
+          <EndpointDirectory
+            endpoints={(endpoints.data ?? []).filter(
+              (entry) =>
+                entry.listener === (id === "proxy" ? "responses" : "messages"),
+            )}
+            isPending={endpoints.isPending}
+            isError={endpoints.isError}
+          />
         </SettingsSection>
       ))}
       {(notice || isPending) && (

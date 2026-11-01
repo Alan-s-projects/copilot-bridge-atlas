@@ -69,7 +69,16 @@ export interface PaginatedLogs {
   pageSize: number;
 }
 
+export interface PricingMetadata {
+  source: "foundry_reference_estimate" | "user_override";
+  sourceUrl?: string;
+  verifiedAt?: string;
+  policy: "standard" | "all_input_at_base_rate";
+  actualCopilotPriceUnpublished: boolean;
+}
+
 export interface ModelPricing {
+  metadata?: PricingMetadata;
   modelId: string;
   displayName: string;
   inputCostPerMillion: string;

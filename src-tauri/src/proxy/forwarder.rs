@@ -241,8 +241,14 @@ impl RequestForwarder {
         let mut status = self.status.write().await;
         match result {
             Ok((response, outbound_model, codex_upstream_format)) => {
-                status.success_requests = status.success_requests.saturating_add(1);
-                status.last_error = None;
+                if response.status().is_success() {
+                    status.success_requests = status.success_requests.saturating_add(1);
+                    status.last_error = None;
+                } else {
+                    status.failed_requests = status.failed_requests.saturating_add(1);
+                    status.last_error =
+                        Some(format!("Upstream HTTP {}", response.status().as_u16()));
+                }
                 status.success_rate =
                     status.success_requests as f32 / status.total_requests as f32 * 100.0;
                 drop(status);
@@ -287,6 +293,12 @@ impl RequestForwarder {
             }
         }
         let is_responses = is_codex_responses_endpoint(endpoint);
+        let native_endpoint = match split_endpoint_and_query(endpoint).0 {
+            "/chat/completions" => Some("/chat/completions"),
+            "/v1/systemone" => Some("/v1/systemone"),
+            _ => None,
+        };
+        let mut native_identity = None;
         let context = self.codex_copilot_request_context(is_responses, &body);
         let mut upstream_format = None;
         let mut effective_endpoint = endpoint.to_string();
@@ -305,6 +317,18 @@ impl RequestForwarder {
                 CopilotProtocol::Responses => CodexUpstreamFormat::NativeResponses,
                 CopilotProtocol::Chat => CodexUpstreamFormat::ChatCompletions,
             });
+        }
+        if let Some(native) = native_endpoint {
+            let (model, auth, base) = self
+                .resolve_native_identity(provider, &body, native)
+                .await?;
+            let transport = super::providers::copilot_model_map::endpoint_transport(&model, native)
+                .ok_or_else(|| {
+                    ProxyError::InvalidRequest("Model does not support this endpoint".into())
+                })?;
+            effective_endpoint = rewrite_codex_endpoint_for_copilot(endpoint, transport);
+            body["model"] = Value::String(model.id);
+            native_identity = Some((auth, base));
         }
         let chat = upstream_format == Some(CodexUpstreamFormat::ChatCompletions);
         if chat {
@@ -326,13 +350,20 @@ impl RequestForwarder {
             self.codex_chat_history.enrich_request(&mut body).await;
             super::providers::transform_copilot_responses::adapt_request(&mut body)?;
         }
-        let body = prepare_upstream_request_body(body);
+        let body = if native_endpoint.is_some() {
+            canonicalize_value(body)
+        } else {
+            prepare_upstream_request_body(body)
+        };
         let outbound_model = body
             .get("model")
             .and_then(Value::as_str)
             .map(str::to_string);
         let streaming = is_streaming_request(&body, headers);
-        let (mut auth_headers, base_url) = self.copilot_identity(provider).await?;
+        let (mut auth_headers, base_url) = match native_identity {
+            Some(identity) => identity,
+            None => self.copilot_identity(provider).await?,
+        };
         if let Some(context) = context {
             context.apply_headers(
                 &mut auth_headers,
@@ -341,7 +372,9 @@ impl RequestForwarder {
         }
         // Standalone Codex APIs keep their OpenAI /v1 prefix. Responses transport
         // paths come directly from the authenticated Copilot model catalog.
-        let url = if is_responses {
+        let url = if native_endpoint.is_some() {
+            build_native_url(&base_url, &effective_endpoint)?
+        } else if is_responses {
             build_copilot_unversioned_url(&base_url, &effective_endpoint)
         } else {
             build_codex_standalone_url(&base_url, &effective_endpoint)?
@@ -365,7 +398,12 @@ impl RequestForwarder {
         let outgoing_bytes = body_bytes.len();
         // Reuse the pooled transport, including the configured HTTP/SOCKS proxy.
         #[cfg(not(test))]
-        let client = super::http_client::get().map_err(ProxyError::Internal)?;
+        let client = if native_endpoint.is_some() {
+            super::http_client::get_no_redirect()
+        } else {
+            super::http_client::get()
+        }
+        .map_err(ProxyError::Internal)?;
         #[cfg(test)]
         let client = self
             .copilot_fixture
@@ -426,7 +464,7 @@ impl RequestForwarder {
         } else {
             response
         };
-        if response.status().is_success() {
+        if response.status().is_success() || native_endpoint.is_some() {
             Ok((response, outbound_model, upstream_format))
         } else {
             let status = response.status().as_u16();
@@ -459,6 +497,82 @@ impl RequestForwarder {
             }
             Err(error)
         }
+    }
+
+    async fn resolve_native_identity(
+        &self,
+        provider: &Provider,
+        body: &Value,
+        endpoint: &str,
+    ) -> Result<
+        (
+            super::providers::copilot_auth::CopilotModel,
+            Vec<(http::HeaderName, http::HeaderValue)>,
+            String,
+        ),
+        ProxyError,
+    > {
+        let model_id = body
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|id| is_valid_model_id(id))
+            .ok_or_else(|| ProxyError::InvalidRequest("A model identifier is required".into()))?;
+        if !super::providers::copilot_model_map::model_enabled_in_settings(
+            &provider.settings_config,
+            model_id.trim(),
+        ) {
+            return Err(ProxyError::InvalidRequest(
+                "Model is disabled in Atlas settings".into(),
+            ));
+        }
+        let unavailable = || {
+            ProxyError::InvalidRequest(format!(
+                "Model {model_id} does not advertise {endpoint} for this account"
+            ))
+        };
+        #[cfg(test)]
+        if let Some(fixture) = &self.copilot_fixture {
+            let model = super::providers::copilot_model_map::resolve_endpoint_model(
+                model_id,
+                &fixture.models,
+                endpoint,
+            )
+            .ok_or_else(unavailable)?;
+            return Ok((
+                model,
+                build_copilot_request_headers(&fixture.token)?,
+                fixture.endpoint.clone(),
+            ));
+        }
+        let app = self
+            .app_handle
+            .as_ref()
+            .ok_or_else(|| ProxyError::AuthError("Copilot authentication unavailable".into()))?;
+        let state = app.state::<CopilotAuthState>();
+        let manager = state.0.read().await;
+        let account = match provider
+            .meta
+            .as_ref()
+            .and_then(|m| m.managed_account_id_for("github_copilot"))
+        {
+            Some(id) => id,
+            None => manager
+                .get_status()
+                .await
+                .default_account_id
+                .ok_or_else(|| ProxyError::AuthError("No default Copilot account".into()))?,
+        };
+        let model = manager
+            .resolve_endpoint_model_for_account(&account, model_id, endpoint)
+            .await
+            .map_err(|e| codex_copilot_lookup_error(model_id, e))?
+            .ok_or_else(unavailable)?;
+        let token = manager
+            .get_valid_token_for_account(&account)
+            .await
+            .map_err(|e| codex_copilot_lookup_error(model_id, e))?;
+        let base = manager.get_api_endpoint(&account).await;
+        Ok((model, build_copilot_request_headers(&token)?, base))
     }
 
     async fn copilot_identity(
@@ -683,6 +797,30 @@ fn rewrite_codex_endpoint_for_copilot(inbound_endpoint: &str, supported_endpoint
     }
 }
 
+fn build_native_url(base: &str, endpoint: &str) -> Result<String, ProxyError> {
+    let url = url::Url::parse(base)
+        .map_err(|_| ProxyError::ConfigError("Invalid Copilot API origin".into()))?;
+    let secure = url.scheme() == "https";
+    #[cfg(test)]
+    let secure = secure
+        || (url.scheme() == "http"
+            && url
+                .host_str()
+                .is_some_and(|h| h == "127.0.0.1" || h == "localhost"));
+    if !secure
+        || !url.has_host()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(ProxyError::ConfigError(
+            "Copilot requires an authenticated HTTPS API origin".into(),
+        ));
+    }
+    Ok(build_copilot_unversioned_url(base, endpoint))
+}
+
 fn build_copilot_unversioned_url(base_url: &str, endpoint: &str) -> String {
     format!(
         "{}/{}",
@@ -744,11 +882,38 @@ fn upstream_headers(
         .parse::<http::Uri>()
         .ok()
         .and_then(|uri| uri.authority().map(|authority| authority.to_string()));
+    let connection_headers: Vec<_> = incoming
+        .get_all(http::header::CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(|name| name.trim().to_ascii_lowercase())
+        })
+        .collect();
     let mut headers = http::HeaderMap::new();
     let mut saw_auth = false;
     let mut saw_accept_encoding = false;
     for (name, value) in incoming {
         let key = name.as_str();
+        if connection_headers.iter().any(|name| name == key)
+            || matches!(
+                key,
+                "cookie"
+                    | "cookie2"
+                    | "proxy-authorization"
+                    | "proxy-authenticate"
+                    | "connection"
+                    | "keep-alive"
+                    | "te"
+                    | "trailer"
+                    | "upgrade"
+            )
+            || key.starts_with("sec-websocket-")
+        {
+            continue;
+        }
         if key == "host" {
             if let Some(value) = host
                 .as_deref()

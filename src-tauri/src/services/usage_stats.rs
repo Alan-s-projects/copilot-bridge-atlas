@@ -1079,6 +1079,7 @@ impl Database {
 
 #[derive(Clone)]
 struct PricingInfo {
+    policy: super::model_pricing::PricingPolicy,
     tier: &'static str,
     input: rust_decimal::Decimal,
     output: rust_decimal::Decimal,
@@ -1203,7 +1204,16 @@ impl Database {
         let million = rust_decimal::Decimal::from(1_000_000u64);
 
         // Fresh-input rows need no deduction; total input includes cache tokens.
-        let billable_input_tokens = if log.input_token_semantics == INPUT_TOKEN_SEMANTICS_FRESH {
+        let all_input = pricing.policy == super::model_pricing::PricingPolicy::AllInputAtBaseRate;
+        let billable_input_tokens = if all_input {
+            if log.input_token_semantics == INPUT_TOKEN_SEMANTICS_FRESH {
+                log.input_tokens as u64
+                    + log.cache_read_tokens as u64
+                    + log.cache_creation_tokens as u64
+            } else {
+                log.input_tokens as u64
+            }
+        } else if log.input_token_semantics == INPUT_TOKEN_SEMANTICS_FRESH {
             log.input_tokens as u64
         } else {
             (log.input_tokens as u64)
@@ -1214,21 +1224,47 @@ impl Database {
             rust_decimal::Decimal::from(billable_input_tokens) * pricing.input / million;
         let output_cost =
             rust_decimal::Decimal::from(log.output_tokens as u64) * pricing.output / million;
-        let cache_read_cost = rust_decimal::Decimal::from(log.cache_read_tokens as u64)
-            * pricing.cache_read
+        let cache_read_cost = rust_decimal::Decimal::from(if all_input {
+            0
+        } else {
+            log.cache_read_tokens as u64
+        }) * pricing.cache_read
             / million;
-        let cache_creation_cost = rust_decimal::Decimal::from(log.cache_creation_tokens as u64)
-            * pricing.cache_creation
+        let cache_creation_cost = rust_decimal::Decimal::from(if all_input {
+            0
+        } else {
+            log.cache_creation_tokens as u64
+        }) * pricing.cache_creation
             / million;
         // Total cost = sum of basic costs × multiple
         let base_total = input_cost + output_cost + cache_read_cost + cache_creation_cost;
         let total_cost = base_total * multiplier;
 
-        log.input_cost_usd = format!("{input_cost:.6}");
-        log.output_cost_usd = format!("{output_cost:.6}");
-        log.cache_read_cost_usd = format!("{cache_read_cost:.6}");
-        log.cache_creation_cost_usd = format!("{cache_creation_cost:.6}");
-        log.total_cost_usd = format!("{total_cost:.6}");
+        log.input_cost_usd = if all_input {
+            input_cost.normalize().to_string()
+        } else {
+            format!("{input_cost:.6}")
+        };
+        log.output_cost_usd = if all_input {
+            output_cost.normalize().to_string()
+        } else {
+            format!("{output_cost:.6}")
+        };
+        log.cache_read_cost_usd = if all_input {
+            cache_read_cost.normalize().to_string()
+        } else {
+            format!("{cache_read_cost:.6}")
+        };
+        log.cache_creation_cost_usd = if all_input {
+            cache_creation_cost.normalize().to_string()
+        } else {
+            format!("{cache_creation_cost:.6}")
+        };
+        log.total_cost_usd = if all_input {
+            total_cost.normalize().to_string()
+        } else {
+            format!("{total_cost:.6}")
+        };
         log.pricing_tier = Some(pricing.tier.to_string());
 
         conn.execute(
@@ -1270,6 +1306,7 @@ impl Database {
         let Some(SelectedPricing {
             rates: (input, output, cache_read, cache_creation),
             tier,
+            policy,
         }) = row
         else {
             return Ok(None);
@@ -1277,6 +1314,7 @@ impl Database {
 
         let pricing = PricingInfo {
             tier,
+            policy,
             input: rust_decimal::Decimal::from_str(&input)
                 .map_err(|e| AppError::Database(format!("Failed to parse input price: {e}")))?,
             output: rust_decimal::Decimal::from_str(&output)
@@ -1353,6 +1391,7 @@ pub(crate) fn find_model_pricing_for_input(
 }
 
 pub(crate) struct SelectedPricing {
+    pub policy: super::model_pricing::PricingPolicy,
     pub rates: (String, String, String, String),
     pub tier: &'static str,
 }
@@ -1369,6 +1408,17 @@ pub(crate) fn find_selected_model_pricing(
 
     for candidate in &candidates {
         if let Some(row) = query_model_pricing_exact(conn, candidate)? {
+            let metadata: Option<String> = conn.query_row(
+                "SELECT metadata FROM model_pricing WHERE model_id = ?1",
+                [candidate],
+                |row| row.get(0),
+            )?;
+            let policy = metadata
+                .map(|value| serde_json::from_str::<super::model_pricing::PricingMetadata>(&value))
+                .transpose()
+                .map_err(|e| AppError::Database(format!("Invalid pricing metadata: {e}")))?
+                .map(|metadata| metadata.policy)
+                .unwrap_or_default();
             let tier: Option<String> = conn.query_row(
                 "SELECT long_context FROM model_pricing WHERE model_id = ?1",
                 [candidate],
@@ -1381,6 +1431,7 @@ pub(crate) fn find_selected_model_pricing(
                     })?;
                 if total_input > tier.threshold_input_tokens {
                     return Ok(Some(SelectedPricing {
+                        policy,
                         tier: super::model_pricing::LONG_CONTEXT_PRICING_TIER,
                         rates: (
                             tier.input_cost_per_million,
@@ -1392,6 +1443,7 @@ pub(crate) fn find_selected_model_pricing(
                 }
             }
             return Ok(Some(SelectedPricing {
+                policy,
                 rates: row,
                 tier: super::model_pricing::DEFAULT_PRICING_TIER,
             }));
@@ -1470,7 +1522,10 @@ fn model_pricing_candidates(model_id: &str) -> Vec<String> {
             continue;
         }
 
-        if let Some(stripped) = strip_model_date_suffix(&candidate) {
+        // Decision pricing is an exact SKU reference, not a family/date fallback.
+        if let Some(stripped) =
+            strip_model_date_suffix(&candidate).filter(|base| base != "microsoft-decision-1")
+        {
             queue.push(stripped);
         }
         // Only legacy GPT usage names encode the effort in the model ID.
@@ -1603,8 +1658,13 @@ mod tests {
                 };
                 // Independent arithmetic from the published rate fixture, not the production calculator.
                 let tokens = [fresh, output_tokens, cached, written];
+                let billed_tokens = if model == "microsoft-decision-1" {
+                    [total_input, output_tokens, 0, 0]
+                } else {
+                    tokens
+                };
                 let components = std::array::from_fn::<_, 4, _>(|index| {
-                    Decimal::from(tokens[index]) * Decimal::from_str(rates[index]).unwrap()
+                    Decimal::from(billed_tokens[index]) * Decimal::from_str(rates[index]).unwrap()
                         / million
                 });
                 let total = components.iter().copied().sum::<Decimal>()

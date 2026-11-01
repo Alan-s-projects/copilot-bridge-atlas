@@ -3,6 +3,7 @@ import type {
   ProxyStatus,
   ProxyServerInfo,
   GlobalProxyConfig,
+  ProxyEndpoint,
 } from "@/types/proxy";
 
 export type GlobalConfigUpdate =
@@ -26,6 +27,11 @@ export const proxyApi = {
   // Get proxy server status
   async getProxyStatus(): Promise<ProxyStatus> {
     return invoke("get_proxy_status");
+  },
+
+  // Read the backend's shared route registry, not live listener reachability.
+  async getProxyEndpoints(): Promise<ProxyEndpoint[]> {
+    return invoke("get_proxy_endpoints");
   },
 
   // Get global proxy configuration

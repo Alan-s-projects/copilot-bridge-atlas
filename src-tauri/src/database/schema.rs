@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     input_cost_per_million TEXT NOT NULL, output_cost_per_million TEXT NOT NULL,
     cache_read_cost_per_million TEXT NOT NULL DEFAULT '0',
     cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0',
-    long_context TEXT
+    long_context TEXT, metadata TEXT
 );
 CREATE TABLE IF NOT EXISTS usage_daily_rollups (
     date TEXT NOT NULL, app_type TEXT NOT NULL, provider_id TEXT NOT NULL, model TEXT NOT NULL,
@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
         conn.execute_batch("SAVEPOINT atlas_schema;")
             .map_err(|error| AppError::Database(error.to_string()))?;
         let result = Self::create_tables_on_conn(conn)
+            .and_then(|_| Self::ensure_pricing_metadata_column(conn))
             .and_then(|_| Self::ensure_client_columns(conn))
             .and_then(|_| Self::ensure_rollup_client_costs(conn))
             .and_then(|_| Self::ensure_rollup_client_usage(conn))
@@ -102,6 +103,33 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
                 Err(error)
             }
         }
+    }
+
+    fn ensure_pricing_metadata_column(conn: &Connection) -> Result<(), AppError> {
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('model_pricing') WHERE name='metadata')",
+            [],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            conn.execute("ALTER TABLE model_pricing ADD COLUMN metadata TEXT", [])?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn bundled_pricing_metadata() -> Result<
+        std::collections::BTreeMap<String, crate::services::model_pricing::PricingMetadata>,
+        AppError,
+    > {
+        #[derive(serde::Deserialize)]
+        struct Bundle {
+            #[serde(default)]
+            metadata:
+                std::collections::BTreeMap<String, crate::services::model_pricing::PricingMetadata>,
+        }
+        serde_json::from_str::<Bundle>(include_str!("../resources/model-pricing.json"))
+            .map(|bundle| bundle.metadata)
+            .map_err(|e| AppError::Config(e.to_string()))
     }
 
     fn ensure_rollup_client_costs(conn: &Connection) -> Result<(), AppError> {
@@ -187,6 +215,7 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
         conn: &Connection,
     ) -> Result<Vec<String>, AppError> {
         let tiers = Self::bundled_long_context_prices()?;
+        let metadata = Self::bundled_pricing_metadata()?;
         let mut seeded = Vec::new();
         // Fill missing estimates without overwriting custom prices.
         for [id, name, input, output, cache_read, cache_creation] in Self::bundled_model_prices()? {
@@ -194,8 +223,8 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
                 .execute(
                     "INSERT OR IGNORE INTO model_pricing (model_id, display_name,
                  input_cost_per_million, output_cost_per_million,
-                 cache_read_cost_per_million, cache_creation_cost_per_million, long_context)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 cache_read_cost_per_million, cache_creation_cost_per_million, long_context, metadata)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     rusqlite::params![
                         id,
                         name,
@@ -207,6 +236,8 @@ CREATE TABLE IF NOT EXISTS usage_daily_rollups (
                             .get(&id)
                             .map(serde_json::to_string)
                             .transpose()
+                            .map_err(|e| AppError::Config(e.to_string()))?,
+                        metadata.get(&id).map(serde_json::to_string).transpose()
                             .map_err(|e| AppError::Config(e.to_string()))?
                     ],
                 )

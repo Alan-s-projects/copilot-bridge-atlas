@@ -1,6 +1,7 @@
 {
   "columns": ["modelId", "displayName", "input", "output", "cacheRead", "cacheCreation"],
   "prices": [
+    ["microsoft-decision-1", "Microsoft Decision 1", "0.042", "0", "0", "0"],
     ["gpt-5-mini", "GPT-5 mini", "0.25", "2", "0.025", "0"],
     ["gpt-5.3-codex", "GPT-5.3-Codex", "1.75", "14", "0.175", "0"],
     ["gpt-5.4", "GPT-5.4", "2.50", "15", "0.25", "0"],
@@ -37,6 +38,15 @@
     ["kimi-k2.7-code", "Kimi K2.7 Code", "0.95", "4", "0.19", "0"],
     ["kimi-k3", "Kimi K3", "3", "15", "0.30", "0"]
   ],
+  "metadata": {
+    "microsoft-decision-1": {
+      "source": "foundry_reference_estimate",
+      "sourceUrl": "https://commandline.microsoft.com/microsoft-decision-1-model-foundry/",
+      "verifiedAt": "2026-11-01",
+      "policy": "all_input_at_base_rate",
+      "actualCopilotPriceUnpublished": true
+    }
+  },
   "longContext": {
     "gpt-5.4": {"thresholdInputTokens": 272000, "inputCostPerMillion": "5", "outputCostPerMillion": "22.50", "cacheReadCostPerMillion": "0.50", "cacheCreationCostPerMillion": "0"},
     "gpt-5.5": {"thresholdInputTokens": 272000, "inputCostPerMillion": "10", "outputCostPerMillion": "45", "cacheReadCostPerMillion": "1", "cacheCreationCostPerMillion": "0"},

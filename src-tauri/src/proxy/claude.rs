@@ -120,12 +120,13 @@ fn discovery(config: &ClaudeConfig, models: &[String]) -> Value {
     json!({"first_id":data.first().and_then(|m|m.get("id")),"last_id":data.last().and_then(|m|m.get("id")),"has_more":false,"data":data})
 }
 pub fn router(state: ProxyState) -> Router {
+    use super::endpoint_registry::Endpoint;
     Router::new()
         .route("/health", get(handlers::health_check))
-        .route("/v1/models", get(models))
+        .route(Endpoint::MessageModels.paths()[0], get(models))
         .route("/v1/models/:id", get(model))
-        .route("/v1/messages", post(messages))
-        .route("/v1/messages/count_tokens", post(count_tokens))
+        .route(Endpoint::Messages.paths()[0], post(messages))
+        .route(Endpoint::CountTokens.paths()[0], post(count_tokens))
         .fallback(|| async { error(StatusCode::NOT_FOUND, "Endpoint not found") })
         .with_state(state)
 }

@@ -264,70 +264,33 @@ impl ProxyServer {
     }
 
     fn build_router(&self) -> Router {
-        Router::new()
-            // health check
+        use super::endpoint_registry::{Endpoint, ENDPOINTS};
+        let mut router = Router::new()
             .route("/health", get(handlers::health_check))
-            .route("/status", get(handlers::get_status))
-            // OpenAI Models API (Codex CLI reachability check)
-            .route("/models", get(handlers::handle_models))
-            .route("/v1/models", get(handlers::handle_models))
-            // OpenAI Responses API (Codex CLI, supports prefix and non-prefix)
-            .route("/responses", post(handlers::handle_responses))
-            .route("/v1/responses", post(handlers::handle_responses))
-            .route("/v1/v1/responses", post(handlers::handle_responses))
-            .route("/codex/v1/responses", post(handlers::handle_responses))
-            // OpenAI Responses Compact API (Codex CLI remote compression, transparent transmission)
-            .route(
-                "/responses/compact",
-                post(handlers::handle_responses_compact),
-            )
-            .route(
-                "/v1/responses/compact",
-                post(handlers::handle_responses_compact),
-            )
-            .route(
-                "/v1/v1/responses/compact",
-                post(handlers::handle_responses_compact),
-            )
-            .route(
-                "/codex/v1/responses/compact",
-                post(handlers::handle_responses_compact),
-            )
-            // Codex standalone Alpha Search API. All local aliases normalize to
-            // the selected provider's canonical sibling `/alpha/search` route.
-            .route("/alpha/search", post(handlers::handle_alpha_search))
-            .route("/v1/alpha/search", post(handlers::handle_alpha_search))
-            .route("/v1/v1/alpha/search", post(handlers::handle_alpha_search))
-            .route(
-                "/codex/v1/alpha/search",
-                post(handlers::handle_alpha_search),
-            )
-            // Codex built-in ImageGen still calls the legacy OpenAI Images API.
-            .route(
-                "/images/generations",
-                post(handlers::handle_images_generations),
-            )
-            .route(
-                "/v1/images/generations",
-                post(handlers::handle_images_generations),
-            )
-            .route(
-                "/v1/v1/images/generations",
-                post(handlers::handle_images_generations),
-            )
-            .route(
-                "/codex/v1/images/generations",
-                post(handlers::handle_images_generations),
-            )
-            // Codex ImageGen posts to `/images/edits` when it references existing images.
-            .route("/images/edits", post(handlers::handle_images_edits))
-            .route("/v1/images/edits", post(handlers::handle_images_edits))
-            .route("/v1/v1/images/edits", post(handlers::handle_images_edits))
-            .route(
-                "/codex/v1/images/edits",
-                post(handlers::handle_images_edits),
-            )
-            .with_state(self.state.clone())
+            .route("/status", get(handlers::get_status));
+        for endpoint in ENDPOINTS
+            .into_iter()
+            .filter(|endpoint| endpoint.listener() == "responses")
+        {
+            let handler = match endpoint {
+                Endpoint::Responses => post(handlers::handle_responses),
+                Endpoint::ChatCompletions => post(handlers::handle_chat_completions),
+                Endpoint::SystemOne => post(handlers::handle_systemone),
+                Endpoint::ResponsesWebSocket => {
+                    get(super::responses_websocket::handle_responses_websocket)
+                }
+                Endpoint::Compact => post(handlers::handle_responses_compact),
+                Endpoint::Search => post(handlers::handle_alpha_search),
+                Endpoint::Images => post(handlers::handle_images_generations),
+                Endpoint::ImageEdits => post(handlers::handle_images_edits),
+                Endpoint::Models => get(handlers::handle_models),
+                _ => unreachable!("Messages routes use their own listener"),
+            };
+            for path in endpoint.paths() {
+                router = router.route(path, handler.clone());
+            }
+        }
+        router.with_state(self.state.clone())
     }
 
     /// Update runtime configuration without restarting the service
@@ -343,9 +306,11 @@ async fn serve_connection(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
     state: ProxyState,
 ) {
+    let upgrades_shutdown = shutdown.clone();
     let service = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
         let mut router = app.clone();
         let state = state.clone();
+        let upgrades_shutdown = upgrades_shutdown.clone();
         async move {
             if !state.status.read().await.running {
                 return Ok::<_, std::convert::Infallible>(
@@ -364,19 +329,29 @@ async fn serve_connection(
                 }
             }
             let (parts, body) = req.into_parts();
-            let req = http::Request::from_parts(parts, axum::body::Body::new(body));
+            let mut req = http::Request::from_parts(parts, axum::body::Body::new(body));
+            req.extensions_mut()
+                .insert(super::responses_websocket::ResponsesWebSocketShutdown(
+                    upgrades_shutdown,
+                ));
             <Router as tower::Service<_>>::call(&mut router, req).await
         }
     });
     let mut builder = hyper::server::conn::http1::Builder::new();
     builder.preserve_header_case(true);
-    let connection = builder.serve_connection(TokioIo::new(stream), service);
+    let connection = builder
+        .serve_connection(TokioIo::new(stream), service)
+        .with_upgrades();
     tokio::pin!(connection);
     tokio::select! {
         result=&mut connection=>{if let Err(e)=result{log::debug!("[{}] Proxy connection ended: {e}", log_srv::CONN_ERR);}},
         _=shutdown.changed()=>{connection.as_mut().graceful_shutdown();let _=connection.await;}
     }
 }
+
+#[cfg(test)]
+#[path = "native_endpoint_tests.rs"]
+mod native_endpoint_tests;
 
 #[cfg(test)]
 mod tests {

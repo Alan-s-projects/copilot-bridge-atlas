@@ -197,6 +197,42 @@ async fn native_http_preserves_payloads_errors_and_streams_and_replaces_credenti
 }
 
 #[tokio::test]
+async fn decision_saved_toggle_gates_native_requests_without_restart() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route(
+                "/v1/systemone",
+                axum::routing::post(|| async { Json(json!({"answers":{}})) }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let fixture = CopilotFixture {
+        endpoint: format!("http://{address}"),
+        token: "unused".into(),
+        models: vec![model("decision", "/v1/systemone")],
+        client: reqwest::Client::builder().no_proxy().build().unwrap(),
+    };
+    TEST_COPILOT.scope(fixture, async {
+        let proxy = server(json!({"modelCatalog":{"models":[{"model":"decision","modelType":"decisions","enabled":true}]}}));
+        let mut app = proxy.build_router();
+        let body = json!({"model":"decision","state":"x","questions":{"q":{"type":"noul","instructions":"x"}}});
+        for enabled in [true, false, true] {
+            let mut provider = proxy.state.db.get_provider_by_id("copilot", "codex").unwrap().unwrap();
+            provider.settings_config["modelCatalog"]["models"][0]["enabled"] = json!(enabled);
+            proxy.state.db.save_provider("codex", &provider).unwrap();
+            let response = app.call(request("/v1/systemone", &body)).await.unwrap();
+            assert_eq!(response.status(), if enabled { StatusCode::OK } else { StatusCode::BAD_REQUEST });
+        }
+    }).await;
+    task.abort();
+}
+
+#[tokio::test]
 async fn native_http_rejects_ineligible_models_and_invalid_shapes_before_network() {
     let mut disabled = model("disabled", "/v1/systemone");
     disabled.policy_state = Some("disabled".into());

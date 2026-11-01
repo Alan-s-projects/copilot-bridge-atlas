@@ -35,6 +35,8 @@ New Chat and SystemOne endpoints also accept `/chat/completions` and `/systemone
 
 The native response contains `answers`, the model identity, and token usage. `state` and question content pass through without private-field stripping. SystemOne is non-streaming and uses a question object, not OpenAI Decisions' question array. Model access is checked against the selected account's live/cached catalog; a hidden decision model is eligible for its dedicated endpoint, not the chat picker.
 
+In Atlas 8.1.1 and later, manage decision-model access under **Settings → Models → Enabled models**. The decision row's switch controls SystemOne access without adding the model to chat selectors. Refresh models after updating if the entry is not yet visible.
+
 ### WebSocket
 
 Connect a native WebSocket client to `ws://127.0.0.1:<responses-port>/v1/responses`. Send native `response.create` frames with top-level `model` and `input`, not a nested Realtime API request:

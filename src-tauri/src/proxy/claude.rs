@@ -95,6 +95,7 @@ fn configured_models(provider: &crate::Provider) -> Vec<String> {
         .filter(|m| {
             m.get("enabled").and_then(Value::as_bool) != Some(false)
                 && m.get("available").and_then(Value::as_bool) != Some(false)
+                && !super::providers::copilot_model_map::is_saved_decision_model(m)
         })
         .filter_map(|m| m.get("model").and_then(Value::as_str))
         .filter(|m| super::providers::copilot_model_map::is_valid_model_id(m))
@@ -474,6 +475,37 @@ fn estimate_tokens(value: &Value) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn messages_reject_enabled_decisions_for_direct_ids_and_role_mappings() {
+        for metadata in [
+            json!({"modelType":"decisions", "supportedEndpoints":["/responses"]}),
+            json!({"supportedEndpoints":["/v1/systemone"]}),
+            json!({"modelType":"chat", "supportedEndpoints":["/v1/systemone", "/responses"]}),
+        ] {
+            let mut row = metadata;
+            row["model"] = json!("microsoft-decision-1");
+            row["enabled"] = json!(true);
+            let provider = Provider::with_id(
+                "copilot".into(),
+                "Copilot".into(),
+                json!({"modelCatalog":{"models":[row, {"model":"legacy-chat"}]}}),
+            );
+            let models = configured_models(&provider);
+            assert_eq!(models, ["legacy-chat"]);
+            let config = ClaudeConfig {
+                sonnet: "microsoft-decision-1".into(),
+                ..Default::default()
+            };
+            assert!(resolve_model("microsoft-decision-1", &config, &models).is_err());
+            assert!(resolve_model("claude-sonnet-4-6", &config, &models).is_err());
+            assert!(resolve_model("legacy-chat", &config, &models).is_ok());
+            assert!(discovery(&config, &models)["data"]
+                .as_array()
+                .unwrap()
+                .is_empty());
+        }
+    }
 
     mod image_history_tests {
         include!("claude_image_history_tests.rs");

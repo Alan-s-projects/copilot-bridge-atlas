@@ -17,6 +17,7 @@ export interface ProviderMeta {
 
 export interface CodexCatalogModel {
   model: string;
+  modelType?: string;
   displayName?: string;
   /** A missing preference enables a model by default. */
   enabled?: boolean;

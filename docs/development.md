@@ -69,6 +69,13 @@ Responses takes precedence when both protocols are advertised. The vendor,
 image-support, and parallel-tool summary is omitted from the list; those
 capabilities continue to drive requests and Codex's generated catalog.
 
+Starting in 8.1.1, Enabled models also lists valid SystemOne decision models,
+including entries hidden from Copilot's chat picker. Their rows show Decisions,
+`/v1/systemone`, and a saved enable switch instead of chat context/reasoning
+fields. Refresh and restart preserve that switch. Decision entries are excluded
+from generated Codex models, Claude role choices, and the Codex model count;
+existing chat rows and their controls are unchanged.
+
 Responses-to-Chat conversion keeps later instructions at their original message
 positions instead of merging them into the initial system message. Both the Chat
 adapter and the function-only Responses adapter reject opaque compaction items

@@ -18,6 +18,22 @@ export function getCopilotModelProtocol(
   return undefined;
 }
 
+export function isDecisionCatalogModel(
+  model: Pick<CodexCatalogModel, "modelType" | "supportedEndpoints">,
+): boolean {
+  return (
+    (typeof model.modelType === "string" &&
+      model.modelType.trim().toLowerCase() === "decisions") ||
+    (Array.isArray(model.supportedEndpoints) &&
+      model.supportedEndpoints.some(
+        (endpoint) =>
+          typeof endpoint === "string" &&
+          endpoint.trim().split("?")[0].replace(/\/+$/, "").toLowerCase() ===
+            "/v1/systemone",
+      ))
+  );
+}
+
 export const mapCodexCatalogModelForForm = (item: any): CodexCatalogModel => {
   // Preserve saved capabilities and reasoning preferences through load/save.
   // Accept both saved camelCase fields and catalog snake_case fields.
@@ -57,6 +73,11 @@ export const mapCodexCatalogModelForForm = (item: any): CodexCatalogModel => {
         : undefined;
   return {
     model: typeof item?.model === "string" ? item.model : "",
+    ...(typeof item?.modelType === "string"
+      ? { modelType: item.modelType }
+      : typeof item?.model_type === "string"
+        ? { modelType: item.model_type }
+        : {}),
     ...(typeof item?.enabled === "boolean" ? { enabled: item.enabled } : {}),
     ...(typeof item?.available === "boolean"
       ? { available: item.available }

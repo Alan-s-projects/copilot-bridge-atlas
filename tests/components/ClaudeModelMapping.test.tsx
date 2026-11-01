@@ -15,7 +15,13 @@ const mocks = vi.hoisted(() => ({
   config: undefined as GlobalProxyConfig | undefined,
   save: vi.fn(),
   error: false,
-  models: [] as { model: string; enabled?: boolean; available?: boolean }[],
+  models: [] as {
+    model: string;
+    enabled?: boolean;
+    available?: boolean;
+    modelType?: string;
+    supportedEndpoints?: string[];
+  }[],
 }));
 vi.mock("@/lib/query", () => ({
   useProvidersQuery: () => ({
@@ -59,6 +65,32 @@ beforeEach(() => {
     mocks.config = update(mocks.config);
   });
 });
+it("keeps decision models out of every Claude role selector", () => {
+  mocks.models.push(
+    {
+      model: "microsoft-decision-1",
+      modelType: "decisions",
+      supportedEndpoints: ["/v1/systemone"],
+    },
+    { model: "legacy-decision", supportedEndpoints: ["/v1/systemone"] },
+  );
+  mocks.config!.claude!.sonnet = "gpt-6-astra";
+  render(<Page />);
+  for (const role of ["sonnet", "opus", "haiku", "fable"]) {
+    const selector = screen.getByLabelText(role) as HTMLSelectElement;
+    expect([...selector.options].map((option) => option.value)).not.toContain(
+      "microsoft-decision-1",
+    );
+    expect([...selector.options].map((option) => option.value)).not.toContain(
+      "legacy-decision",
+    );
+    expect([...selector.options].map((option) => option.value)).toContain(
+      "gpt-6-astra",
+    );
+  }
+  expect(screen.getByLabelText("sonnet")).toHaveValue("gpt-6-astra");
+});
+
 it("shows a single Saved status in the section header", () => {
   Object.assign(mocks.config!.claude!, {
     sonnet: "gpt-6-astra",

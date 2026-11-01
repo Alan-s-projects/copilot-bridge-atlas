@@ -93,6 +93,8 @@ describe("Copilot account card", () => {
           models: [
             { model: "gpt-disabled", enabled: false },
             { model: "gpt-enabled" },
+            { model: "microsoft-decision-1", modelType: "decisions" },
+            { model: "legacy-decision", supportedEndpoints: ["/v1/systemone"] },
           ],
         },
       },

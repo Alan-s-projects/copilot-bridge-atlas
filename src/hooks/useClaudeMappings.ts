@@ -1,6 +1,10 @@
 import { useProvidersQuery } from "@/lib/query";
 import { useGlobalProxyConfig } from "@/lib/query/proxy";
-import { isValidModelId } from "@/utils/codexModelCatalog";
+import {
+  isDecisionCatalogModel,
+  isValidModelId,
+} from "@/utils/codexModelCatalog";
+import type { CodexCatalogModel } from "@/types";
 import type { ClaudeGatewayConfig } from "@/types/proxy";
 
 export const claudeRoles = ["sonnet", "opus", "haiku", "fable"] as const;
@@ -24,9 +28,10 @@ export function useClaudeMappings() {
     provider?.settingsConfig?.modelCatalog?.models ?? []
   )
     .filter(
-      (m: { model?: unknown; enabled?: boolean; available?: boolean }) =>
+      (m: Partial<CodexCatalogModel>) =>
         typeof m.model === "string" &&
         isValidModelId(m.model) &&
+        !isDecisionCatalogModel(m) &&
         m.enabled !== false &&
         m.available !== false,
     )

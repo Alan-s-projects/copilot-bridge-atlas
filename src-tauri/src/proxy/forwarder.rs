@@ -199,7 +199,7 @@ impl RequestForwarder {
         }
     }
 
-    /// Each request is sent once; retry decisions belong to the Codex client.
+    /// Retry a confirmed native Responses ownership rejection once, before output.
     pub async fn forward_request(
         &self,
         method: http::Method,
@@ -350,7 +350,7 @@ impl RequestForwarder {
             self.codex_chat_history.enrich_request(&mut body).await;
             super::providers::transform_copilot_responses::adapt_request(&mut body)?;
         }
-        let body = if native_endpoint.is_some() {
+        let mut body = if native_endpoint.is_some() {
             canonicalize_value(body)
         } else {
             prepare_upstream_request_body(body)
@@ -390,12 +390,6 @@ impl RequestForwarder {
                 short_value_hash(Some(&body))
             );
         }
-        let body_bytes = if matches!(method, http::Method::GET | http::Method::HEAD) {
-            Vec::new()
-        } else {
-            serde_json::to_vec(&body).map_err(|error| ProxyError::Internal(error.to_string()))?
-        };
-        let outgoing_bytes = body_bytes.len();
         // Reuse the pooled transport, including the configured HTTP/SOCKS proxy.
         #[cfg(not(test))]
         let client = if native_endpoint.is_some() {
@@ -413,89 +407,121 @@ impl RequestForwarder {
             .map_err(ProxyError::Internal)?;
         // Retain the sent value even when the upstream returns an error.
         reasoning_effort.record_applied(&body);
-        if let Some(diagnostics) = &self.diagnostics {
-            let transport = match upstream_format {
-                Some(CodexUpstreamFormat::NativeResponses) => "responses",
-                Some(CodexUpstreamFormat::CompatibleResponses) => "compatible_responses",
-                Some(CodexUpstreamFormat::ChatCompletions) => "chat_completions",
-                None => "standalone",
+        let mut recovered = false;
+        loop {
+            let body_bytes = if matches!(method, http::Method::GET | http::Method::HEAD) {
+                Vec::new()
+            } else {
+                serde_json::to_vec(&body)
+                    .map_err(|error| ProxyError::Internal(error.to_string()))?
             };
-            diagnostics.outgoing(
-                outbound_model.as_deref(),
-                transport,
-                streaming,
-                reasoning_effort,
-                outgoing_bytes,
-                &body,
-                &outgoing,
-                &body_bytes,
-            );
-        }
-        let mut request = client.request(method, &url);
-        if streaming {
-            request = request.timeout(std::time::Duration::from_secs(24 * 60 * 60));
-        }
-        for (name, value) in &outgoing {
-            request = request.header(name, value);
-        }
-        let request = request.body(body_bytes);
-        if let Some(active) = active {
-            active
-                .update(outbound_model.as_deref(), reasoning_effort)
-                .await;
-        }
-        let response = if streaming {
-            let timeout = std::time::Duration::from_secs(600);
-            tokio::time::timeout(timeout, request.send())
-                .await
-                .map_err(|_| {
-                    ProxyError::Timeout(format!(
-                        "Timed out waiting for Copilot response headers after {}s",
-                        timeout.as_secs()
-                    ))
-                })?
-        } else {
-            request.send().await
-        }
-        .map_err(map_reqwest_send_error)?;
-        let response = ProxyResponse::Reqwest(response);
-        let response = if let Some(diagnostics) = &self.diagnostics {
-            diagnostics.observe(response)
-        } else {
-            response
-        };
-        if response.status().is_success() || native_endpoint.is_some() {
-            Ok((response, outbound_model, upstream_format))
-        } else {
-            let status = response.status().as_u16();
-            let encoding = get_content_encoding(response.headers());
-            let raw = match response.bytes_with_limit(MAX_RESPONSE_BODY_BYTES).await {
-                Ok(raw) => raw,
-                Err(error) => {
-                    if let Some(diagnostics) = &self.diagnostics {
-                        diagnostics.proxy_failure("upstream_body", &error).await;
+            let outgoing_bytes = body_bytes.len();
+            if let Some(diagnostics) = &self.diagnostics {
+                let transport = match upstream_format {
+                    Some(CodexUpstreamFormat::NativeResponses) => "responses",
+                    Some(CodexUpstreamFormat::CompatibleResponses) => "compatible_responses",
+                    Some(CodexUpstreamFormat::ChatCompletions) => "chat_completions",
+                    None => "standalone",
+                };
+                diagnostics.outgoing(
+                    outbound_model.as_deref(),
+                    transport,
+                    streaming,
+                    reasoning_effort,
+                    outgoing_bytes,
+                    &body,
+                    &outgoing,
+                    &body_bytes,
+                );
+            }
+            // Keep the selected account, route and headers fixed across the retry.
+            let mut request = client.request(method.clone(), &url);
+            if streaming {
+                request = request.timeout(std::time::Duration::from_secs(24 * 60 * 60));
+            }
+            for (name, value) in &outgoing {
+                request = request.header(name, value);
+            }
+            let request = request.body(body_bytes);
+            if let Some(active) = active {
+                active
+                    .update(outbound_model.as_deref(), reasoning_effort)
+                    .await;
+            }
+            let response = if streaming {
+                let timeout = std::time::Duration::from_secs(600);
+                tokio::time::timeout(timeout, request.send())
+                    .await
+                    .map_err(|_| {
+                        ProxyError::Timeout(format!(
+                            "Timed out waiting for Copilot response headers after {}s",
+                            timeout.as_secs()
+                        ))
+                    })?
+            } else {
+                request.send().await
+            }
+            .map_err(map_reqwest_send_error)?;
+            let response = ProxyResponse::Reqwest(response);
+            let response = if let Some(diagnostics) = &self.diagnostics {
+                diagnostics.observe(response)
+            } else {
+                response
+            };
+            if response.status().is_success() || native_endpoint.is_some() {
+                return Ok((response, outbound_model, upstream_format));
+            } else {
+                let status = response.status().as_u16();
+                let encoding = get_content_encoding(response.headers());
+                let raw = match response.bytes_with_limit(MAX_RESPONSE_BODY_BYTES).await {
+                    Ok(raw) => raw,
+                    Err(error) => {
+                        if let Some(diagnostics) = &self.diagnostics {
+                            diagnostics.proxy_failure("upstream_body", &error).await;
+                        }
+                        return Err(error);
                     }
-                    return Err(error);
+                };
+                let decompressed = encoding.as_deref().and_then(|encoding| {
+                    decompress_body_with_limit(encoding, &raw, MAX_RESPONSE_BODY_BYTES)
+                        .ok()
+                        .flatten()
+                });
+                let was_decoded = decompressed.is_some();
+                let decoded = decompressed.unwrap_or_else(|| raw.to_vec());
+                if let Some(diagnostics) = &self.diagnostics {
+                    diagnostics.error_body(&decoded, was_decoded);
                 }
-            };
-            let decompressed = encoding.as_deref().and_then(|encoding| {
-                decompress_body_with_limit(encoding, &raw, MAX_RESPONSE_BODY_BYTES)
-                    .ok()
-                    .flatten()
-            });
-            let was_decoded = decompressed.is_some();
-            let decoded = decompressed.unwrap_or_else(|| raw.to_vec());
-            if let Some(diagnostics) = &self.diagnostics {
-                diagnostics.error_body(&decoded, was_decoded);
+                let error_body = String::from_utf8(decoded).ok();
+                if !recovered
+                    && method == http::Method::POST
+                    && upstream_format == Some(CodexUpstreamFormat::NativeResponses)
+                    && matches!(
+                        split_endpoint_and_query(endpoint).0,
+                        "/responses" | "/v1/responses"
+                    )
+                {
+                    if let Some(retry) = error_body.as_deref().and_then(|error| {
+                        super::responses_recovery::prepare_retry(&body, status, error)
+                    }) {
+                        log::warn!(
+                        "[Copilot] Rejected Responses replay state (HTTP {status}); retrying once \
+                         without reasoning or item IDs, preserving visible history"
+                    );
+                        body = retry;
+                        recovered = true;
+                        continue;
+                    }
+                }
+                let error = ProxyError::UpstreamError {
+                    status,
+                    body: error_body,
+                };
+                if let Some(diagnostics) = &self.diagnostics {
+                    diagnostics.proxy_failure("upstream", &error).await;
+                }
+                return Err(error);
             }
-            let error = ProxyError::UpstreamError {
-                status,
-                body: String::from_utf8(decoded).ok(),
-            };
-            if let Some(diagnostics) = &self.diagnostics {
-                diagnostics.proxy_failure("upstream", &error).await;
-            }
-            Err(error)
         }
     }
 
@@ -1652,16 +1678,25 @@ mod tests {
             response_headers: HeaderMap,
             reply: Bytes,
         ) -> MockUpstream {
+            mock_sequence_upstream(vec![(status, reply)], response_headers).await
+        }
+
+        async fn mock_sequence_upstream(
+            replies: Vec<(StatusCode, Bytes)>,
+            response_headers: HeaderMap,
+        ) -> MockUpstream {
             let requests = Arc::new(tokio::sync::Mutex::new(Vec::new()));
             let capture = requests.clone();
             let app = axum::Router::new().fallback(move |request: axum::extract::Request| {
                 let capture = capture.clone();
                 let response_headers = response_headers.clone();
-                let reply = reply.clone();
+                let replies = replies.clone();
                 async move {
                     let (parts, body) = request.into_parts();
                     let bytes = axum::body::to_bytes(body, 1024 * 1024).await.unwrap();
-                    capture.lock().await.push(CapturedRequest {
+                    let mut requests = capture.lock().await;
+                    let (status, reply) = replies[requests.len().min(replies.len() - 1)].clone();
+                    requests.push(CapturedRequest {
                         uri: parts.uri,
                         headers: parts.headers,
                         body: serde_json::from_slice(&bytes).unwrap(),
@@ -1792,6 +1827,272 @@ mod tests {
                     ]}
                 ]
             })
+        }
+
+        const OWNERSHIP_ERROR: &[u8] =
+            br#"{"error":{"message":"input item ID does not belong to this connection","code":""}}"#;
+
+        fn replay_request(stream: bool) -> Value {
+            let mut body = image_request(stream);
+            body["input"].as_array_mut().unwrap().extend([
+                json!({"type":"reasoning","id":"old-r","encrypted_content":"old-account"}),
+                json!({"type":"message","role":"assistant","id":"old-m","phase":"final_answer",
+                       "content":[{"type":"output_text","text":"Earlier visible answer."}]}),
+                json!({"role":"user","content":"Continue."}),
+            ]);
+            body
+        }
+
+        #[tokio::test]
+        async fn ownership_recovery_handles_two_turns_preserving_account_content_and_stream() {
+            for stream in [false, true] {
+                let success = if stream {
+                    Bytes::from_static(b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"new-response\"}}\n\n")
+                } else {
+                    Bytes::from_static(br#"{"id":"new-response","status":"completed"}"#)
+                };
+                let upstream = mock_sequence_upstream(
+                    vec![
+                        (
+                            StatusCode::UNAUTHORIZED,
+                            Bytes::from_static(OWNERSHIP_ERROR),
+                        ),
+                        (StatusCode::OK, success.clone()),
+                        (StatusCode::BAD_REQUEST, Bytes::from_static(OWNERSHIP_ERROR)),
+                        (StatusCode::OK, success.clone()),
+                    ],
+                    HeaderMap::new(),
+                )
+                .await;
+                let (forwarder, provider) = fixture(&upstream, CopilotProtocol::Responses);
+                let mut body = replay_request(stream);
+                for turn in 0..2 {
+                    // A client may resend the stale history on every turn.
+                    if turn == 1 {
+                        body["input"].as_array_mut().unwrap().extend([
+                            json!({"type":"reasoning","id":"new-r","encrypted_content":"new-account"}),
+                            json!({"type":"message","role":"assistant","id":"new-m","content":"New answer"}),
+                            json!({"role":"user","content":"Another follow-up."}),
+                        ]);
+                    }
+                    let result = forwarder
+                        .forward_request(
+                            http::Method::POST,
+                            "/responses",
+                            body.clone(),
+                            HeaderMap::new(),
+                            &provider,
+                            &mut ReasoningEffort::default(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(result.response.status(), StatusCode::OK);
+                    assert_eq!(
+                        result.response.bytes_with_limit(4096).await.unwrap(),
+                        success
+                    );
+                }
+                let requests = upstream.requests.lock().await;
+                assert_eq!(requests.len(), 4);
+                for pair in requests.chunks_exact(2) {
+                    let mut expected = pair[0].body.clone();
+                    expected["input"].as_array_mut().unwrap().retain(|item| {
+                        item.get("type").and_then(Value::as_str) != Some("reasoning")
+                    });
+                    for item in expected["input"].as_array_mut().unwrap() {
+                        item.as_object_mut().unwrap().remove("id");
+                    }
+                    assert_eq!(pair[1].body, expected);
+                    let mut first_headers = pair[0].headers.clone();
+                    let mut retry_headers = pair[1].headers.clone();
+                    first_headers.remove(http::header::CONTENT_LENGTH);
+                    retry_headers.remove(http::header::CONTENT_LENGTH);
+                    assert_eq!(first_headers, retry_headers);
+                    assert_eq!(
+                        pair[1].headers[http::header::CONTENT_LENGTH],
+                        serde_json::to_vec(&pair[1].body).unwrap().len().to_string()
+                    );
+                    assert_eq!(pair[0].uri, pair[1].uri);
+                    assert_eq!(
+                        pair[1].headers["authorization"],
+                        format!("Bearer {TEST_TOKEN}")
+                    );
+                }
+                let status = forwarder.status.read().await;
+                assert_eq!(status.total_requests, 2);
+                assert_eq!(status.success_requests, 2);
+                assert_eq!(status.failed_requests, 0);
+            }
+        }
+
+        #[tokio::test]
+        async fn ownership_recovery_stops_after_one_retry_and_preserves_final_error() {
+            let upstream = mock_upstream(
+                StatusCode::UNAUTHORIZED,
+                HeaderMap::new(),
+                Bytes::from_static(OWNERSHIP_ERROR),
+            )
+            .await;
+            let (forwarder, provider) = fixture(&upstream, CopilotProtocol::Responses);
+            let result = forwarder
+                .forward_request(
+                    http::Method::POST,
+                    "/responses",
+                    replay_request(false),
+                    HeaderMap::new(),
+                    &provider,
+                    &mut ReasoningEffort::default(),
+                )
+                .await;
+            assert!(matches!(
+                result,
+                Err(ProxyError::UpstreamError { status: 401, .. })
+            ));
+            assert_eq!(upstream.requests.lock().await.len(), 2);
+            assert_eq!(forwarder.status.read().await.failed_requests, 1);
+        }
+
+        #[tokio::test]
+        async fn ownership_recovery_never_retries_compaction_linked_or_unrelated_requests() {
+            for case in [
+                "compaction",
+                "reference",
+                "linked",
+                "auth",
+                "compact-endpoint",
+                "healthy",
+            ] {
+                let (status, reply) = match case {
+                    "auth" => (
+                        StatusCode::UNAUTHORIZED,
+                        Bytes::from_static(br#"{"error":{"message":"Invalid token"}}"#),
+                    ),
+                    "healthy" => (StatusCode::OK, Bytes::from_static(b"{}")),
+                    _ => (
+                        StatusCode::UNAUTHORIZED,
+                        Bytes::from_static(OWNERSHIP_ERROR),
+                    ),
+                };
+                let upstream = mock_upstream(status, HeaderMap::new(), reply).await;
+                let (forwarder, provider) = fixture(&upstream, CopilotProtocol::Responses);
+                let mut body = replay_request(false);
+                match case {
+                    "compaction" => body["input"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!({"type":"compaction","encrypted_content":"memory"})),
+                    "reference" => body["input"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!({"type":"item_reference","id":"old-ref"})),
+                    "linked" => body["previous_response_id"] = json!("old-response"),
+                    _ => {}
+                }
+                let endpoint = if case == "compact-endpoint" {
+                    "/responses/compact"
+                } else {
+                    "/responses"
+                };
+                let result = forwarder
+                    .forward_request(
+                        http::Method::POST,
+                        endpoint,
+                        body,
+                        HeaderMap::new(),
+                        &provider,
+                        &mut ReasoningEffort::default(),
+                    )
+                    .await;
+                assert_eq!(result.is_ok(), case == "healthy", "{case}");
+                let requests = upstream.requests.lock().await;
+                assert_eq!(requests.len(), 1, "{case}");
+                assert!(requests[0].body["input"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item.get("encrypted_content").and_then(Value::as_str)
+                        == Some("old-account")));
+            }
+        }
+
+        #[tokio::test]
+        #[ignore = "opt-in live replay: reads a Responses JSON request from stdin and consumes Copilot tokens"]
+        async fn ownership_recovery_live_two_turn_replay() {
+            use std::io::Read;
+            let token =
+                std::env::var("ATLAS_COPILOT_TEST_TOKEN").expect("Set ATLAS_COPILOT_TEST_TOKEN");
+            let endpoint = std::env::var("ATLAS_COPILOT_TEST_ENDPOINT")
+                .expect("Set ATLAS_COPILOT_TEST_ENDPOINT");
+            let mut input = String::new();
+            std::io::stdin().read_to_string(&mut input).unwrap();
+            let mut body: Value =
+                serde_json::from_str(&input).expect("Expected Responses JSON on stdin");
+            assert_eq!(body["stream"], false);
+            let upstream =
+                mock_upstream(StatusCode::OK, HeaderMap::new(), Bytes::from_static(b"{}")).await;
+            let (mut forwarder, provider) = fixture(&upstream, CopilotProtocol::Responses);
+            let config = forwarder.copilot_fixture.as_mut().unwrap();
+            config.token = token;
+            config.endpoint = endpoint;
+            config.client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(180))
+                .build()
+                .unwrap();
+            for turn in 1..=2 {
+                let result = forwarder
+                    .forward_request(
+                        http::Method::POST,
+                        "/responses",
+                        body.clone(),
+                        HeaderMap::new(),
+                        &provider,
+                        &mut ReasoningEffort::default(),
+                    )
+                    .await;
+                let result = match result {
+                    Ok(result) => result,
+                    Err(ProxyError::UpstreamError { status, .. }) => {
+                        panic!("Live replay failed: HTTP {status}")
+                    }
+                    Err(_) => panic!("Live replay failed before response"),
+                };
+                let bytes = result
+                    .response
+                    .bytes_with_limit(MAX_RESPONSE_BODY_BYTES)
+                    .await
+                    .unwrap();
+                let reply: Value = serde_json::from_slice(&bytes).expect("Expected JSON response");
+                assert!(
+                    reply["status"] == "completed",
+                    "Live response did not complete"
+                );
+                let output = reply["output"].as_array().expect("Expected output array");
+                assert!(
+                    output.iter().all(|item| matches!(
+                        item.get("type").and_then(Value::as_str),
+                        Some("message" | "reasoning")
+                    )),
+                    "Diagnostic replay must not execute tools"
+                );
+                assert!(
+                    output.iter().any(|item| item
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .is_some_and(|parts| parts.iter().any(|part| part
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .is_some_and(|text| text.contains("ATLAS_REPLAY_OK"))))),
+                    "Expected diagnostic acknowledgement"
+                );
+                println!("Live ownership recovery turn {turn}: completed; expected acknowledgement; no tool calls");
+                body["input"]
+                    .as_array_mut()
+                    .unwrap()
+                    .extend(output.iter().cloned());
+                body["input"].as_array_mut().unwrap().push(json!({
+                    "role":"user", "content":"Diagnostic follow-up. Do not call tools. Reply with exactly ATLAS_REPLAY_OK."
+                }));
+            }
         }
 
         #[tokio::test]

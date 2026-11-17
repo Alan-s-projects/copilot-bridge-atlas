@@ -684,6 +684,8 @@ mod tests {
         for (model, bundled_costs) in [
             ("gpt-6.1-sol", ["0.131500", "0.213004"]),
             ("gpt-6.1-terra", ["0.065750", "0.106502"]),
+            ("gpt-6.2-astra", ["0.526000", "0.852016"]),
+            ("gpt-6.2-sol", ["0.131500", "0.213004"]),
         ] {
             for (preference, expected_costs, expected_tiers) in [
                 (

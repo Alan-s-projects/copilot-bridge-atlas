@@ -16,8 +16,14 @@ struct CodexCatalogTemplate {
     instructions: serde_json::Map<String, Value>,
 }
 
-const OPENAI_INSTRUCTION_PROFILES: [&str; 4] =
-    ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"];
+const OPENAI_INSTRUCTION_PROFILES: [&str; 6] = [
+    "gpt-6-astra",
+    "gpt-6-luna",
+    "gpt-6-sol",
+    "gpt-6.1-sol",
+    "gpt-6.2-astra",
+    "gpt-6.2-sol",
+];
 const OPENAI_FALLBACK_PROFILE: &str = "gpt-6-astra";
 
 /// Get Codex configuration directory path
@@ -675,6 +681,8 @@ mod tests {
             ("gpt-6-sol", "gpt-6-sol"),
             ("gpt-6.1-sol", "gpt-6.1-sol"),
             ("GPT-6.1-SOL", "gpt-6.1-sol"),
+            ("gpt-6.2-astra", "gpt-6.2-astra"),
+            ("GPT-6.2-SOL", "gpt-6.2-sol"),
             ("gemini-3.8-flash", "gpt-6-astra"),
             ("grok-4.7", "gpt-6-astra"),
             ("gpt-5.5", "gpt-6-astra"),
@@ -721,25 +729,33 @@ mod tests {
             serde_json::from_str(include_str!("resources/openai-codex-instructions.json")).unwrap();
         assert_eq!(
             snapshot["source"]["commit"],
-            "83086188ae0614bd882818ff1aa23f3194962012"
+            "c376cf7396eff83ce4c6ac61b9553df142e7a0be"
         );
         assert_eq!(snapshot["fallbackModel"], OPENAI_FALLBACK_PROFILE);
         for (slug, expected) in [
             (
                 "gpt-6-astra",
-                "35bd51b5f577cb7b24cd5f4629e49e37cb724ab57754ce6f8f202001635bab8a",
+                "4ddce5803b638f01342f657002289d1307634c677df840eeefdd4bc5b451276d",
             ),
             (
                 "gpt-6-luna",
-                "b707476816bfe5e571a1bd2179f130fff2b132da5ab8e61063acdb7fd24daf12",
+                "e52174f354e3970ad8de5935fff8d04ddf2890a35659283d163befb56490198c",
             ),
             (
                 "gpt-6-sol",
-                "b1dd8718c037906c53a305c5cbccb4a4be35ccbb7837461ec349bfc495412f0d",
+                "a8567d97e0fb03f19942650430e0905fd2e092f102e8d98c03fc1b89995619c2",
             ),
             (
                 "gpt-6.1-sol",
-                "e1bdd4f8f0df4b20f4a0ffc8a861ce819df45325d8cecdfb92e80379cf8d142e",
+                "d12e6dbdfd4a4ddb26a1f6048b69a32b8b32f74e4add9791d1dff7f4cac0b032",
+            ),
+            (
+                "gpt-6.2-astra",
+                "aa47d2dee261594c4944241b646088730d74d87afa4da8d2da0554540a5e7623",
+            ),
+            (
+                "gpt-6.2-sol",
+                "aa47d2dee261594c4944241b646088730d74d87afa4da8d2da0554540a5e7623",
             ),
         ] {
             let profile = &snapshot["models"][slug];

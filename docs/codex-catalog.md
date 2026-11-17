@@ -1,8 +1,8 @@
 # Atlas Codex Catalog
 
 Atlas combines Copilot capabilities with unchanged OpenAI Codex instruction data.
-The instruction source is pinned to OpenAI Codex release `rust-v0.163.0`, commit
-`83086188ae0614bd882818ff1aa23f3194962012`, file
+The instruction source is pinned to OpenAI Codex release `rust-v0.169.1`, commit
+`c376cf7396eff83ce4c6ac61b9553df142e7a0be`, file
 `codex-rs/models-manager/models.json`. Generation never reads `models_cache.json`
 or fetches a newer prompt at application startup.
 
@@ -12,9 +12,13 @@ or fetches a newer prompt at application startup.
 | `gpt-6-luna` | `gpt-6-luna` |
 | `gpt-6-sol` | `gpt-6-sol` |
 | `gpt-6.1-sol` | `gpt-6.1-sol` |
+| `gpt-6.2-astra` | `gpt-6.2-astra` |
+| `gpt-6.2-sol` | `gpt-6.2-sol` |
 | Every other ID, including non-GPT models | `gpt-6-astra` |
 
-Matching is case-insensitive for these exact GPT-6 IDs. The fallback deliberately
+Matching is case-insensitive for these exact GPT-6 IDs. GPT-6.2 Astra and Sol
+share the same base prompt upstream but have distinct nested policies, so Atlas
+copies each complete profile. The fallback deliberately
 retains OpenAI's GPT-6 identity wording, as requested. It does not change the
 actual model ID, provider, routing, enabled choices, or billing model.
 
@@ -22,7 +26,7 @@ actual model ID, provider, routing, enabled choices, or billing model.
 
 - `src-tauri/src/resources/codex-model-template.json` contains the small,
   model-neutral Codex compatibility profile.
-- `src-tauri/src/resources/openai-codex-instructions.json` contains the four
+- `src-tauri/src/resources/openai-codex-instructions.json` contains the six
   complete, unchanged upstream `model_messages` objects, source provenance,
   and SHA-256 fingerprints. The former Atlas-authored prompt is removed.
 - Model identity, context limits, parallel calls, image input, and supported
@@ -53,6 +57,8 @@ snapshot, distinguishes absent keys from explicit nulls, and reports untracked
 GPT-6 profiles. Exit code 1 means a maintainer review is needed; it does not
 establish incompatibility or update the pin automatically. `--check` remains
 the separate fidelity check against the already-reviewed pin.
+The `rust-v0.169.1` comparison also reports `gpt-6.1-terra`; it remains
+outside the maintained profile list for this update.
 
 When a refresh is warranted, update the pin and maintained profile list in the
 vendor script and Rust validator together, regenerate the snapshot and licenses,
@@ -92,7 +98,7 @@ $env:ATLAS_CODEX_CATALOG_SETTINGS = "<settings-fixture.json>"
 $env:ATLAS_CODEX_CATALOG_OUT = "<generated-catalog.json>"
 cargo test --manifest-path src-tauri/Cargo.toml --lib export_catalog_compatibility_fixture -- --ignored
 python scripts/check-codex-catalog.py --codex <codex.exe> --catalog <generated-catalog.json> --capture --report <capture-report.json>
-python scripts/check-codex-catalog.py --codex <codex.exe> --catalog <generated-catalog.json> --capture --fresh-threads --models gpt-6-astra gpt-6-luna gpt-6-sol gpt-6.1-sol gemini-3.8-flash grok-4.7
+python scripts/check-codex-catalog.py --codex <codex.exe> --catalog <generated-catalog.json> --capture --fresh-threads --models gpt-6-astra gpt-6-luna gpt-6-sol gpt-6.1-sol gpt-6.2-astra gpt-6.2-sol gemini-3.8-flash grok-4.7
 ```
 
 The capture server is local and synthetic. It verifies catalog loading, streamed
@@ -119,19 +125,27 @@ trailing newlines. User text or a later developer message cannot substitute for
 the initial base prompt. Model-switch verification still requires the latest
 switch message to contain the selected model's unchanged template.
 
-The October 17, 2026 macOS review checked all four current profiles and two
+The October 17, 2026 macOS review checked the four profiles then bundled and two
 fallback models with Codex `0.163.0`: six fresh conversations and seven turns
 in one conversation, including switching back to GPT-6.1 Sol. All turns
 completed against a local synthetic server. The checks preserved literal base
 and model-switch instructions, the active default collaboration template, and
 workspace-write permission context.
 
+For the `rust-v0.169.1` refresh on November 18, 2026, the macOS CLI loaded
+the Atlas-generated catalog and completed seven fresh conversations and
+eight turns in one conversation, including switching between GPT-6.2 Astra
+and Sol and switching back to Astra. All synthetic Responses captures
+matched the expected prompts.
+
 | Upstream template | Characters | Words |
 | --- | ---: | ---: |
-| Astra | 21,420 | 3,314 |
-| Luna | 18,037 | 2,790 |
-| Sol | 18,992 | 2,949 |
-| 6.1 Sol | 21,769 | 3,366 |
+| GPT-6 Astra | 21,175 | 3,268 |
+| GPT-6 Luna | 17,793 | 2,744 |
+| GPT-6 Sol | 18,748 | 2,903 |
+| GPT-6.1 Sol | 21,524 | 3,320 |
+| GPT-6.2 Astra | 25,933 | 3,973 |
+| GPT-6.2 Sol | 25,933 | 3,973 |
 
 These full upstream prompts are longer than the former Atlas-authored prompt.
 No token or cost reduction is claimed. Tool definitions, other developer

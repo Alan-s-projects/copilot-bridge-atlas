@@ -68,14 +68,16 @@ class InstructionDrift(unittest.TestCase):
 
     def test_removed_upstream_and_new_gpt6_profiles_require_review(self):
         snapshot, upstream = self.fixtures()
-        upstream["models"].pop()
-        upstream["models"].append({"slug": "gpt-6.2-sol", "model_messages": {}})
+        upstream["models"] = [
+            model for model in upstream["models"] if model["slug"] != "gpt-6.1-sol"
+        ]
+        upstream["models"].append({"slug": "gpt-6-future", "model_messages": {}})
         result = vendor.compare_profiles(snapshot, upstream)
         self.assertTrue(result["reviewNeeded"])
         self.assertEqual(
             result["profileChanges"]["gpt-6.1-sol"]["status"], "missing_upstream"
         )
-        self.assertEqual(result["untrackedGpt6Profiles"], ["gpt-6.2-sol"])
+        self.assertEqual(result["untrackedGpt6Profiles"], ["gpt-6-future"])
 
     def test_json_pointer_paths_escape_literal_keys(self):
         self.assertEqual(

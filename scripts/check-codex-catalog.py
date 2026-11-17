@@ -316,7 +316,8 @@ def main():
     parser.add_argument("--live", help="Opt-in local Atlas base URL; consumes upstream tokens")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--models", nargs="+",
-                        default=["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
+                        default=["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol",
+                                 "gpt-6.2-astra", "gpt-6.2-sol"],
                         help="Models to validate, in same-session switching order")
     parser.add_argument("--fresh-threads", action="store_true",
                         help="Also usable to check each model's initial base prompt separately")

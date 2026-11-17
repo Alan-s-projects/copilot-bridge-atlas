@@ -6,10 +6,10 @@ import json
 from pathlib import Path
 from urllib.request import urlopen
 
-COMMIT = "83086188ae0614bd882818ff1aa23f3194962012"  # rust-v0.163.0
+COMMIT = "c376cf7396eff83ce4c6ac61b9553df142e7a0be"  # rust-v0.169.1
 SOURCE_PATH = "codex-rs/models-manager/models.json"
 BASE_URL = f"https://raw.githubusercontent.com/openai/codex/{COMMIT}"
-PROFILES = ("gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol")
+PROFILES = ("gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.2-astra", "gpt-6.2-sol")
 ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT = ROOT / "src-tauri/src/resources/openai-codex-instructions.json"
 BUNDLED_LICENSES = ROOT / "BUNDLED_LICENSES.txt"
@@ -133,10 +133,17 @@ def main():
         + "\n\nUpstream NOTICE (retained verbatim):\n\n"
         + download("NOTICE").decode("utf-8")
     ).encode("utf-8")
+    # This file also carries independent notices added for Atlas's WebSocket dependencies.
+    # Only the content before that section belongs to the Codex extraction.
+    license_bytes = BUNDLED_LICENSES.read_bytes()
+    _, marker, other_notices = license_bytes.partition(b"\nWebSocket transport dependencies\n")
+    if not marker or not other_notices:
+        raise ValueError("Missing WebSocket dependency notices")
+    licenses = licenses + marker + other_notices
     if args.check:
         if json.loads(SNAPSHOT.read_bytes()) != snapshot:
             raise ValueError("Vendored instructions differ from the pinned upstream source")
-        if BUNDLED_LICENSES.read_bytes() != licenses:
+        if license_bytes != licenses:
             raise ValueError("Bundled license/notice content differs")
     else:
         SNAPSHOT.write_bytes((json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))

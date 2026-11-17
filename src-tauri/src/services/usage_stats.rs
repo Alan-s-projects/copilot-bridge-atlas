@@ -1795,7 +1795,7 @@ mod tests {
         let db = Database::memory()?;
         let conn = lock_conn!(db.conn);
         let tiers = Database::bundled_long_context_prices()?;
-        assert_eq!(tiers.len(), 13);
+        assert_eq!(tiers.len(), 15);
         for (model, tier) in tiers {
             let base = find_model_pricing_row(&conn, &model)?.unwrap();
             for total in [tier.threshold_input_tokens - 1, tier.threshold_input_tokens] {

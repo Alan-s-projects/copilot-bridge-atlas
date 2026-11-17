@@ -237,7 +237,7 @@ fn bundled_prices_are_unique_documented_copilot_rates_and_foundry_reference() {
     use rust_decimal::Decimal;
     use std::str::FromStr;
     let prices = Database::bundled_model_prices().unwrap();
-    assert_eq!(prices.len(), 36);
+    assert_eq!(prices.len(), 38);
     let mut ids = std::collections::HashSet::new();
     for [id, name, input, output, cache_read, cache_creation] in &prices {
         assert!(ids.insert(id));
@@ -255,6 +255,8 @@ fn bundled_prices_are_unique_documented_copilot_rates_and_foundry_reference() {
         ("grok-4.5", "2", "6", "0.50"),
         ("gpt-6.1-sol", "2", "10", "0.10"),
         ("gpt-6.1-terra", "1", "5", "0.05"),
+        ("gpt-6.2-astra", "8", "40", "0.40"),
+        ("gpt-6.2-sol", "2", "10", "0.10"),
     ] {
         let row = prices.iter().find(|row| row[0] == id).unwrap();
         assert_eq!((&*row[2], &*row[3], &*row[4]), (input, output, cache));

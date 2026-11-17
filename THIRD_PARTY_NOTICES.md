@@ -3,10 +3,11 @@
 Atlas includes instruction data from OpenAI Codex, licensed under Apache-2.0:
 
 - Repository: https://github.com/openai/codex
-- Release: `rust-v0.163.0`
-- Commit: `83086188ae0614bd882818ff1aa23f3194962012`
+- Release: `rust-v0.169.1`
+- Commit: `c376cf7396eff83ce4c6ac61b9553df142e7a0be`
 - Source: `codex-rs/models-manager/models.json`
-- Extracted entries: `gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol`
+- Extracted entries: `gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol`,
+  `gpt-6.2-astra`, `gpt-6.2-sol`
 - Snapshot: `src-tauri/src/resources/openai-codex-instructions.json`
 
 Modification notice: Atlas extracts each entry's complete `model_messages`
@@ -15,7 +16,7 @@ nulls, examples, and trailing newlines remain unchanged. Source and instruction
 hashes are recorded in that snapshot. No OpenAI capability flags are copied.
 
 Atlas selects each recognized GPT-6 model's own instruction object and uses
-the Astra object for all other model IDs, including non-GPT models, as requested.
+the GPT-6 Astra object for all other model IDs, including non-GPT models.
 This prompt reuse does not change a model's actual identity, provider, or routing.
 
 `BUNDLED_LICENSES.txt` contains Atlas's license and the complete OpenAI Codex

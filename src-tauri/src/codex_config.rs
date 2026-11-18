@@ -174,7 +174,15 @@ fn codex_catalog_model_entry(
     entry_obj.insert("model_messages".into(), messages.clone());
 
     let display_name = spec.display_name.as_deref().unwrap_or(&spec.model);
-    let context_window = spec.context_window.unwrap_or(default_context_window);
+    let advertised_input_limit = spec.context_window.unwrap_or(default_context_window);
+    let context_window = spec
+        .max_context_window
+        .zip(spec.max_output_tokens)
+        .and_then(|(total, output)| total.checked_sub(output))
+        .filter(|budget| *budget > 0)
+        .map_or(advertised_input_limit, |budget| {
+            advertised_input_limit.min(budget)
+        });
     let max_context_window = spec
         .max_context_window
         .unwrap_or(context_window)
@@ -222,6 +230,8 @@ struct CodexCatalogModelSpec {
     context_window: Option<u64>,
     /// Total context limit from Copilot capability limits.
     max_context_window: Option<u64>,
+    /// Maximum generation budget from Copilot capability limits.
+    max_output_tokens: Option<u64>,
     /// Live Copilot parallel-tool declaration.
     supports_parallel_tool_calls: Option<bool>,
     /// Live Copilot image-input declaration.
@@ -277,6 +287,7 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
             .map(str::to_string);
         let context_window = parse_codex_positive_u64(model_config.get("contextWindow"));
         let max_context_window = parse_codex_positive_u64(model_config.get("maxContextWindow"));
+        let max_output_tokens = parse_codex_positive_u64(model_config.get("maxOutputTokens"));
 
         let supports_parallel_tool_calls = model_config
             .get("supportsParallelToolCalls")
@@ -336,6 +347,7 @@ fn codex_catalog_model_specs(settings: &Value) -> Vec<CodexCatalogModelSpec> {
             display_name,
             context_window,
             max_context_window,
+            max_output_tokens,
             supports_parallel_tool_calls,
             input_modalities,
             reasoning_levels,
@@ -577,6 +589,36 @@ mod tests {
         assert_eq!(catalog["models"][0]["context_window"], 372000);
         assert_eq!(catalog["models"][0]["max_context_window"], 500000);
         assert_eq!(catalog["models"][0]["effective_context_window_percent"], 95);
+    }
+
+    #[test]
+    fn catalog_reserves_output_space_without_raising_a_smaller_input_limit() {
+        let settings = json!({"modelCatalog":{"models":[
+            {"model":"gpt-6-astra", "contextWindow":1050000, "maxContextWindow":1050000, "maxOutputTokens":128000},
+            {"model":"gpt-6.2-astra", "contextWindow":1050000, "maxContextWindow":1050000, "maxOutputTokens":128000},
+            {"model":"gpt-6.2-sol", "contextWindow":1050000, "maxContextWindow":1050000, "maxOutputTokens":128000},
+            {"model":"gpt-6-luna", "contextWindow":872000, "maxContextWindow":1000000, "maxOutputTokens":128000},
+            {"model":"smaller-prompt-limit", "contextWindow":800000, "maxContextWindow":1000000, "maxOutputTokens":128000},
+            {"model":"missing-total", "contextWindow":32000, "maxOutputTokens":4096},
+            {"model":"inconsistent-limits", "contextWindow":24000, "maxContextWindow":32000, "maxOutputTokens":64000}
+        ]}});
+        let catalog = codex_model_catalog_from_settings(&settings, "")
+            .unwrap()
+            .unwrap();
+        let models = catalog["models"].as_array().unwrap();
+        for (entry, (input, total)) in models.iter().zip([
+            (922_000, 1_050_000),
+            (922_000, 1_050_000),
+            (922_000, 1_050_000),
+            (872_000, 1_000_000),
+            (800_000, 1_000_000),
+            (32_000, 32_000),
+            (24_000, 32_000),
+        ]) {
+            assert_eq!(entry["context_window"], input, "{}", entry["slug"]);
+            assert_eq!(entry["max_context_window"], total, "{}", entry["slug"]);
+        }
+        assert_eq!(models.len(), 7);
     }
 
     #[test]
